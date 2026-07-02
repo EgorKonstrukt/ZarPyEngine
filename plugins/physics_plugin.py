@@ -165,6 +165,11 @@ class PhysicsPlugin(PluginBase):
             "erp", "contact_erp", "friction_erp",
             "contact_breaking_threshold", "restitution",
             "linear_damping", "angular_damping", "max_contacts_per_body",
+            "culverin_max_bodies", "culverin_max_pairs",
+            "culverin_max_contact_constraints", "culverin_temp_allocator_size",
+            "culverin_max_physics_jobs", "culverin_max_physics_barriers",
+            "culverin_num_threads", "culverin_penetration_slop",
+            "culverin_enable_ccd", "culverin_enable_sleeping",
         ):
             v = cfg.get(prefix + k)
             if v is not None:

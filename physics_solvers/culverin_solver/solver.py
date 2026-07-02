@@ -150,6 +150,11 @@ class CulverinSolver(IPhysicsSolver):
         self._joint_id_to_handle: dict[int, int] = {}
         self._joint_handle_to_id: dict[int, int] = {}
         self._joint_specs: dict[int, dict] = {}
+        self._num_threads = 0
+        self._max_physics_jobs = 8
+        self._max_physics_barriers = 8
+        self._enable_ccd = False
+        self._enable_sleeping = True
 
     def initialize(self, settings: Optional[dict] = None) -> bool:
         if self._initialized:
@@ -167,17 +172,29 @@ class CulverinSolver(IPhysicsSolver):
             self._gravity = (gx, gy, gz)
             world_opts["gravity"] = (gx, gy, gz)
 
-            for k in (
-                "max_bodies", "max_pairs", "max_contact_constraints",
-                "temp_allocator_size", "max_physics_jobs",
-                "max_physics_barriers", "num_threads", "penetration_slop",
-            ):
-                if k in opts:
-                    world_opts[k] = opts[k]
+            self._num_threads = opts.get("culverin_num_threads", 0)
+            self._max_physics_jobs = opts.get("culverin_max_physics_jobs", 8)
+            self._max_physics_barriers = opts.get("culverin_max_physics_barriers", 8)
+            self._enable_ccd = opts.get("culverin_enable_ccd", False)
+            self._enable_sleeping = opts.get("culverin_enable_sleeping", True)
+
+            culv_map = {
+                "max_bodies": "culverin_max_bodies",
+                "max_pairs": "culverin_max_pairs",
+                "max_contact_constraints": "culverin_max_contact_constraints",
+                "temp_allocator_size": "culverin_temp_allocator_size",
+                "max_physics_jobs": "culverin_max_physics_jobs",
+                "max_physics_barriers": "culverin_max_physics_barriers",
+                "num_threads": "culverin_num_threads",
+                "penetration_slop": "culverin_penetration_slop",
+            }
+            for culv_key, cfg_key in culv_map.items():
+                if cfg_key in opts:
+                    world_opts[culv_key] = opts[cfg_key]
 
             self._world = PhysicsWorld(settings=world_opts)
             self._initialized = True
-            Logger.info("CulverinSolver initialized")
+            Logger.info(f"CulverinSolver initialized (threads={self._num_threads}, jobs={self._max_physics_jobs}, ccd={self._enable_ccd}, sleep={self._enable_sleeping})")
             return True
         except Exception as e:
             Logger.error(f"CulverinSolver init failed: {e}")
