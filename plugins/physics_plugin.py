@@ -182,6 +182,9 @@ class PhysicsPlugin(PluginBase):
         if solver_name == "physx":
             solver_module = "physics_solvers.physx_solver"
             solver_class = "PhysXSolver"
+        elif solver_name == "culverin":
+            solver_module = "physics_solvers.culverin_solver"
+            solver_class = "CulverinSolver"
         else:
             solver_module = "physics_solvers.pybullet_solver"
             solver_class = "PyBulletSolver"
@@ -220,6 +223,8 @@ class PhysicsPlugin(PluginBase):
         solver_name = settings.get("solver", "pybullet")
         if solver_name == "physx":
             return "physics_solvers.physx_solver", "PhysXSolver"
+        if solver_name == "culverin":
+            return "physics_solvers.culverin_solver", "CulverinSolver"
         return "physics_solvers.pybullet_solver", "PyBulletSolver"
 
     def _get_layer_process(self, layer: int) -> PhysicsProcess:

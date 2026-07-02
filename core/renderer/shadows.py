@@ -302,7 +302,7 @@ class ShadowRenderer:
         for face_idx, (face_dir, face_up) in enumerate(face_configs):
             view = Mat4.look_at(light_pos, light_pos + face_dir, face_up)
             view_np = view._d
-            vp = view_np @ proj_np
+            vp = (view_np @ proj_np).astype(np.float32)
             self._point_light_vps[face_idx] = vp
             self.render_geometry(vp, self._point_shadow_fbos[face_idx], renderable_shadow, resolution=self._point_shadow_resolution)
 
@@ -317,7 +317,7 @@ class ShadowRenderer:
         far_plane = light_range
         view = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())
         proj = Mat4.perspective(spot_fov, 1.0, near_plane, far_plane)
-        vp = view._d @ proj._d
+        vp = (view._d @ proj._d).astype(np.float32)
         self._spot_light_vp = vp
         self._has_spot_shadow = True
         self._spot_light_idx = next(
@@ -345,7 +345,7 @@ class ShadowRenderer:
         self._area_shadow_bias = float(area_light.area_shadow_bias)
         view = Mat4.look_at(light_pos, light_pos + light_dir, light_up)
         proj = Mat4.perspective(fov, 1.0, near_plane, far_plane)
-        vp = view._d @ proj._d
+        vp = (view._d @ proj._d).astype(np.float32)
         self._area_light_vp = vp
         self._has_area_shadow = True
         self._area_light_pos = light_pos
