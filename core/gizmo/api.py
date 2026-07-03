@@ -1208,8 +1208,7 @@ class GizmosManager:
             if self.unique_draws:
                 gizmos.extend(self.unique_draws.values())
             np_data_copies = None
-            enabled = self.enabled
-            if enabled:
+            if self.enabled:
                 np_data = self._get_render_data()
                 if np_data is not None:
                     np_data_copies = (np.copy(np_data[0]), np.copy(np_data[1]), np.copy(np_data[2]))
@@ -1219,7 +1218,7 @@ class GizmosManager:
         s_list = []
         e_list = []
         c_list = []
-        if enabled:
+        if self.enabled:
             if np_data_copies is not None:
                 s_list.append(np_data_copies[0])
                 e_list.append(np_data_copies[1])
@@ -1292,7 +1291,6 @@ class GizmosManager:
             self.persistent_draws[:] = [g for g in self.persistent_draws if g.tag != tag]
             if len(self.persistent_draws) != old:
                 self._revision += 1
-            self._revision += 1
 
     def draw_lines(self, starts: np.ndarray, ends: np.ndarray, colors: np.ndarray):
         if starts.shape[0] == 0:

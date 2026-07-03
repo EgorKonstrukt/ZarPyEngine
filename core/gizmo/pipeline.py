@@ -8,7 +8,8 @@ from __future__ import annotations
 import math
 import numpy as np
 from typing import List, Tuple
-from core.ecs import GizmoPrimitive, GizmoStyle, InstancePrimitive
+from core.math3d import Vec3
+from core.ecs import GizmoPrimitive, GizmoStyle
 from core.gizmo.api import Gizmos
 
 
@@ -54,7 +55,26 @@ class GizmoPipeline:
         return result
 
     def flush(self, time_s: float = 0.0):
+        self._render_via(Gizmos.draw_lines, time_s)
+
+    def flush_and_render(self, vp, vp_mat, time_s: float = 0.0):
+        fw, fh = vp._get_physical_dims()
+        cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
+
+        def render_func(s, e, c):
+            vp._renderer.render_gizmo_arrays(s, e, c, vp_mat, fw, fh, thickness_multiplier=1.0)
+
+        self._render_via(render_func, time_s)
+
+        for shape_type, instance_data, num in self.get_instance_render_data():
+            vp._renderer.render_instanced_gizmo_lines(
+                shape_type, instance_data, num, vp_mat, fw, fh, thickness_multiplier=1.0, cam_pos=cam_pos)
+        self._batches.clear()
+
+    def _render_via(self, draw_fn, time_s: float = 0.0):
         t = time_s
+        s_list, e_list, c_list = [], [], []
+        glow_list = []
         for prim in self._batches:
             s, e, c = prim.starts, prim.ends, prim.colors
             n = s.shape[0]
@@ -78,10 +98,23 @@ class GizmoPipeline:
                 if s.shape[0] == 0:
                     continue
 
-            Gizmos.draw_lines(s, e, c)
+            s_list.append(s); e_list.append(e); c_list.append(c)
 
             if style.glow:
-                _glow_np(s, e, c, style.glow_layers, style.glow_intensity)
+                glow_list.append((s, e, c, style.glow_layers, style.glow_intensity))
+
+        if s_list:
+            if len(s_list) == 1:
+                draw_fn(s_list[0], e_list[0], c_list[0])
+            else:
+                draw_fn(np.concatenate(s_list), np.concatenate(e_list), np.concatenate(c_list))
+
+        for s, e, c, layers, intensity in glow_list:
+            for i in range(layers):
+                alpha = intensity * (1.0 - i / layers) / layers
+                gc = c.copy()
+                gc[:, 3] *= alpha
+                draw_fn(s, e, gc)
 
         self._batches.clear()
 
@@ -112,10 +145,4 @@ def _dash_np(starts: np.ndarray, ends: np.ndarray, colors: np.ndarray,
             np.array(c_parts, dtype=np.float32))
 
 
-def _glow_np(starts: np.ndarray, ends: np.ndarray, colors: np.ndarray,
-             layers: int, intensity: float):
-    for i in range(layers):
-        alpha = intensity * (1.0 - i / layers) / layers
-        gc = colors.copy()
-        gc[:, 3] *= alpha
-        Gizmos.draw_lines(starts, ends, gc)
+

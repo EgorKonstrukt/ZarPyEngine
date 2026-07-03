@@ -28,12 +28,7 @@ def render_component_gizmos(vp, vp_mat: Mat4):
                 meshes.extend(ct.gizmo_collect_meshes(scene))
             except Exception:
                 pass
-    pipe.flush()
-    fw, fh = vp._get_physical_dims()
-    cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
-    for shape_type, instance_data, num in pipe.get_instance_render_data():
-        vp._renderer.render_instanced_gizmo_lines(
-            shape_type, instance_data, num, vp_mat, fw, fh, thickness_multiplier=1.0, cam_pos=cam_pos)
+    pipe.flush_and_render(vp, vp_mat)
     if meshes:
         vp._renderer.render_gizmo_meshes(meshes, vp_mat)
 
