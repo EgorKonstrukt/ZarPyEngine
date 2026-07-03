@@ -332,4 +332,4 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
             "entity_b": physics_scene._body_to_entity.get(bb, ""),
         })
 
-    result_queue.put({"type": "step_result", "collision_events": events})
+    result_queue.put({"type": "step_result", "collision_events": events, "version": result_ver + 1})

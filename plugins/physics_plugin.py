@@ -136,9 +136,7 @@ class PhysicsPlugin(PluginBase):
         self._solver: Optional[IPhysicsSolver] = None
         self._simulation_mode: str = "multi_threaded"
         self._layer_processes: dict[int, PhysicsProcess] = {}
-        self._proc_ver: dict[int, int] = {}
         self._prev_frame_contacts: set = set()
-        self._last_result_ver: int = -1
         self._project_root: str = os.path.normpath(
             os.path.join(os.path.dirname(__file__), "..")
         )
@@ -301,14 +299,12 @@ class PhysicsPlugin(PluginBase):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
-        self._last_result_ver = -1
         self._step_caches.clear()
 
     def on_scene_unloaded(self, scene):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
-        self._last_result_ver = -1
         self._step_caches.clear()
         self._reset_entity_velocities(scene)
         if self._simulation_mode == "per_layer_process":
@@ -327,9 +323,7 @@ class PhysicsPlugin(PluginBase):
         if self._physics_process is not None:
             self._physics_process.shutdown(500)
             self._physics_process = None
-        self._proc_ver.clear()
         self._step_caches.clear()
-        self._last_result_ver = -1
         sm, sc = self._solver_module_class()
         settings = self._get_physics_settings()
         new_proc = PhysicsProcess(project_root=self._project_root)
@@ -345,7 +339,6 @@ class PhysicsPlugin(PluginBase):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
-        self._last_result_ver = -1
         if self._engine is None:
             Logger.info("[PhysicsPlugin] on_play_start: engine is None, returning")
             return
@@ -436,7 +429,6 @@ class PhysicsPlugin(PluginBase):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
-        self._last_result_ver = -1
         self._reset_entity_velocities()
         if self._simulation_mode == "per_layer_process":
             for proc in self._layer_processes.values():
@@ -541,8 +533,6 @@ class PhysicsPlugin(PluginBase):
     def _step_process(self, proc: PhysicsProcess, scene, dt: float, prof) -> list:
         shared = proc.shared
         ets = proc.entity_slot_map
-        last_rv = self._proc_ver.get(id(shared), -1)
-        rv = shared.get_result_version()
         entities = scene._entities
 
         proc_id = id(proc)
@@ -552,63 +542,73 @@ class PhysicsPlugin(PluginBase):
             self._step_caches[proc_id] = (gen_key, self._rebuild_step_cache(proc, entities))
         _cache = self._step_caches[proc_id][1]
 
-        if rv != last_rv:
-            self._proc_ver[id(shared)] = rv
-            if rv > 0:
-                for entity, rb, rb2d, tr, slot in _cache:
-                    flags = shared._flags_nd[slot]
-                    if not (flags & 1) or (flags & 4):
-                        continue
-                    row = shared._rdata_nd[slot]
-                    if rb2d:
-                        tr._local_pos._x = row[0]
-                        tr._local_pos._y = row[1]
-                        tr._local_pos._z = 0.0
-                        hz = row[5] * 0.5
-                        tr._local_rot._x = 0.0
-                        tr._local_rot._y = 0.0
-                        tr._local_rot._z = math.sin(hz)
-                        tr._local_rot._w = math.cos(hz)
-                        tr._dirty = True
-                        rb2d._velocity._x = row[6]
-                        rb2d._velocity._y = row[7]
-                        rb2d._angular_velocity = row[11]
-                        rb2d._force_accum._x = 0.0
-                        rb2d._force_accum._y = 0.0
-                        rb2d._torque_accum = 0.0
-                    elif rb:
-                        tr._local_pos._x = row[0]
-                        tr._local_pos._y = row[1]
-                        tr._local_pos._z = row[2]
-                        r0 = row[3]; r1 = row[4]; r2 = row[5]
-                        sr, cr = math.sin(r0 * 0.5), math.cos(r0 * 0.5)
-                        sp, cp = math.sin(r1 * 0.5), math.cos(r1 * 0.5)
-                        sy, cy = math.sin(r2 * 0.5), math.cos(r2 * 0.5)
-                        tr._local_rot._x = sr * cp * cy - cr * sp * sy
-                        tr._local_rot._y = cr * sp * cy + sr * cp * sy
-                        tr._local_rot._z = cr * cp * sy - sr * sp * cy
-                        tr._local_rot._w = cr * cp * cy + sr * sp * sy
-                        tr._dirty = True
-                        rb._velocity._x = row[6]
-                        rb._velocity._y = row[7]
-                        rb._velocity._z = row[8]
-                        rb._angular_velocity._x = row[9]
-                        rb._angular_velocity._y = row[10]
-                        rb._angular_velocity._z = row[11]
-                        rb._force_accum._x = 0.0
-                        rb._force_accum._y = 0.0
-                        rb._force_accum._z = 0.0
-                        rb._torque_accum._x = 0.0
-                        rb._torque_accum._y = 0.0
-                        rb._torque_accum._z = 0.0
-
-        events_accum = []
+        # 1) Drain result queue FIRST.
+        #    multiprocessing.Queue.get() provides acquire semantics (internal mutex),
+        #    guaranteeing all preceding shared memory writes from the physics process
+        #    are visible — portable across x86 and ARM.
+        pending_results = []
         result = proc.poll()
         while result is not None:
             if result.get("type") == "step_result":
-                events_accum.extend(result.get("collision_events", []))
+                pending_results.append(result)
             result = proc.poll()
 
+        # 2) Read transforms only from the latest result
+        #    (shared memory contains the most recent write).
+        if pending_results:
+            for entity, rb, rb2d, tr, slot in _cache:
+                flags = shared._flags_nd[slot]
+                if not (flags & 1) or (flags & 4):
+                    continue
+                row = shared._rdata_nd[slot]
+                if rb2d:
+                    tr._local_pos._x = row[0]
+                    tr._local_pos._y = row[1]
+                    tr._local_pos._z = 0.0
+                    hz = row[5] * 0.5
+                    tr._local_rot._x = 0.0
+                    tr._local_rot._y = 0.0
+                    tr._local_rot._z = math.sin(hz)
+                    tr._local_rot._w = math.cos(hz)
+                    tr._dirty = True
+                    rb2d._velocity._x = row[6]
+                    rb2d._velocity._y = row[7]
+                    rb2d._angular_velocity = row[11]
+                    rb2d._force_accum._x = 0.0
+                    rb2d._force_accum._y = 0.0
+                    rb2d._torque_accum = 0.0
+                elif rb:
+                    tr._local_pos._x = row[0]
+                    tr._local_pos._y = row[1]
+                    tr._local_pos._z = row[2]
+                    r0 = row[3]; r1 = row[4]; r2 = row[5]
+                    sr, cr = math.sin(r0 * 0.5), math.cos(r0 * 0.5)
+                    sp, cp = math.sin(r1 * 0.5), math.cos(r1 * 0.5)
+                    sy, cy = math.sin(r2 * 0.5), math.cos(r2 * 0.5)
+                    tr._local_rot._x = sr * cp * cy - cr * sp * sy
+                    tr._local_rot._y = cr * sp * cy + sr * cp * sy
+                    tr._local_rot._z = cr * cp * sy - sr * sp * cy
+                    tr._local_rot._w = cr * cp * cy + sr * sp * sy
+                    tr._dirty = True
+                    rb._velocity._x = row[6]
+                    rb._velocity._y = row[7]
+                    rb._velocity._z = row[8]
+                    rb._angular_velocity._x = row[9]
+                    rb._angular_velocity._y = row[10]
+                    rb._angular_velocity._z = row[11]
+                    rb._force_accum._x = 0.0
+                    rb._force_accum._y = 0.0
+                    rb._force_accum._z = 0.0
+                    rb._torque_accum._x = 0.0
+                    rb._torque_accum._y = 0.0
+                    rb._torque_accum._z = 0.0
+
+        # 3) Accumulate collision events from all pending results
+        events_accum = []
+        for r in pending_results:
+            events_accum.extend(r.get("collision_events", []))
+
+        # 4) Write input data to shared memory
         max_slot = -1
         for entity, rb, rb2d, tr, slot in _cache:
             if not entity._active:

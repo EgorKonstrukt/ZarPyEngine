@@ -78,6 +78,12 @@ class PhysicsWorker(threading.Thread):
                     collision_mask=body.get("collision_mask", 0xFFFF),
                 )
                 if bid >= 0:
+                    vel = body.get("velocity")
+                    if vel:
+                        self._solver.set_velocity(bid, vel)
+                    ang_vel = body.get("angular_velocity")
+                    if ang_vel:
+                        self._solver.set_angular_velocity(bid, ang_vel)
                     self._physics_scene._entity_to_body[body["entity_id"]] = bid
                     self._physics_scene._body_to_entity[bid] = body["entity_id"]
                     self._physics_scene._cached_shape[body["entity_id"]] = ()
@@ -170,8 +176,6 @@ class PhysicsWorker(threading.Thread):
             }
 
             self._result_queue.put(result)
-            if self._on_step_finished:
-                self._on_step_finished(result)
 
         elif t == "remove_bodies":
             for eid in cmd["entity_ids"]:
@@ -197,6 +201,12 @@ class PhysicsWorker(threading.Thread):
                 collision_mask=body.get("collision_mask", 0xFFFF),
             )
             if bid >= 0:
+                vel = body.get("velocity")
+                if vel:
+                    self._solver.set_velocity(bid, vel)
+                ang_vel = body.get("angular_velocity")
+                if ang_vel:
+                    self._solver.set_angular_velocity(bid, ang_vel)
                 self._physics_scene._entity_to_body[body["entity_id"]] = bid
                 self._physics_scene._body_to_entity[bid] = body["entity_id"]
                 self._physics_scene._cached_shape[body["entity_id"]] = ()
