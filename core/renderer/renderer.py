@@ -869,6 +869,18 @@ void main() {
                             rtr._blit_to_fbo(self._ctx, self._scene_fbo, viewport_w, viewport_h)
                     break
 
+        if scene:
+            from core.components.rendering.radiance_cascades_gi import RadianceCascadesGI
+            for ent in scene.get_entities_with_component(RadianceCascadesGI):
+                if not ent.active:
+                    continue
+                gi = ent.get_component(RadianceCascadesGI)
+                if gi and gi.enabled:
+                    if gi._dispatch(self._ctx, viewport_w, viewport_h, view_mat, proj_mat, cam_pos, scene, self):
+                        gi._blit_to_fbo(self._ctx, self._scene_fbo, viewport_w, viewport_h)
+                        gi.blit_to_screen(self._ctx, viewport_w, viewport_h)
+                    break
+
         if prof:
             prof.start("render_stats")
         skybox_call = 1 if (self._skybox_enabled and self._skybox_cube) else 0
