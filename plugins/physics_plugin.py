@@ -181,7 +181,7 @@ class PhysicsPlugin(PluginBase):
         settings = self._get_physics_settings()
         self._simulation_mode = settings.get("simulation_mode", "multi_threaded")
 
-        solver_name = settings.get("solver", "pybullet")
+        solver_name = settings.get("solver", "culverin")
         solver_module = ""
         solver_class = ""
         if solver_name == "physx":
@@ -193,6 +193,8 @@ class PhysicsPlugin(PluginBase):
         else:
             solver_module = "physics_solvers.pybullet_solver"
             solver_class = "PyBulletSolver"
+
+        Logger.info(f"[PhysicsPlugin] using solver={solver_name} mode={self._simulation_mode}")
 
         if self._simulation_mode == "single":
             self._init_single(solver_module, solver_class, settings, solver_name)
@@ -225,7 +227,7 @@ class PhysicsPlugin(PluginBase):
 
     def _solver_module_class(self) -> tuple[str, str]:
         settings = self._get_physics_settings()
-        solver_name = settings.get("solver", "pybullet")
+        solver_name = settings.get("solver", "culverin")
         if solver_name == "physx":
             return "physics_solvers.physx_solver", "PhysXSolver"
         if solver_name == "culverin":
@@ -321,6 +323,22 @@ class PhysicsPlugin(PluginBase):
                 self._physics_process.clear_slots()
                 self._physics_process.send({"type": "unload_all"})
 
+    def _start_fresh_process(self) -> bool:
+        if self._physics_process is not None:
+            self._physics_process.shutdown(500)
+            self._physics_process = None
+        self._proc_ver.clear()
+        self._step_caches.clear()
+        self._last_result_ver = -1
+        sm, sc = self._solver_module_class()
+        settings = self._get_physics_settings()
+        new_proc = PhysicsProcess(project_root=self._project_root)
+        if new_proc.start(sm, sc, settings):
+            self._physics_process = new_proc
+            return True
+        Logger.error("PhysicsPlugin: failed to start physics process")
+        return False
+
     def on_play_start(self):
         from core.logger import Logger
         Logger.info(f"[PhysicsPlugin] on_play_start called, mode={self._simulation_mode}")
@@ -343,6 +361,8 @@ class PhysicsPlugin(PluginBase):
             self._physics_scene.load_scene(scene)
             Logger.info(f"[PhysicsPlugin] Scene loaded (single-threaded).")
         elif self._simulation_mode == "per_layer_process":
+            for proc in self._layer_processes.values():
+                proc.drain()
             self._layer_processes.clear()
             layer_bodies: dict[int, list[dict]] = {}
             for entity in scene.get_all_entities():
@@ -365,9 +385,8 @@ class PhysicsPlugin(PluginBase):
             total = sum(len(v) for v in layer_bodies.values())
             Logger.info(f"[PhysicsPlugin] Scene loaded with {total} bodies across {len(self._layer_processes)} layer processes.")
         else:
-            if self._physics_process is None:
+            if not self._start_fresh_process():
                 return
-            self._physics_process.clear_slots()
             bodies = []
             for entity in scene.get_all_entities():
                 rb = entity._components.get("Rigidbody")
@@ -382,7 +401,9 @@ class PhysicsPlugin(PluginBase):
                 return
             self._physics_process.send({"type": "load_bodies", "bodies": bodies})
             if self._physics_process.wait_for_result("load_bodies", timeout=5.0) is None:
-                Logger.error("PhysicsPlugin: load_bodies timed out.")
+                Logger.error("PhysicsPlugin: load_bodies timed out, shutting down process")
+                self._physics_process.shutdown(500)
+                self._physics_process = None
                 return
             Logger.info(f"[PhysicsPlugin] Scene loaded with {len(bodies)} bodies (shared-memory).")
 
@@ -405,6 +426,12 @@ class PhysicsPlugin(PluginBase):
                 rb2d._force_accum = Vec2.zero()
                 rb2d._torque_accum = 0.0
 
+    def _unload_and_wait(self, proc: PhysicsProcess):
+        proc.send({"type": "unload_all"})
+        if proc.wait_for_result("unload_all", timeout=3.0) is None:
+            Logger.warning("PhysicsPlugin: unload_all timed out, terminating process")
+            proc.shutdown(500)
+
     def on_play_stop(self):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
@@ -414,14 +441,15 @@ class PhysicsPlugin(PluginBase):
         if self._simulation_mode == "per_layer_process":
             for proc in self._layer_processes.values():
                 proc.clear_slots()
-                proc.send({"type": "unload_all"})
+                self._unload_and_wait(proc)
         elif self._simulation_mode == "single":
             if self._physics_scene:
                 self._physics_scene.shutdown()
         else:
             if self._physics_process:
                 self._physics_process.clear_slots()
-                self._physics_process.send({"type": "unload_all"})
+                self._unload_and_wait(self._physics_process)
+            self._step_caches.clear()
 
     def pre_step(self, dt: float):
         if not self._enabled:

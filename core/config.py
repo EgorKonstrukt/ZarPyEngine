@@ -251,7 +251,7 @@ def get_project_config(project_path: str) -> Config:
                 "shadow_distance": 50.0
             },
             "physics": {
-                "solver": "pybullet",
+                "solver": "culverin",
                 "physx_device": "cpu",
                 "gravity_x": 0.0,
                 "gravity_y": -9.81,
@@ -272,12 +272,12 @@ def get_project_config(project_path: str) -> Config:
                 "culverin_max_pairs": 65536,
                 "culverin_max_contact_constraints": 65536,
                 "culverin_temp_allocator_size": 16777216,
-                "culverin_max_physics_jobs": 8,
-                "culverin_max_physics_barriers": 8,
+                "culverin_max_physics_jobs": 0,
+                "culverin_max_physics_barriers": 0,
                 "culverin_num_threads": 0,
                 "culverin_penetration_slop": 0.02,
-                "culverin_enable_ccd": false,
-                "culverin_enable_sleeping": true,
+                "culverin_enable_ccd": False,
+                "culverin_enable_sleeping": False,
                 "layer_names": ["Default","TransparentFX","Ignore Raycast","Water","UI","Player","Enemy","Projectile","Trigger","Ground","Layer10","Layer11","Layer12","Layer13","Layer14","Layer15"],
                 "collision_matrix": [65535,65535,0,65535,16,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535]
             },

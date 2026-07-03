@@ -110,6 +110,7 @@ class ConsolePanel(QDockWidget):
         self._level_icons: dict[LogLevel, QIcon] = {}
         self._setup_ui()
         Logger.add_listener(self._on_log_entry)
+        self._rebuild()
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._flush_pending)
         self._refresh_timer.start(self._refresh_interval)

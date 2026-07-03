@@ -9,6 +9,7 @@ import multiprocessing
 import queue
 import sys
 import os
+import time
 from typing import Optional
 from core.physics.shared_buffer import SharedPhysicsBuffer, MAX_ENTITIES
 
@@ -92,7 +93,6 @@ class PhysicsProcess:
         return results
 
     def wait_for_result(self, expected_type: str, timeout: float = 5.0) -> Optional[dict]:
-        import time
         deadline = time.monotonic() + timeout
         while True:
             r = self.poll()
@@ -101,6 +101,9 @@ class PhysicsProcess:
             if time.monotonic() >= deadline:
                 return None
             time.sleep(0.0005)
+
+    def is_alive(self) -> bool:
+        return self._process is not None and self._process.is_alive()
 
     def shutdown(self, timeout: int = 5000):
         if self._process is None or not self._process.is_alive():
@@ -175,52 +178,59 @@ def _physics_loop(
 
         t = cmd.get("type")
 
-        if t == "step":
-            _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body)
+        try:
+            if t == "step":
+                _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body)
 
-        elif t == "load_bodies":
-            _slot_to_body.clear()
-            solver.remove_all_joints()
-            solver.remove_all_bodies()
-            physics_scene._entity_to_body.clear()
-            physics_scene._body_to_entity.clear()
-            physics_scene._entity_to_joint.clear()
-            physics_scene._joint_to_entity.clear()
-            physics_scene._cached_shape.clear()
-            physics_scene._cached_shape_info.clear()
-            physics_scene._prev_frame_contacts.clear()
-            for body in cmd.get("bodies", []):
-                _create_body(body, solver, physics_scene, shared, _slot_to_body)
-            result_queue.put({"type": "load_bodies"})
+            elif t == "load_bodies":
+                _slot_to_body.clear()
+                solver.remove_all_joints()
+                solver.remove_all_bodies()
+                physics_scene._entity_to_body.clear()
+                physics_scene._body_to_entity.clear()
+                physics_scene._entity_to_joint.clear()
+                physics_scene._joint_to_entity.clear()
+                physics_scene._cached_shape.clear()
+                physics_scene._cached_shape_info.clear()
+                physics_scene._prev_frame_contacts.clear()
+                for body in cmd.get("bodies", []):
+                    _create_body(body, solver, physics_scene, shared, _slot_to_body)
+                result_queue.put({"type": "load_bodies"})
 
-        elif t == "add_body":
-            _create_body(cmd["body"], solver, physics_scene, shared, _slot_to_body)
+            elif t == "add_body":
+                _create_body(cmd["body"], solver, physics_scene, shared, _slot_to_body)
 
-        elif t == "remove_bodies":
-            for eid in cmd.get("entity_ids", []):
-                bid = physics_scene._entity_to_body.pop(eid, None)
-                if bid is not None:
-                    solver.remove_rigid_body(bid)
-                    physics_scene._body_to_entity.pop(bid, None)
-            for slot in cmd.get("slots", []):
-                _slot_to_body.pop(slot, None)
-                shared.set_active(slot, False)
+            elif t == "remove_bodies":
+                for eid in cmd.get("entity_ids", []):
+                    bid = physics_scene._entity_to_body.pop(eid, None)
+                    if bid is not None:
+                        solver.remove_rigid_body(bid)
+                        physics_scene._body_to_entity.pop(bid, None)
+                for slot in cmd.get("slots", []):
+                    _slot_to_body.pop(slot, None)
+                    shared.set_active(slot, False)
 
-        elif t == "unload_all":
-            _slot_to_body.clear()
-            solver.remove_all_joints()
-            solver.remove_all_bodies()
-            physics_scene._entity_to_body.clear()
-            physics_scene._body_to_entity.clear()
-            physics_scene._entity_to_joint.clear()
-            physics_scene._joint_to_entity.clear()
-            physics_scene._cached_shape.clear()
-            physics_scene._cached_shape_info.clear()
-            physics_scene._prev_frame_contacts.clear()
-            shared.set_num_entities(0)
+            elif t == "unload_all":
+                _slot_to_body.clear()
+                solver.remove_all_joints()
+                solver.remove_all_bodies()
+                physics_scene._entity_to_body.clear()
+                physics_scene._body_to_entity.clear()
+                physics_scene._entity_to_joint.clear()
+                physics_scene._joint_to_entity.clear()
+                physics_scene._cached_shape.clear()
+                physics_scene._cached_shape_info.clear()
+                physics_scene._prev_frame_contacts.clear()
+                shared.set_num_entities(0)
+                result_queue.put({"type": "unload_all"})
 
-        elif t == "shutdown":
-            running = False
+            elif t == "shutdown":
+                running = False
+        except Exception as e:
+            Logger.error(f"PhysicsProcess: error processing cmd '{t}': {e}")
+            import traceback
+            Logger.error(traceback.format_exc())
+            result_queue.put({"type": t, "error": str(e)})
 
     solver.shutdown()
     shared.close()

@@ -168,7 +168,7 @@ FIELD_TOOLTIPS = {
     "physics.angular_damping": "Default angular damping",
     "physics.max_contacts_per_body": "Maximum contacts per rigid body",
     "physics.simulation_mode": "How physics simulation is executed. single = main thread, multi_threaded = one separate process, per_layer_process = one process per collision layer (for extreme parallel workloads)",
-    "physics.solver": "Physics solver backend (pybullet or physx)",
+    "physics.solver": "Physics solver backend (culverin, pybullet, or physx)",
     "audio.master_volume": "Master audio volume",
     "audio.sfx_volume": "Sound effects volume",
     "audio.music_volume": "Music volume",

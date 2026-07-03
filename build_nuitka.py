@@ -50,14 +50,14 @@ def _resolve_physics_solver() -> str:
     """Read the active physics solver from ProjectSettings.json."""
     ps_path = ROOT / "ProjectSettings.json"
     if not ps_path.exists():
-        return "pybullet"
+        return "culverin"
     try:
         with open(ps_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        solver = data.get("physics", {}).get("solver", "pybullet")
-        return solver if solver in ("pybullet", "physx") else "pybullet"
+        solver = data.get("physics", {}).get("solver", "culverin")
+        return solver if solver in ("pybullet", "physx", "culverin") else "culverin"
     except Exception:
-        return "pybullet"
+        return "culverin"
 
 
 def _minify_pil():

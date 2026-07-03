@@ -173,26 +173,26 @@ class CulverinSolver(IPhysicsSolver):
             world_opts["gravity"] = (gx, gy, gz)
 
             self._num_threads = opts.get("culverin_num_threads", 0)
-            self._max_physics_jobs = opts.get("culverin_max_physics_jobs", 8)
-            self._max_physics_barriers = opts.get("culverin_max_physics_barriers", 8)
+            self._max_physics_jobs = opts.get("culverin_max_physics_jobs", 0)
+            self._max_physics_barriers = opts.get("culverin_max_physics_barriers", 0)
             self._enable_ccd = opts.get("culverin_enable_ccd", False)
-            self._enable_sleeping = opts.get("culverin_enable_sleeping", True)
+            self._enable_sleeping = opts.get("culverin_enable_sleeping", False)
 
-            culv_map = {
-                "max_bodies": "culverin_max_bodies",
-                "max_pairs": "culverin_max_pairs",
-                "max_contact_constraints": "culverin_max_contact_constraints",
-                "temp_allocator_size": "culverin_temp_allocator_size",
-                "max_physics_jobs": "culverin_max_physics_jobs",
-                "max_physics_barriers": "culverin_max_physics_barriers",
-                "num_threads": "culverin_num_threads",
-                "penetration_slop": "culverin_penetration_slop",
-            }
-            for culv_key, cfg_key in culv_map.items():
-                if cfg_key in opts:
-                    world_opts[culv_key] = opts[cfg_key]
+            if self._num_threads == 0:
+                self._max_physics_jobs = 0
+                self._max_physics_barriers = 0
+
+            world_opts["num_threads"] = self._num_threads
+            world_opts["max_physics_jobs"] = self._max_physics_jobs
+            world_opts["max_physics_barriers"] = self._max_physics_barriers
+            world_opts["penetration_slop"] = opts.get("culverin_penetration_slop", 0.02)
+            world_opts["max_bodies"] = opts.get("culverin_max_bodies", 65536)
+            world_opts["max_pairs"] = opts.get("culverin_max_pairs", 65536)
+            world_opts["max_contact_constraints"] = opts.get("culverin_max_contact_constraints", 65536)
+            world_opts["temp_allocator_size"] = opts.get("culverin_temp_allocator_size", 16777216)
 
             self._world = PhysicsWorld(settings=world_opts)
+            self._world.set_gravity(gx, gy, gz)
             self._initialized = True
             Logger.info(f"CulverinSolver initialized (threads={self._num_threads}, jobs={self._max_physics_jobs}, ccd={self._enable_ccd}, sleep={self._enable_sleeping})")
             return True
@@ -300,6 +300,10 @@ class CulverinSolver(IPhysicsSolver):
 
         if handle is None or handle < 0:
             return -1
+
+        if motion == MOTION_DYNAMIC and self._enable_sleeping:
+            self._world.set_linear_velocity(handle, 0.0, -0.001, 0.0)
+            self._world.set_linear_velocity(handle, 0.0, 0.0, 0.0)
 
         self._body_count += 1
         self._all_body_ids.append(body_id)
@@ -490,12 +494,38 @@ class CulverinSolver(IPhysicsSolver):
             return
         self._world.set_linear_velocity(handle, velocity[0], velocity[1], velocity[2])
 
+    def set_velocities(
+        self, body_id: int,
+        linear: Optional[tuple[float, float, float]] = None,
+        angular: Optional[tuple[float, float, float]] = None,
+    ):
+        handle = self._id_to_handle.get(body_id)
+        if handle is None or self._world is None:
+            return
+        if linear is not None:
+            self._world.set_linear_velocity(handle, linear[0], linear[1], linear[2])
+        if angular is not None:
+            self._world.set_angular_velocity(handle, angular[0], angular[1], angular[2])
+
     def get_velocity(self, body_id: int) -> tuple[float, float, float]:
         handle = self._id_to_handle.get(body_id)
         if handle is None or self._world is None:
             return (0.0, 0.0, 0.0)
         v = self._world.get_velocity(handle)
         return v if v is not None else (0.0, 0.0, 0.0)
+
+    def get_velocities(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        handle = self._id_to_handle.get(body_id)
+        if handle is None or self._world is None:
+            return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+        v = self._world.get_velocity(handle)
+        a = self._world.get_angular_velocity(handle)
+        return (
+            v if v is not None else (0.0, 0.0, 0.0),
+            a if a is not None else (0.0, 0.0, 0.0),
+        )
 
     def set_angular_velocity(
         self, body_id: int, velocity: tuple[float, float, float]

@@ -6,18 +6,29 @@
 
 from __future__ import annotations
 from typing import Optional, Tuple, Dict
-try:
-    import pybullet as p
-except ImportError:
-    p = None
-try:
-    import pybullet_data
-except ImportError:
-    pybullet_data = None
 import os
 import numpy as np
 from core.logger import Logger
 from core.physics.physics_solver import IPhysicsSolver
+
+
+class _LazyPybullet:
+    _p = None
+    _data = None
+
+    def __getattr__(self, name):
+        if self._p is None:
+            import pybullet
+            self._p = pybullet
+        return getattr(self._p, name)
+
+p = _LazyPybullet()
+
+def _pybullet_data_path() -> str:
+    if _LazyPybullet._data is None:
+        import pybullet_data
+        _LazyPybullet._data = pybullet_data
+    return _LazyPybullet._data.getDataPath() if _LazyPybullet._data else ""
 
 
 _LOADED_MESH_VERTS: dict[str, np.ndarray] = {}
@@ -96,7 +107,7 @@ class PyBulletSolver(IPhysicsSolver):
             if self._client < 0:
                 Logger.error("PyBullet failed to connect.")
                 return False
-            p.setAdditionalSearchPath(pybullet_data.getDataPath() if pybullet_data else "")
+            p.setAdditionalSearchPath(_pybullet_data_path())
 
             gx = opts.get("gravity_x", 0.0)
             gy = opts.get("gravity_y", -9.81)
