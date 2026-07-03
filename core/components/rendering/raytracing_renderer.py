@@ -243,10 +243,7 @@ class RaytracingRenderer(Component):
             mesh = renderer.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)
             if not mesh or mesh.vertices is None or len(mesh.vertices) < 3:
                 continue
-            bvh = getattr(mesh, '_rt_bvh', None)
-            if bvh is None:
-                bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
-                mesh._rt_bvh = bvh
+            bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
             if not bvh or not bvh.nodes:
                 continue
 
