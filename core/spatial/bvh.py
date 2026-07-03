@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from typing import Union
 
 _LEAF_SIZE = 8
 _MAX_DEPTH = 48
@@ -170,83 +171,97 @@ class BVH:
             if parent_sa < 1e-12:
                 return _make_leaf(ctx, tris)
 
-            c_cent = self._centroids[tris]
-            c_bmin = c_cent.min(axis=0)
-            c_bmax = c_cent.max(axis=0)
-            c_range = c_bmax - c_bmin
+            if _USE_CYTHON_BVH:
+                best_axis, best_split, lmask = _sah_cython_split(
+                    np.asarray(tris, dtype=np.intp),
+                    self._tri_bmin, self._tri_bmax, self._centroids,
+                    n, parent_sa, _SAH_BINS
+                )
+                if best_axis < 0:
+                    return _make_leaf(ctx, tris)
+                left_mask = lmask
+            else:
+                c_cent = self._centroids[tris]
+                c_bmin = c_cent.min(axis=0)
+                c_bmax = c_cent.max(axis=0)
+                c_range = c_bmax - c_bmin
 
-            best_axis = -1
-            best_split = 0.0
-            best_cost = float('inf')
+                best_axis = -1
+                best_split = 0.0
+                best_cost = float('inf')
 
-            for axis in range(3):
-                if c_range[axis] < 1e-12:
-                    continue
-                bins = _SAH_BINS
-                scale = bins / c_range[axis]
-                cent_vals = c_cent[:, axis]
-                bin_idx = np.floor((cent_vals - c_bmin[axis]) * scale).astype(np.intp)
-                bin_idx = np.clip(bin_idx, 0, bins - 1)
-
-                bin_bmin = np.full((bins, 3), 1e30, dtype=np.float32)
-                bin_bmax = np.full((bins, 3), -1e30, dtype=np.float32)
-                bin_cnt = np.zeros(bins, dtype=np.intp)
-
-                for bi in range(bins):
-                    mask = bin_idx == bi
-                    cnt = mask.sum()
-                    if cnt:
-                        bin_cnt[bi] = cnt
-                        tris_bi = tris[mask]
-                        bin_bmin[bi] = self._tri_bmin[tris_bi].min(axis=0)
-                        bin_bmax[bi] = self._tri_bmax[tris_bi].max(axis=0)
-
-                left_sa = np.empty(bins - 1, dtype=np.float32)
-                left_cnt = np.empty(bins - 1, dtype=np.intp)
-                pmin = np.full(3, 1e30, dtype=np.float32)
-                pmax = np.full(3, -1e30, dtype=np.float32)
-                pc = 0
-                for i in range(bins - 1):
-                    if bin_cnt[i]:
-                        pmin = np.minimum(pmin, bin_bmin[i])
-                        pmax = np.maximum(pmax, bin_bmax[i])
-                        pc += bin_cnt[i]
-                    left_sa[i] = _surface_area(pmin, pmax)
-                    left_cnt[i] = pc
-
-                right_sa = np.empty(bins - 1, dtype=np.float32)
-                right_cnt = np.empty(bins - 1, dtype=np.intp)
-                smin = np.full(3, 1e30, dtype=np.float32)
-                smax = np.full(3, -1e30, dtype=np.float32)
-                sc = 0
-                for i in range(bins - 2, -1, -1):
-                    bi = i + 1
-                    if bin_cnt[bi]:
-                        smin = np.minimum(smin, bin_bmin[bi])
-                        smax = np.maximum(smax, bin_bmax[bi])
-                        sc += bin_cnt[bi]
-                    right_sa[i] = _surface_area(smin, smax)
-                    right_cnt[i] = sc
-
-                for i in range(bins - 1):
-                    if left_cnt[i] == 0 or right_cnt[i] == 0:
+                for axis in range(3):
+                    if c_range[axis] < 1e-12:
                         continue
-                    cost = _SAH_TRAV + (left_sa[i] * left_cnt[i] + right_sa[i] * right_cnt[i]) / parent_sa
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_axis = axis
-                        best_split = c_bmin[axis] + (i + 1) * c_range[axis] / bins
+                    bins = _SAH_BINS
+                    scale = bins / c_range[axis]
+                    cent_vals = c_cent[:, axis]
+                    bin_idx = np.floor((cent_vals - c_bmin[axis]) * scale).astype(np.intp)
+                    bin_idx = np.clip(bin_idx, 0, bins - 1)
 
-            leaf_cost = n * _SAH_HIT
-            if best_axis < 0 or best_cost >= leaf_cost:
-                return _make_leaf(ctx, tris)
+                    bin_bmin = np.full((bins, 3), 1e30, dtype=np.float32)
+                    bin_bmax = np.full((bins, 3), -1e30, dtype=np.float32)
+                    bin_cnt = np.zeros(bins, dtype=np.intp)
 
-            axis = best_axis
-            left_mask = c_cent[:, axis] < best_split
+                    for bi in range(bins):
+                        mask = bin_idx == bi
+                        cnt = mask.sum()
+                        if cnt:
+                            bin_cnt[bi] = cnt
+                            tris_bi = tris[mask]
+                            bin_bmin[bi] = self._tri_bmin[tris_bi].min(axis=0)
+                            bin_bmax[bi] = self._tri_bmax[tris_bi].max(axis=0)
+
+                    left_sa = np.empty(bins - 1, dtype=np.float32)
+                    left_cnt = np.empty(bins - 1, dtype=np.intp)
+                    pmin = np.full(3, 1e30, dtype=np.float32)
+                    pmax = np.full(3, -1e30, dtype=np.float32)
+                    pc = 0
+                    for i in range(bins - 1):
+                        if bin_cnt[i]:
+                            pmin = np.minimum(pmin, bin_bmin[i])
+                            pmax = np.maximum(pmax, bin_bmax[i])
+                            pc += bin_cnt[i]
+                        left_sa[i] = _surface_area(pmin, pmax)
+                        left_cnt[i] = pc
+
+                    right_sa = np.empty(bins - 1, dtype=np.float32)
+                    right_cnt = np.empty(bins - 1, dtype=np.intp)
+                    smin = np.full(3, 1e30, dtype=np.float32)
+                    smax = np.full(3, -1e30, dtype=np.float32)
+                    sc = 0
+                    for i in range(bins - 2, -1, -1):
+                        bi = i + 1
+                        if bin_cnt[bi]:
+                            smin = np.minimum(smin, bin_bmin[bi])
+                            smax = np.maximum(smax, bin_bmax[bi])
+                            sc += bin_cnt[bi]
+                        right_sa[i] = _surface_area(smin, smax)
+                        right_cnt[i] = sc
+
+                    for i in range(bins - 1):
+                        if left_cnt[i] == 0 or right_cnt[i] == 0:
+                            continue
+                        cost = _SAH_TRAV + (left_sa[i] * left_cnt[i] + right_sa[i] * right_cnt[i]) / parent_sa
+                        if cost < best_cost:
+                            best_cost = cost
+                            best_axis = axis
+                            best_split = c_bmin[axis] + (i + 1) * c_range[axis] / bins
+
+                leaf_cost = n * _SAH_HIT
+                if best_axis < 0 or best_cost >= leaf_cost:
+                    return _make_leaf(ctx, tris)
+
+                axis = best_axis
+                left_mask = c_cent[:, axis] < best_split
             left_n = left_mask.sum()
             if left_n == 0 or left_n == n:
+                if _USE_CYTHON_BVH:
+                    cent_axis = self._centroids[tris, best_axis]
+                else:
+                    cent_axis = c_cent[:, axis]
                 mid = n // 2
-                order = np.argsort(c_cent[:, axis])
+                order = np.argsort(cent_axis)
                 left_tris = tris[order[:mid]]
                 right_tris = tris[order[mid:]]
             else:
@@ -260,11 +275,10 @@ class BVH:
                     ctx.node_count += 1
                 ctx.nodes[ni, 0:3] = bmin
                 ctx.nodes[ni, 3:6] = bmax
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    lf = ex.submit(_sah_build, left_tris, depth + 1)
-                    rf = ex.submit(_sah_build, right_tris, depth + 1)
-                    ctx.nodes[ni, 6] = float(lf.result())
-                    ctx.nodes[ni, 7] = float(rf.result())
+                lf = _BVH_BUILD_POOL.submit(_sah_build, left_tris, depth + 1)
+                rf = _BVH_BUILD_POOL.submit(_sah_build, right_tris, depth + 1)
+                ctx.nodes[ni, 6] = float(lf.result())
+                ctx.nodes[ni, 7] = float(rf.result())
             else:
                 lc = _sah_build(left_tris, depth + 1)
                 rc = _sah_build(right_tris, depth + 1)
@@ -509,17 +523,54 @@ class BVH:
             yield i, self.nodes[i]
 
 
-_BVH_CACHE: dict[int, BVH] = {}
+try:
+    from core._bvh_build import sah_compute_best_split as _sah_cython_split
+    _USE_CYTHON_BVH = True
+except ImportError:
+    _USE_CYTHON_BVH = False
+
+
+_BVH_CACHE: dict[int, Union[BVH, Future, None]] = {}
+_BVH_LOCK = threading.Lock()
+_BVH_BUILD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bvh")
+
+
+def _build_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH:
+    return BVH(vertices, indices)
+
+
+def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> None:
+    """Trigger async BVH pre-build. Safe to call from any thread."""
+    key = id(vertices)
+    with _BVH_LOCK:
+        if key in _BVH_CACHE:
+            return
+        if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+            _BVH_CACHE[key] = None
+            return
+        _BVH_CACHE[key] = _BVH_BUILD_POOL.submit(_build_bvh, vertices, indices)
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
     key = id(vertices)
-    if key not in _BVH_CACHE:
-        if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
-            _BVH_CACHE[key] = None
-        else:
-            _BVH_CACHE[key] = BVH(vertices, indices)
-    return _BVH_CACHE[key]
+    with _BVH_LOCK:
+        if key not in _BVH_CACHE:
+            if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+                _BVH_CACHE[key] = None
+            else:
+                _BVH_CACHE[key] = _BVH_BUILD_POOL.submit(_build_bvh, vertices, indices)
+        entry = _BVH_CACHE[key]
+    if isinstance(entry, Future):
+        if entry.done():
+            try:
+                result = entry.result()
+            except Exception:
+                result = None
+            with _BVH_LOCK:
+                _BVH_CACHE[key] = result
+            return result
+        return None
+    return entry
 
 
 def _build_bvh_lines(bvh: BVH, depth_filter: int = -1) -> list[tuple]:

@@ -8,13 +8,19 @@ from setuptools import setup, Extension
 from Cython.Build import cythonize
 import numpy
 
-ext = Extension(
+ext_convex_hull = Extension(
     "core._convex_hull",
     sources=["core/_convex_hull.pyx"],
     include_dirs=[numpy.get_include()],
 )
 
+ext_bvh = Extension(
+    "core._bvh_build",
+    sources=["core/_bvh_build.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
 setup(
-    name="ZarinEngine-convex-hull",
-    ext_modules=cythonize([ext], language_level="3"),
+    name="ZarinEngine-cython-extensions",
+    ext_modules=cythonize([ext_convex_hull, ext_bvh], language_level="3"),
 )

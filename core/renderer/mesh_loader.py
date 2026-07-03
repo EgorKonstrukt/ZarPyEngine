@@ -113,6 +113,8 @@ class MeshLoader:
         if self._outline_prog:
             m.build_outline_vao(self._ctx, self._outline_prog)
         self._meshes[cache_key] = m
+        from core.spatial.bvh import prebuild_mesh_bvh
+        prebuild_mesh_bvh(m.vertices, m.indices)
 
     def _on_async_load_complete(self):
         with self._async_lock:
