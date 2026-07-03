@@ -334,16 +334,16 @@ class RaytracingRenderer(Component):
             rndr = getattr(eng, '_renderer', None)
             if rndr:
                 for mat_path, mi in material_map.items():
-                    mat = rndr._materials.get(mat_path)
+                    mat = rndr._materials.load_material(mat_path)
                     if mat:
-                        props = mat.get_properties()
+                        props = mat.properties
                         bc = props.get("_BaseColor", (1, 1, 1, 1))
                         mat_np[mi, 0] = bc[0]
                         mat_np[mi, 1] = bc[1]
                         mat_np[mi, 2] = bc[2]
                         mat_np[mi, 3] = float(props.get("_Metallic", 0.0))
                         mat_np[mi, 4] = float(props.get("_Smoothness", 0.5))
-                        ec = props.get("_EmissionColor", (0, 0, 0, 0))
+                        ec = props.get("_EmissionColor") or props.get("emission", (0, 0, 0, 0))
                         mat_np[mi, 5] = ec[0]
                         mat_np[mi, 6] = ec[1]
                         mat_np[mi, 7] = ec[2]

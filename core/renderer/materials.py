@@ -169,6 +169,15 @@ class MaterialManager:
             except Exception:
                 callback(None)
 
+    # Maps URP-style/PBR property names to default shader uniform names
+    _UNIFORM_ALIASES = {
+        "_EmissionColor": "u_emission",
+        "_EmissionIntensity": None,
+        "_Metallic": "u_metallic",
+        "_Smoothness": "u_smoothness",
+        "_BaseColor": "u_albedo_color",
+    }
+
     def apply_material(self, mat: Optional[Material], prog: moderngl.Program):
         self._default_white.use(0)
         if "u_albedo_tex" in prog:
@@ -231,10 +240,12 @@ class MaterialManager:
                 continue
             if key in prog:
                 self._set_uniform_value(prog, key, value)
+            elif f"u_{key}" in prog:
+                self._set_uniform_value(prog, f"u_{key}", value)
             else:
-                u_key = f"u_{key}"
-                if u_key in prog:
-                    self._set_uniform_value(prog, u_key, value)
+                alias = self._UNIFORM_ALIASES.get(key)
+                if alias and alias in prog:
+                    self._set_uniform_value(prog, alias, value)
 
     def _set_uniform_value(self, prog, name: str, value):
         if isinstance(value, (float, int)):
