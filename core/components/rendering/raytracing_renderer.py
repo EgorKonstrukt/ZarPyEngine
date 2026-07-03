@@ -17,6 +17,7 @@ from core.components.lighting.light import Light, LightType
 from core.components.transform import Transform
 from core.math3d import Mat4, Vec3
 from core.logger import Logger
+import math
 
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
@@ -418,11 +419,13 @@ class RaytracingRenderer(Component):
                 lt = 2
             fwd = t.forward
             c = l.color
+            spot_cos = math.cos(math.radians(l.spot_angle))
+            inner_cos = math.cos(math.radians(l.spot_inner_angle))
             lights_list.append([
                 float(lt), t.position.x, t.position.y, t.position.z,
                 fwd.x, fwd.y, fwd.z,
                 c[0], c[1], c[2],
-                l.intensity, l.range, l.spot_angle, l.spot_inner_angle,
+                l.intensity, l.range, spot_cos, inner_cos,
             ])
         n_lights = min(len(lights_list), _MAX_LIGHTS)
         light_np = np.zeros((max(n_lights, 1), 14), dtype=np.float32)
