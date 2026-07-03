@@ -259,6 +259,8 @@ class Gizmo:
         return (2.0 * view_dist * math.tan(fov_rad * 0.5)) / max(1, vh)
 
     def _screen_axis_tip(self, pos: Vec3, axis_dir: Vec3, cam: SceneCamera, vw: int, vh: int) -> Vec3:
+        if self._vp_mat_cache is None:
+            self._update_cache(cam, vw, vh)
         vp = self._vp_mat_cache
         sp_base = self._project_to_screen(pos, vp, vw, vh)
         if sp_base is None:
@@ -669,7 +671,8 @@ class Gizmo:
 
     def _pick_axis(self, mx: int, my: int, transform, cam: SceneCamera, vw: int, vh: int) -> GizmoAxis:
         pos = transform.position + self._pivot_offset
-        vp_mat = cam.get_view_matrix() * cam.get_projection_matrix(vw / max(1, vh))
+        self._update_cache(cam, vw, vh)
+        vp_mat = self._vp_mat_cache
         if self._mode == GizmoMode.ROTATE:
             return self._pick_rotation_axis(mx, my, transform, cam, vp_mat, vw, vh)
         rx, ry, rz = self._get_axis_directions(transform)
