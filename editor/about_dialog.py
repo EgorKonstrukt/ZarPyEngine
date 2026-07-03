@@ -227,11 +227,15 @@ class AboutDialog(QDialog):
 
         root.addWidget(self._hline())
 
+        gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)()
+        gil_status = "No (nogil)" if not gil_enabled else "Yes"
         info = QLabel(
             f"<b>Tech Stack:</b> Python 3, ModernGL, PyQt6, NumPy, Bullet3 / PhysX<br>"
             f"<b>Plugins:</b> {self._count_plugins()} loaded<br>"
             f"<b>System:</b> {platform.system()} {platform.machine()}<br>"
             f"<b>Python:</b> {sys.version.split()[0]}<br>"
+            f"<b>GIL:</b> {gil_status}<br>"
+            f"<b>Interpreter:</b> {os.path.basename(sys.executable)}<br>"
             f"<b>Renderer:</b> OpenGL 4.6 Core Profile"
         )
         info.setTextFormat(Qt.TextFormat.RichText)
