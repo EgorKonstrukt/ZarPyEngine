@@ -20,33 +20,27 @@ ComputeShader "Zarin/Raytracing"
 
     #define MAX_INSTANCES 256
     #define MAX_LIGHTS 8
-    #define CASCADE_COUNT 3
     #define PI 3.14159265359
+    #define INV_PI 0.31830988618
 
     layout(std430, binding = 0) readonly buffer BVHNodes {
         float bvh_nodes[];
     };
-
     layout(std430, binding = 1) readonly buffer Vertices {
         float vert_data[];
     };
-
     layout(std430, binding = 2) readonly buffer Indices {
         uint idx_data[];
     };
-
     layout(std430, binding = 3) readonly buffer Materials {
         float mat_data[];
     };
-
     layout(std430, binding = 4) readonly buffer Instances {
         float inst_data[];
     };
-
     layout(std430, binding = 5) readonly buffer Lights {
         float light_data[];
     };
-
     layout(rgba32f, binding = 0) uniform image2D output_image;
 
     uniform vec3 u_camera_pos;
@@ -71,31 +65,6 @@ ComputeShader "Zarin/Raytracing"
         float occlusion;
     };
 
-    struct Light {
-        int type;
-        vec3 position;
-        vec3 direction;
-        vec3 color;
-        float intensity;
-        float range;
-        float spot_angle;
-        float spot_inner_angle;
-    };
-
-    Light unpack_light(int idx) {
-        int base = idx * 14;
-        Light l;
-        l.type = int(light_data[base]);
-        l.position = vec3(light_data[base + 1], light_data[base + 2], light_data[base + 3]);
-        l.direction = vec3(light_data[base + 4], light_data[base + 5], light_data[base + 6]);
-        l.color = vec3(light_data[base + 7], light_data[base + 8], light_data[base + 9]);
-        l.intensity = light_data[base + 10];
-        l.range = light_data[base + 11];
-        l.spot_angle = light_data[base + 12];
-        l.spot_inner_angle = light_data[base + 13];
-        return l;
-    }
-
     float ray_aabb_min(vec3 o, vec3 inv_d, vec3 bmin, vec3 bmax) {
         vec3 t1 = (bmin - o) * inv_d;
         vec3 t2 = (bmax - o) * inv_d;
@@ -103,9 +72,7 @@ ComputeShader "Zarin/Raytracing"
         vec3 tmax_v = max(t1, t2);
         float tmin = max(max(tmin_v.x, tmin_v.y), tmin_v.z);
         float tmax = min(min(tmax_v.x, tmax_v.y), tmax_v.z);
-        if (tmin > tmax) return -1.0;
-        if (tmax <= 0.0) return -1.0;
-        return tmin > 0.0 ? tmin : 0.0;
+        return (tmin > tmax || tmax <= 0.0) ? -1.0 : max(tmin, 0.0);
     }
 
     bool moller_trumbore(vec3 o, vec3 d, vec3 v0, vec3 v1, vec3 v2, out float t, out vec2 bary) {
@@ -113,21 +80,21 @@ ComputeShader "Zarin/Raytracing"
         vec3 e2 = v2 - v0;
         vec3 p = cross(d, e2);
         float det = dot(e1, p);
-        if (det > -1e-12 && det < 1e-12) return false;
+        if (abs(det) < 1e-12) return false;
         float inv_det = 1.0 / det;
         vec3 t_vec = o - v0;
         float u = dot(t_vec, p) * inv_det;
         if (u < 0.0 || u > 1.0) return false;
         vec3 q = cross(t_vec, e1);
         float v = dot(d, q) * inv_det;
-        if (v < 0.0 || u + v > 1.0) return false;
+        if (v < 0.0 || (u + v) > 1.0) return false;
         t = dot(e2, q) * inv_det;
         if (t <= 0.0) return false;
         bary = vec2(u, v);
         return true;
     }
 
-    bool trace_bvh(vec3 o, vec3 d, vec3 inv_d, int bvh_offset, int idx_offset, out HitInfo hit) {
+    bool trace_bvh(vec3 o, vec3 d, vec3 inv_d, int bvh_offset, int idx_offset, inout HitInfo hit) {
         hit.t = 1e30;
         if (bvh_offset < 0) return false;
         int stack[64];
@@ -139,7 +106,6 @@ ComputeShader "Zarin/Raytracing"
             int base = ni * 8;
             vec3 bmin = vec3(bvh_nodes[base], bvh_nodes[base + 1], bvh_nodes[base + 2]);
             vec3 bmax = vec3(bvh_nodes[base + 3], bvh_nodes[base + 4], bvh_nodes[base + 5]);
-
             float aabb_t = ray_aabb_min(o, inv_d, bmin, bmax);
             if (aabb_t < 0.0 || aabb_t >= hit.t) continue;
 
@@ -148,24 +114,26 @@ ComputeShader "Zarin/Raytracing"
             bool is_leaf = right_or_count < 0;
 
             if (is_leaf) {
-                int tri_start = left_or_start;
-                int tri_end = tri_start + (-right_or_count - 1);
-                for (int ti = tri_start; ti < tri_end; ti++) {
-                    int idx_base = (idx_offset + ti) * 3;
-                    int i0 = int(idx_data[idx_base]);
-                    int i1 = int(idx_data[idx_base + 1]);
-                    int i2 = int(idx_data[idx_base + 2]);
-                    vec3 v0 = vec3(vert_data[i0 * 6], vert_data[i0 * 6 + 1], vert_data[i0 * 6 + 2]);
-                    vec3 v1 = vec3(vert_data[i1 * 6], vert_data[i1 * 6 + 1], vert_data[i1 * 6 + 2]);
-                    vec3 v2 = vec3(vert_data[i2 * 6], vert_data[i2 * 6 + 1], vert_data[i2 * 6 + 2]);
+                int tri_end = left_or_start + (-right_or_count - 1);
+                for (int ti = left_or_start; ti < tri_end; ti++) {
+                    int idx_base = int((idx_offset + ti)) * 3;
+                    uint i0 = idx_data[idx_base];
+                    uint i1 = idx_data[idx_base + 1];
+                    uint i2 = idx_data[idx_base + 2];
+                    int i0i = int(i0) * 6;
+                    int i1i = int(i1) * 6;
+                    int i2i = int(i2) * 6;
+                    vec3 v0 = vec3(vert_data[i0i], vert_data[i0i + 1], vert_data[i0i + 2]);
+                    vec3 v1 = vec3(vert_data[i1i], vert_data[i1i + 1], vert_data[i1i + 2]);
+                    vec3 v2 = vec3(vert_data[i2i], vert_data[i2i + 1], vert_data[i2i + 2]);
                     float tt;
                     vec2 bary;
                     if (moller_trumbore(o, d, v0, v1, v2, tt, bary) && tt < hit.t) {
                         hit.t = tt;
                         hit.position = o + tt * d;
-                        vec3 n0 = vec3(vert_data[i0 * 6 + 3], vert_data[i0 * 6 + 4], vert_data[i0 * 6 + 5]);
-                        vec3 n1 = vec3(vert_data[i1 * 6 + 3], vert_data[i1 * 6 + 4], vert_data[i1 * 6 + 5]);
-                        vec3 n2 = vec3(vert_data[i2 * 6 + 3], vert_data[i2 * 6 + 4], vert_data[i2 * 6 + 5]);
+                        vec3 n0 = vec3(vert_data[i0i + 3], vert_data[i0i + 4], vert_data[i0i + 5]);
+                        vec3 n1 = vec3(vert_data[i1i + 3], vert_data[i1i + 4], vert_data[i1i + 5]);
+                        vec3 n2 = vec3(vert_data[i2i + 3], vert_data[i2i + 4], vert_data[i2i + 5]);
                         float w = 1.0 - bary.x - bary.y;
                         hit.normal = normalize(n0 * w + n1 * bary.x + n2 * bary.y);
                     }
@@ -179,188 +147,186 @@ ComputeShader "Zarin/Raytracing"
     }
 
     vec3 fresnel_schlick(float cos_theta, vec3 F0) {
-        return F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+        return F0 + (1.0 - F0) * pow(1.0 - cos_theta, 5.0);
     }
 
-    float distribution_ggx(vec3 N, vec3 H, float roughness) {
+    float distribution_ggx(float NdotH, float roughness) {
         float a = roughness * roughness;
         float a2 = a * a;
-        float NdotH = max(dot(N, H), 0.0);
         float NdotH2 = NdotH * NdotH;
         float denom = NdotH2 * (a2 - 1.0) + 1.0;
-        return a2 / (PI * denom * denom);
+        return a2 * INV_PI / (denom * denom);
     }
 
     float geometry_schlick_ggx(float NdotV, float roughness) {
-        float r = roughness + 1.0;
-        float k = r * r / 8.0;
+        float k = (roughness + 1.0);
+        k = k * k * 0.125;
         return NdotV / (NdotV * (1.0 - k) + k);
     }
 
-    float geometry_smith(vec3 N, vec3 V, vec3 L, float roughness) {
-        float NdotV = max(dot(N, V), 0.0);
-        float NdotL = max(dot(N, L), 0.0);
+    float geometry_smith(float NdotV, float NdotL, float roughness) {
         return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
     }
 
-    vec3 shade_pbr(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0, 
+    vec3 shade_pbr(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0,
                    vec3 light_dir, vec3 light_color, float light_intensity, float attenuation) {
-        vec3 L = light_dir;
-        float NdotL = max(dot(N, L), 0.0);
+        float NdotL = max(dot(N, light_dir), 0.0);
         if (NdotL <= 0.0) return vec3(0.0);
-        vec3 H = normalize(V + L);
-        vec3 radiance = light_color * light_intensity * attenuation;
+        vec3 H = normalize(V + light_dir);
+        vec3 radiance = light_color * (light_intensity * attenuation);
+        float NdotV = max(dot(N, V), 0.0);
         vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
-        float NDF = distribution_ggx(N, H, roughness);
-        float G = geometry_smith(N, V, L, roughness);
+        float NDF = distribution_ggx(dot(N, H), roughness);
+        float G = geometry_smith(NdotV, NdotL, roughness);
         vec3 kS = F;
         vec3 kD = (1.0 - kS) * (1.0 - metallic);
-        vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001;
-        vec3 specular = numerator / denominator;
-        vec3 diffuse = kD * albedo / PI;
+        vec3 specular = (NDF * G * F) / max(4.0 * NdotV * NdotL + 0.0001, 1e-6);
+        vec3 diffuse = kD * albedo * INV_PI;
         return (diffuse + specular) * radiance * NdotL;
     }
 
-    bool intersect_scene(vec3 ro, vec3 rd, out float out_t, out vec3 out_pos, out vec3 out_N,
-                         out int out_mat) {
-        float best_t = 1e30;
-        vec3 best_pos = vec3(0.0);
-        vec3 best_N = vec3(0.0, 1.0, 0.0);
-        int best_mat = -1;
-
-        vec3 inv_rd = 1.0 / rd;
-
+    void intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd, inout float best_t, inout vec3 best_pos,
+                         inout vec3 best_N, inout int best_mat) {
         for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
             int ib = inst * 46;
-            vec3 wbmin = vec3(inst_data[ib+38], inst_data[ib+39], inst_data[ib+40]);
-            vec3 wbmax = vec3(inst_data[ib+41], inst_data[ib+42], inst_data[ib+43]);
+            vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
+            vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
+
             float aabb_t = ray_aabb_min(ro, inv_rd, wbmin, wbmax);
             if (aabb_t < 0.0 || aabb_t >= best_t) continue;
 
-            mat4 wm = mat4(
-                vec4(inst_data[ib], inst_data[ib+1], inst_data[ib+2], inst_data[ib+3]),
-                vec4(inst_data[ib+4], inst_data[ib+5], inst_data[ib+6], inst_data[ib+7]),
-                vec4(inst_data[ib+8], inst_data[ib+9], inst_data[ib+10], inst_data[ib+11]),
-                vec4(inst_data[ib+12], inst_data[ib+13], inst_data[ib+14], inst_data[ib+15])
-            );
-            mat4 inv_wm = mat4(
-                vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
-                vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
-                vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
-                vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
-            );
             int bvh_offset = int(inst_data[ib + 32]);
             int idx_offset = int(inst_data[ib + 34]);
             int mat_idx = int(inst_data[ib + 35]);
 
+            mat4 wm = mat4(
+                vec4(inst_data[ib], inst_data[ib + 1], inst_data[ib + 2], inst_data[ib + 3]),
+                vec4(inst_data[ib + 4], inst_data[ib + 5], inst_data[ib + 6], inst_data[ib + 7]),
+                vec4(inst_data[ib + 8], inst_data[ib + 9], inst_data[ib + 10], inst_data[ib + 11]),
+                vec4(inst_data[ib + 12], inst_data[ib + 13], inst_data[ib + 14], inst_data[ib + 15])
+            );
+            mat4 inv_wm = mat4(
+                vec4(inst_data[ib + 16], inst_data[ib + 17], inst_data[ib + 18], inst_data[ib + 19]),
+                vec4(inst_data[ib + 20], inst_data[ib + 21], inst_data[ib + 22], inst_data[ib + 23]),
+                vec4(inst_data[ib + 24], inst_data[ib + 25], inst_data[ib + 26], inst_data[ib + 27]),
+                vec4(inst_data[ib + 28], inst_data[ib + 29], inst_data[ib + 30], inst_data[ib + 31])
+            );
+
             vec3 local_ro = (inv_wm * vec4(ro, 1.0)).xyz;
-            vec3 local_rd = (inv_wm * vec4(rd, 0.0)).xyz;
-            float local_rd_len = length(local_rd);
-            vec3 local_rd_n = local_rd / local_rd_len;
-            vec3 inv_local_rd = local_rd_len / local_rd;
+            vec3 local_rd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
+            vec3 inv_local_rd = 1.0 / local_rd;
 
             HitInfo local_hit;
-            if (trace_bvh(local_ro, local_rd_n, inv_local_rd, bvh_offset, idx_offset, local_hit)) {
+            if (trace_bvh(local_ro, local_rd, inv_local_rd, bvh_offset, idx_offset, local_hit)) {
                 if (local_hit.t < best_t) {
                     best_t = local_hit.t;
                     best_mat = mat_idx;
-                    vec3 local_p = local_ro + local_hit.t * local_rd_n;
-                    best_pos = (wm * vec4(local_p, 1.0)).xyz;
+                    best_pos = (wm * vec4(local_ro + local_hit.t * local_rd, 1.0)).xyz;
                     best_N = normalize(transpose(mat3(inv_wm)) * local_hit.normal);
                 }
             }
         }
-
-        out_t = best_t;
-        out_pos = best_pos;
-        out_N = best_N;
-        if (dot(out_N, rd) > 0.0) out_N = -out_N;
-        out_mat = best_mat;
-        return best_t < 1e29;
     }
 
     vec3 sample_sky(vec3 dir) {
-        float u = 0.5 + atan(dir.z, dir.x) / (2.0 * PI);
-        float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
+        float u = 0.5 + atan(dir.z, dir.x) * INV_PI * 0.5;
+        float v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) * INV_PI;
         return texture(u_sky_env, vec2(u, v)).rgb;
     }
 
     vec3 trace_ray(vec3 ro, vec3 rd) {
         vec3 accumulated = vec3(0.0);
         vec3 throughput = vec3(1.0);
-        float eta_scale = 1.0;
 
         for (int bounce = 0; bounce <= u_max_bounces; bounce++) {
-            float hit_t;
-            vec3 hit_pos, hit_N;
-            int hit_mat;
-            if (!intersect_scene(ro, rd, hit_t, hit_pos, hit_N, hit_mat)) {
+            float hit_t = 1e30;
+            vec3 hit_pos = vec3(0.0), hit_N = vec3(0.0, 1.0, 0.0);
+            int hit_mat = -1;
+            vec3 inv_rd = 1.0 / rd;
+
+            intersect_scene(ro, rd, inv_rd, hit_t, hit_pos, hit_N, hit_mat);
+
+            if (hit_mat < 0) {
                 accumulated += throughput * sample_sky(rd);
                 break;
             }
 
             int mb = hit_mat * 12;
-            vec3 albedo = vec3(mat_data[mb], mat_data[mb+1], mat_data[mb+2]);
-            float metallic = mat_data[mb+3];
-            float smoothness = mat_data[mb+4];
-            vec3 emission = vec3(mat_data[mb+5], mat_data[mb+6], mat_data[mb+7]);
-            float emission_intensity = mat_data[mb+8];
+            vec3 albedo = vec3(mat_data[mb], mat_data[mb + 1], mat_data[mb + 2]);
+            float metallic = mat_data[mb + 3];
+            float smoothness = mat_data[mb + 4];
+            vec3 emission = vec3(mat_data[mb + 5], mat_data[mb + 6], mat_data[mb + 7]);
+            float emission_intensity = mat_data[mb + 8];
             float roughness = max(1.0 - smoothness, 0.001);
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
             accumulated += throughput * emission * emission_intensity;
 
+            if (dot(hit_N, rd) > 0.0) hit_N = -hit_N;
+
             vec3 V = normalize(u_camera_pos - hit_pos);
+            float NdotV = max(dot(hit_N, V), 0.0);
 
             for (int li = 0; li < u_light_count && li < MAX_LIGHTS; li++) {
-                Light light = unpack_light(li);
+                int base = li * 14;
+                int lt = int(light_data[base]);
+                vec3 lpos = vec3(light_data[base + 1], light_data[base + 2], light_data[base + 3]);
+                vec3 ldir = vec3(light_data[base + 4], light_data[base + 5], light_data[base + 6]);
+                vec3 lcol = vec3(light_data[base + 7], light_data[base + 8], light_data[base + 9]);
+                float lint = light_data[base + 10];
+                float lrange = light_data[base + 11];
+                float lspot = light_data[base + 12];
+                float linner = light_data[base + 13];
+
                 vec3 light_dir;
                 float attenuation = 1.0;
-                if (light.type == 0) {
-                    light_dir = normalize(-light.direction);
+                if (lt == 0) {
+                    light_dir = normalize(-ldir);
                 } else {
-                    vec3 to_light = light.position - hit_pos;
+                    vec3 to_light = lpos - hit_pos;
                     float dist = length(to_light);
-                    light_dir = normalize(to_light);
-                    attenuation = clamp(1.0 - dist / light.range, 0.0, 1.0);
-                    attenuation *= attenuation;
-                    if (light.type == 2) {
-                        float theta = dot(light_dir, normalize(-light.direction));
-                        float inner = cos(radians(light.spot_inner_angle));
-                        float outer = cos(radians(light.spot_angle));
-                        float eps = inner - outer;
-                        attenuation *= clamp((theta - outer) / eps, 0.0, 1.0);
+                    light_dir = to_light / dist;
+                    float att = 1.0 - dist / lrange;
+                    attenuation = att * att;
+                    if (lt == 2 && att > 0.0) {
+                        float theta = dot(light_dir, normalize(-ldir));
+                        float outer = cos(lspot * 0.0174532925);
+                        float inner = cos(linner * 0.0174532925);
+                        attenuation *= clamp((theta - outer) / (inner - outer), 0.0, 1.0);
                     }
                 }
-                accumulated += throughput * shade_pbr(hit_N, V, albedo, roughness, metallic, F0,
-                                                     light_dir, light.color, light.intensity, attenuation);
+                if (attenuation < 1e-6) continue;
+
+                float NdotL = max(dot(hit_N, light_dir), 0.0);
+                if (NdotL <= 0.0) continue;
+
+                vec3 H = normalize(V + light_dir);
+                vec3 radiance = lcol * lint;
+                vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
+                float NDF = distribution_ggx(dot(hit_N, H), roughness);
+                float G = geometry_smith(NdotV, NdotL, roughness);
+                vec3 kS = F;
+                vec3 kD = (1.0 - kS) * (1.0 - metallic);
+                vec3 specular = (NDF * G * F) / max(4.0 * NdotV * NdotL + 0.0001, 1e-6);
+                vec3 diffuse = kD * albedo * INV_PI;
+
+                accumulated += throughput * (diffuse + specular) * radiance * NdotL * attenuation;
             }
 
-            if (bounce == u_max_bounces) break;
+            if (bounce >= u_max_bounces) break;
 
-            float NdotV = max(dot(hit_N, V), 0.0);
             vec3 F = fresnel_schlick(NdotV, F0);
             float reflect_prob = max(max(F.x, F.y), F.z);
 
-            if (smoothness > 0.01) {
-                vec3 reflect_dir = reflect(rd, hit_N);
-                ro = hit_pos + hit_N * 0.01;
-                rd = reflect_dir;
-                float fresnel_weight = mix(reflect_prob * smoothness, 1.0, metallic);
-                throughput *= mix(albedo, vec3(1.0), fresnel_weight);
-                if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
-                continue;
-            }
-
-            throughput *= albedo;
-            if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
-
-            vec3 diffuse_dir = normalize(hit_N + vec3(rd.yzx * 0.5));
+            vec3 reflect_dir = reflect(rd, hit_N);
             ro = hit_pos + hit_N * 0.01;
-            rd = diffuse_dir;
-        }
+            rd = reflect_dir;
 
+            float fresnel_weight = mix(reflect_prob * smoothness, 1.0, metallic);
+            throughput *= mix(albedo, vec3(1.0), fresnel_weight);
+
+            if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
+        }
         return accumulated;
     }
 
@@ -372,19 +338,8 @@ ComputeShader "Zarin/Raytracing"
         vec2 uv = (vec2(pix) + 0.5) / vec2(u_screen_width, u_screen_height);
         vec4 ndc = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, 1.0, 1.0);
         vec4 world_near = u_inv_view_proj * ndc;
-        vec3 near_point = world_near.xyz / world_near.w;
         vec3 ray_o = u_camera_pos;
-        vec3 ray_d = normalize(near_point - ray_o);
-
-        float hit_t;
-        vec3 hit_pos, hit_N;
-        int hit_mat;
-        bool primary_hit = intersect_scene(ray_o, ray_d, hit_t, hit_pos, hit_N, hit_mat);
-
-        if (!primary_hit) {
-            imageStore(output_image, pix, vec4(0.0, 0.0, 0.0, 0.0));
-            return;
-        }
+        vec3 ray_d = normalize(world_near.xyz / world_near.w - ray_o);
 
         vec3 color = trace_ray(ray_o, ray_d);
 
@@ -393,8 +348,8 @@ ComputeShader "Zarin/Raytracing"
         } else {
             vec4 prev = imageLoad(output_image, pix);
             float t = float(u_accum_frame);
-            color = prev.rgb * (t - 1.0) / t + color / t;
-            float a = prev.a * (t - 1.0) / t + 1.0 / t;
+            color = prev.rgb * ((t - 1.0) / t) + color / t;
+            float a = prev.a * ((t - 1.0) / t) + 1.0 / t;
             imageStore(output_image, pix, vec4(color, a));
         }
     }

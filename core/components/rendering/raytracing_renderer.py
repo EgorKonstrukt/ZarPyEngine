@@ -18,6 +18,16 @@ from core.components.transform import Transform
 from core.math3d import Mat4, Vec3
 from core.logger import Logger
 
+_INST_STRIDE = 46
+_MAX_INSTANCES = 256
+_MAX_LIGHTS = 8
+
+try:
+    from core._raytracing_data import prepare_raytrace_data as _cy_prepare
+    _USE_CYTHON_RT = True
+except ImportError:
+    _USE_CYTHON_RT = False
+
 
 @ComponentRegistry.register
 class RaytracingRenderer(Component):
@@ -61,13 +71,19 @@ class RaytracingRenderer(Component):
         self._light_buf: Optional[moderngl.Buffer] = None
 
         self._ctx_id = 0
-
         self._bvh_np: Optional[np.ndarray] = None
         self._vert_np: Optional[np.ndarray] = None
         self._idx_np: Optional[np.ndarray] = None
         self._mat_np: Optional[np.ndarray] = None
         self._inst_np: Optional[np.ndarray] = None
         self._light_np: Optional[np.ndarray] = None
+
+        self._fixed_bvh: Optional[np.ndarray] = None
+        self._fixed_vert: Optional[np.ndarray] = None
+        self._fixed_idx: Optional[np.ndarray] = None
+        self._fixed_mat: Optional[np.ndarray] = None
+        self._fixed_inst: Optional[np.ndarray] = None
+        self._fixed_light: Optional[np.ndarray] = None
 
         self._accum_frame: int = 0
         self._prev_width: int = 0
@@ -204,28 +220,21 @@ class RaytracingRenderer(Component):
         from core.spatial.bvh import get_mesh_bvh
 
         instances = []
-        vert_offsets = []
-        idx_offsets = []
-        bvh_offsets = []
-        bvh_node_counts = []
-        tri_counts = []
-        all_verts = []
-        all_idxs = []
-        all_bvhs = []
         meshes = []
         material_map = {}
         cum_verts = 0
         cum_tris = 0
         cum_bvh_nodes = 0
+        all_verts = []
+        all_idxs = []
+        all_bvhs = []
+        bvh_node_counts = []
 
         mf_list = scene.get_entities_with_component(MeshFilter)
-        mf_list = sorted(mf_list, key=lambda e: e.id)
         for ent in mf_list:
             mr = ent.get_component(MeshRenderer)
             tr = ent.get_component(Transform)
-            if not tr:
-                continue
-            if not mr or not mr.enabled:
+            if not tr or not mr or not mr.enabled:
                 continue
             mf = ent.get_component(MeshFilter)
             mesh_name = mf.mesh_name
@@ -236,10 +245,8 @@ class RaytracingRenderer(Component):
                 if meta is None:
                     meta = (1.0, False, False)
                 scale, cp, fuvs = meta
-            if not mesh_name and not mesh_path:
-                mesh_name = "cube"
-            elif not mesh_name and mesh_path:
-                mesh_name = os.path.splitext(os.path.basename(mesh_path))[0]
+            if not mesh_name:
+                mesh_name = "cube" if not mesh_path else os.path.splitext(os.path.basename(mesh_path))[0]
             mesh = renderer.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)
             if not mesh or mesh.vertices is None or len(mesh.vertices) < 3:
                 continue
@@ -251,10 +258,6 @@ class RaytracingRenderer(Component):
             idxs = mesh.indices.reshape(-1, 3)
             tri_count = idxs.shape[0]
 
-            all_verts.append(verts3)
-            all_idxs.append(idxs)
-            all_bvhs.append(bvh)
-
             mat_idx = 0
             mat_path = mr.material_path
             if mat_path:
@@ -262,13 +265,12 @@ class RaytracingRenderer(Component):
                     material_map[mat_path] = len(material_map)
                 mat_idx = material_map[mat_path]
 
-            vert_offsets.append(cum_verts)
-            idx_offsets.append(cum_tris)
-            bvh_offsets.append(cum_bvh_nodes)
-            bvh_node_counts.append(bvh.node_count())
-            tri_counts.append(tri_count)
-            instances.append((ent, tr, wm_copy := Mat4(tr.world_matrix._d)))
             meshes.append(mesh)
+            all_verts.append(verts3)
+            all_idxs.append(idxs)
+            all_bvhs.append(bvh)
+            bvh_node_counts.append(bvh.node_count())
+            instances.append((ent, tr, Mat4(tr.world_matrix._d), mat_path, mesh_name))
             cum_verts += verts3.shape[0]
             cum_tris += tri_count
             cum_bvh_nodes += bvh.node_count()
@@ -276,9 +278,10 @@ class RaytracingRenderer(Component):
         if not instances:
             return False
 
-        total_verts = sum(v.shape[0] for v in all_verts)
-        total_tris = sum(i.shape[0] for i in all_idxs)
-        total_bvh_nodes = sum(b.node_count() for b in all_bvhs)
+        n_inst = len(instances)
+        total_verts = cum_verts
+        total_tris = cum_tris
+        total_bvh_nodes = cum_bvh_nodes
 
         vert_np = np.empty((total_verts, 6), dtype=np.float32)
         idx_np = np.empty((total_tris, 3), dtype=np.uint32)
@@ -295,80 +298,78 @@ class RaytracingRenderer(Component):
             if norms is not None and norms.shape[0] == nv * 3:
                 vert_np[vo:vo + nv, 3:] = norms.reshape(-1, 3)
             else:
-                face_norms = np.cross(verts3[1::3] - verts3[0::3], verts3[2::3] - verts3[0::3])
+                f0 = verts3[0::3]; f1 = verts3[1::3]; f2 = verts3[2::3]
+                face_norms = np.cross(f1 - f0, f2 - f0)
                 fn_len = np.linalg.norm(face_norms, axis=1, keepdims=True)
                 fn_len[fn_len == 0] = 1
-                face_norms = face_norms / fn_len
-                norms = np.repeat(face_norms, 3, axis=0)
-                vert_np[vo:vo + nv, 3:] = norms
+                vert_np[vo:vo + nv, 3:] = np.repeat(face_norms / fn_len, 3, axis=0)
             if bvh.tri_indices is not None and len(bvh.tri_indices) == nt:
                 idx_np[io:io + nt] = idxs[bvh.tri_indices] + vo
             else:
                 idx_np[io:io + nt] = idxs + vo
             bvh_flat = bvh.flatten_for_gpu()
             if bo > 0 and nn > 0:
-                bvh_flat = bvh_flat.copy()
                 internal = bvh_flat[:, 7] >= 0
-                bvh_flat[internal, 6] += bo
-                bvh_flat[internal, 7] += bo
+                if np.any(internal):
+                    bvh_flat = bvh_flat.copy()
+                    bvh_flat[internal, 6] += bo
+                    bvh_flat[internal, 7] += bo
             bvh_np[bo:bo + nn] = bvh_flat
-            vo += nv
-            io += nt
-            bo += nn
+            vo += nv; io += nt; bo += nn
 
         self._vert_np = vert_np
         self._idx_np = idx_np.reshape(-1)
         self._bvh_np = bvh_np.reshape(-1)
 
         n_mats = max(len(material_map), 1)
-        self._mat_np = np.zeros((n_mats, 12), dtype=np.float32)
-        self._mat_np[:, :3] = 0.8
-        self._mat_np[:, 3] = 0.0
-        self._mat_np[:, 4] = 0.5
+        mat_np = np.zeros((n_mats, 12), dtype=np.float32)
+        mat_np[:, :3] = 0.8
+        mat_np[:, 3] = 0.0
+        mat_np[:, 4] = 0.5
 
         from core.engine import Engine
         eng = Engine.instance()
         if eng:
-            renderer = getattr(eng, '_renderer', None)
-            if renderer:
+            rndr = getattr(eng, '_renderer', None)
+            if rndr:
                 for mat_path, mi in material_map.items():
-                    mat = renderer._materials.get(mat_path)
+                    mat = rndr._materials.get(mat_path)
                     if mat:
                         props = mat.get_properties()
                         bc = props.get("_BaseColor", (1, 1, 1, 1))
-                        self._mat_np[mi, 0] = bc[0]
-                        self._mat_np[mi, 1] = bc[1]
-                        self._mat_np[mi, 2] = bc[2]
-                        self._mat_np[mi, 3] = float(props.get("_Metallic", 0.0))
-                        self._mat_np[mi, 4] = float(props.get("_Smoothness", 0.5))
+                        mat_np[mi, 0] = bc[0]
+                        mat_np[mi, 1] = bc[1]
+                        mat_np[mi, 2] = bc[2]
+                        mat_np[mi, 3] = float(props.get("_Metallic", 0.0))
+                        mat_np[mi, 4] = float(props.get("_Smoothness", 0.5))
                         ec = props.get("_EmissionColor", (0, 0, 0, 0))
-                        self._mat_np[mi, 5] = ec[0]
-                        self._mat_np[mi, 6] = ec[1]
-                        self._mat_np[mi, 7] = ec[2]
-                        self._mat_np[mi, 8] = float(props.get("_EmissionIntensity", 0.0))
-                        self._mat_np[mi, 9] = float(props.get("_OcclusionStrength", 1.0))
+                        mat_np[mi, 5] = ec[0]
+                        mat_np[mi, 6] = ec[1]
+                        mat_np[mi, 7] = ec[2]
+                        mat_np[mi, 8] = float(props.get("_EmissionIntensity", 0.0))
+                        mat_np[mi, 9] = float(props.get("_OcclusionStrength", 1.0))
+        self._mat_np = mat_np
 
-        _INST_STRIDE = 46
-        n_inst = len(instances)
-        self._inst_np = np.empty((n_inst, _INST_STRIDE), dtype=np.float32)
-
-        wm_list = np.array([wm._d for _, _, wm in instances])
+        wm_list = np.array([wm._d for _, _, wm, _, _ in instances])
         inv_wm_list = np.linalg.inv(wm_list)
 
-        for i, (ent, tr, wm) in enumerate(instances):
+        inst_np = np.empty((n_inst, _INST_STRIDE), dtype=np.float32)
+        vert_offset = 0
+        idx_offset = 0
+        bvh_offset = 0
+        for i, (ent, tr, wm, mat_path, _) in enumerate(instances):
             w = wm_list[i]
             inv_w = inv_wm_list[i]
-            self._inst_np[i, :16] = Mat4(w).to_f32()
-            self._inst_np[i, 16:32] = Mat4(inv_w).to_f32()
-            mat_path = ent.get_component(MeshRenderer).material_path if ent.get_component(MeshRenderer) else ""
-            mi = material_map.get(mat_path, 0)
+            inst_np[i, :16] = Mat4(w).to_f32()
+            inst_np[i, 16:32] = Mat4(inv_w).to_f32()
             nc = bvh_node_counts[i]
-            self._inst_np[i, 32] = float(bvh_offsets[i] + nc - 1)
-            self._inst_np[i, 33] = float(vert_offsets[i])
-            self._inst_np[i, 34] = float(idx_offsets[i])
-            self._inst_np[i, 35] = float(mi)
-            self._inst_np[i, 36] = float(tri_counts[i])
-            self._inst_np[i, 37] = float(nc)
+            inst_np[i, 32] = float(bvh_offset + nc - 1)
+            inst_np[i, 33] = float(vert_offset)
+            inst_np[i, 34] = float(idx_offset)
+            inst_np[i, 35] = float(material_map.get(mat_path, 0))
+            inst_np[i, 36] = float(all_idxs[i].shape[0])
+            inst_np[i, 37] = float(nc)
+
             bvh = all_bvhs[i]
             root_nodes = bvh.nodes if bvh else []
             if root_nodes:
@@ -388,20 +389,19 @@ class RaytracingRenderer(Component):
                 wc = corners @ w
                 wbmin = wc[:, :3].min(axis=0)
                 wbmax = wc[:, :3].max(axis=0)
-                self._inst_np[i, 38] = wbmin[0]
-                self._inst_np[i, 39] = wbmin[1]
-                self._inst_np[i, 40] = wbmin[2]
-                self._inst_np[i, 41] = wbmax[0]
-                self._inst_np[i, 42] = wbmax[1]
-                self._inst_np[i, 43] = wbmax[2]
-                self._inst_np[i, 44] = 0.0
-                self._inst_np[i, 45] = 0.0
+                inst_np[i, 38:41] = wbmin
+                inst_np[i, 41:44] = wbmax
             else:
-                self._inst_np[i, 38:44] = -1e30, -1e30, -1e30, 1e30, 1e30, 1e30
+                inst_np[i, 38:44] = -1e30, -1e30, -1e30, 1e30, 1e30, 1e30
+
+            bvh_offset += nc
+            vert_offset += int(all_verts[i].shape[0])
+            idx_offset += int(all_idxs[i].shape[0])
+
+        self._inst_np = inst_np
 
         lights_list = []
         lights_ents = scene.get_entities_with_component(Light)
-        lights_ents = sorted(lights_ents, key=lambda e: e.id)
         for ent in lights_ents:
             if not ent.active:
                 continue
@@ -424,58 +424,29 @@ class RaytracingRenderer(Component):
                 c[0], c[1], c[2],
                 l.intensity, l.range, l.spot_angle, l.spot_inner_angle,
             ])
-        n_lights = min(len(lights_list), 8)
-        self._light_np = np.zeros((max(n_lights, 1), 14), dtype=np.float32)
+        n_lights = min(len(lights_list), _MAX_LIGHTS)
+        light_np = np.zeros((max(n_lights, 1), 14), dtype=np.float32)
         for i in range(n_lights):
-            self._light_np[i] = lights_list[i]
+            light_np[i] = lights_list[i]
+        self._light_np = light_np
 
-        bvh_bytes = self._bvh_np.nbytes
-        if self._bvh_buf is None or bvh_bytes > self._bvh_buf.size:
-            if self._bvh_buf:
-                self._bvh_buf.release()
-            self._bvh_buf = ctx.buffer(self._bvh_np.tobytes())
-        else:
-            self._bvh_buf.write(self._bvh_np.tobytes())
+        def _upload_or_realloc(buf_attr, data):
+            buf = getattr(self, buf_attr)
+            nbytes = data.nbytes
+            if buf is None or nbytes > buf.size:
+                if buf:
+                    buf.release()
+                nbuf = ctx.buffer(data.tobytes())
+                setattr(self, buf_attr, nbuf)
+            else:
+                buf.write(data.tobytes())
 
-        vert_bytes = self._vert_np.nbytes
-        if self._vert_buf is None or vert_bytes > self._vert_buf.size:
-            if self._vert_buf:
-                self._vert_buf.release()
-            self._vert_buf = ctx.buffer(self._vert_np.tobytes())
-        else:
-            self._vert_buf.write(self._vert_np.tobytes())
-
-        idx_bytes = self._idx_np.nbytes
-        if self._idx_buf is None or idx_bytes > self._idx_buf.size:
-            if self._idx_buf:
-                self._idx_buf.release()
-            self._idx_buf = ctx.buffer(self._idx_np.tobytes())
-        else:
-            self._idx_buf.write(self._idx_np.tobytes())
-
-        mat_bytes = self._mat_np.nbytes
-        if self._mat_buf is None or mat_bytes > self._mat_buf.size:
-            if self._mat_buf:
-                self._mat_buf.release()
-            self._mat_buf = ctx.buffer(self._mat_np.tobytes())
-        else:
-            self._mat_buf.write(self._mat_np.tobytes())
-
-        inst_bytes = self._inst_np.nbytes
-        if self._inst_buf is None or inst_bytes > self._inst_buf.size:
-            if self._inst_buf:
-                self._inst_buf.release()
-            self._inst_buf = ctx.buffer(self._inst_np.tobytes())
-        else:
-            self._inst_buf.write(self._inst_np.tobytes())
-
-        light_bytes = self._light_np.nbytes
-        if self._light_buf is None or light_bytes > self._light_buf.size:
-            if self._light_buf:
-                self._light_buf.release()
-            self._light_buf = ctx.buffer(self._light_np.tobytes())
-        else:
-            self._light_buf.write(self._light_np.tobytes())
+        _upload_or_realloc('_bvh_buf', self._bvh_np)
+        _upload_or_realloc('_vert_buf', self._vert_np)
+        _upload_or_realloc('_idx_buf', self._idx_np)
+        _upload_or_realloc('_mat_buf', self._mat_np)
+        _upload_or_realloc('_inst_buf', self._inst_np)
+        _upload_or_realloc('_light_buf', self._light_np)
 
         return True
 
@@ -495,53 +466,59 @@ class RaytracingRenderer(Component):
         if not self._collect_and_upload(ctx, scene, view_mat, proj_mat, cam_pos, renderer):
             return False
 
+        if self._sky_env_tex is None or self._sky_env_prog is None:
+            return False
+
         view_f32 = view_mat.to_f32().reshape(4, 4).T
         proj_f32 = proj_mat.to_f32().reshape(4, 4).T
+
+        rectified, _ = np.linalg.qr(view_f32)
+        if np.linalg.det(rectified) < 0:
+            rectified[:, 0] = -rectified[:, 0]
         inv_vp = np.linalg.inv(proj_f32 @ view_f32)
 
         prog = self._program
         try:
             prog["u_camera_pos"] = (cam_pos.x, cam_pos.y, cam_pos.z)
-            prog["u_inv_view_proj"].write(inv_vp.astype(np.float32).flatten(order='F').tobytes())
+            prog["u_inv_view_proj"].write(inv_vp.astype(np.float32, copy=False).flatten(order='F').tobytes())
             prog["u_screen_width"] = rw
             prog["u_screen_height"] = rh
-            prog["u_instance_count"] = self._inst_np.shape[0] if self._inst_np is not None else 0
-            prog["u_light_count"] = self._light_np.shape[0] if self._light_np is not None else 0
+            prog["u_instance_count"] = self._inst_np.shape[0]
+            prog["u_light_count"] = self._light_np.shape[0]
             prog["u_max_bounces"] = self._max_bounces
             prog["u_accum_frame"] = self._accum_frame if self._accumulate else 0
         except KeyError as e:
             Logger.warning(f"Raytracing uniform missing: {e}")
             return False
 
-        if self._sky_env_tex and self._sky_env_prog:
-            sun_dir = Vec3(0, -0.3, -1)
-            sky_color, sky_intensity = [1.0, 0.95, 0.85], 1.0
-            for ent in scene.get_entities_with_component(Light):
-                l = ent.get_component(Light)
-                t = ent.get_component(Transform)
-                if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
-                    sun_dir = -t.forward
-                    if l.procedural_sky_lighting:
-                        sky_color, sky_intensity = Light.compute_sun_light(sun_dir)
-                    else:
-                        sky_color, sky_intensity = l.color, l.intensity
-                    break
-            try:
-                self._sky_env_prog["u_sun_direction"] = (sun_dir.x, sun_dir.y, sun_dir.z)
-                self._sky_env_prog["u_sun_color"] = (sky_color[0], sky_color[1], sky_color[2])
-                self._sky_env_prog["u_sun_intensity"] = sky_intensity
-                self._sky_env_prog["u_sun_size"] = 0.0008
-                self._sky_env_prog["u_sun_convergence"] = 0.5
-            except KeyError as e:
-                Logger.warning(f"SkyEnv uniform missing: {e}")
-            self._sky_env_tex.bind_to_image(0, read=False, write=True)
-            self._sky_env_prog.run(group_x=(256 + 7) // 8, group_y=(128 + 7) // 8, group_z=1)
-            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
-            self._sky_env_tex.use(1)
-            try:
-                prog["u_sky_env"] = 1
-            except KeyError:
-                pass
+        sun_dir = Vec3(0, -0.3, -1)
+        sky_color, sky_intensity = [1.0, 0.95, 0.85], 1.0
+        for ent in scene.get_entities_with_component(Light):
+            l = ent.get_component(Light)
+            t = ent.get_component(Transform)
+            if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
+                sun_dir = -t.forward
+                if l.procedural_sky_lighting:
+                    sky_color, sky_intensity = Light.compute_sun_light(sun_dir)
+                else:
+                    sky_color, sky_intensity = l.color, l.intensity
+                break
+        try:
+            self._sky_env_prog["u_sun_direction"] = (sun_dir.x, sun_dir.y, sun_dir.z)
+            self._sky_env_prog["u_sun_color"] = (sky_color[0], sky_color[1], sky_color[2])
+            self._sky_env_prog["u_sun_intensity"] = sky_intensity
+            self._sky_env_prog["u_sun_size"] = 0.0008
+            self._sky_env_prog["u_sun_convergence"] = 0.5
+        except KeyError as e:
+            Logger.warning(f"SkyEnv uniform missing: {e}")
+        self._sky_env_tex.bind_to_image(0, read=False, write=True)
+        self._sky_env_prog.run(group_x=(256 + 7) // 8, group_y=(128 + 7) // 8, group_z=1)
+        ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+        self._sky_env_tex.use(1)
+        try:
+            prog["u_sky_env"] = 1
+        except KeyError:
+            pass
 
         self._bvh_buf.bind_to_storage_buffer(0)
         self._vert_buf.bind_to_storage_buffer(1)
@@ -549,20 +526,13 @@ class RaytracingRenderer(Component):
         self._mat_buf.bind_to_storage_buffer(3)
         self._inst_buf.bind_to_storage_buffer(4)
         self._light_buf.bind_to_storage_buffer(5)
-
         self._output_tex.bind_to_image(0, read=False, write=True)
 
-        prog.run(
-            group_x=(rw + 7) // 8,
-            group_y=(rh + 7) // 8,
-            group_z=1,
-        )
-
+        prog.run(group_x=(rw + 7) // 8, group_y=(rh + 7) // 8, group_z=1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
 
         if self._accumulate:
             self._accum_frame += 1
-
         return True
 
     def _blit_to_fbo(self, ctx: moderngl.Context, target_fbo: moderngl.Framebuffer, width: int, height: int):

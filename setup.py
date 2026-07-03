@@ -20,7 +20,13 @@ ext_bvh = Extension(
     include_dirs=[numpy.get_include()],
 )
 
+ext_raytrace_data = Extension(
+    "core._raytracing_data",
+    sources=["core/_raytracing_data.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
 setup(
     name="ZarinEngine-cython-extensions",
-    ext_modules=cythonize([ext_convex_hull, ext_bvh], language_level="3"),
+    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data], language_level="3"),
 )
