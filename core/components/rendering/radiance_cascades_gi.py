@@ -6,7 +6,7 @@
 #
 # Radiance Cascades Global Illumination
 # Based on the paper by Alexander Sannikov (Grinding Gear Games)
-# https://github.com/Raikiri/RadianceCascadesPaper
+# Implements temporal reprojection and edge-aware denoising (PoE2-style)
 
 from __future__ import annotations
 import os
@@ -22,7 +22,7 @@ from core.logger import Logger
 class RadianceCascadesGI(Component):
     _allow_multiple = False
 
-    NUM_CASCADES = 7
+    NUM_CASCADES = 6
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
@@ -34,6 +34,7 @@ class RadianceCascadesGI(Component):
             InspectorField("_intensity", "GI Intensity", FieldType.FLOAT, 0.0, 5.0),
             InspectorField("_step_size", "Step Size", FieldType.FLOAT, 0.1, 2.0),
             InspectorField("_depth_threshold", "Depth Threshold", FieldType.FLOAT, 0.01, 1.0),
+            InspectorField("_temporal_factor", "Temporal Blend", FieldType.FLOAT, 0.0, 0.99),
             InspectorField("_show_overlay", "Show Overlay", FieldType.BOOL),
             InspectorField("_debug_mode", "Debug Mode", FieldType.BOOL),
         ]
@@ -45,19 +46,26 @@ class RadianceCascadesGI(Component):
         self._intensity: float = 1.0
         self._step_size: float = 0.5
         self._depth_threshold: float = 0.15
+        self._temporal_factor: float = 0.9
         self._show_overlay: bool = False
         self._debug_mode: bool = False
 
         self._program: Optional[moderngl.ComputeShader] = None
         self._cascade_atlas: Optional[moderngl.Texture] = None
         self._gi_output_tex: Optional[moderngl.Texture] = None
+        self._gi_temp_tex: Optional[moderngl.Texture] = None
+        self._history_tex: Optional[moderngl.Texture] = None
         self._gi_output_fbo: Optional[moderngl.Framebuffer] = None
+        self._gi_temp_fbo: Optional[moderngl.Framebuffer] = None
+        self._history_fbo: Optional[moderngl.Framebuffer] = None
         self._fullscreen_quad: Optional[moderngl.VertexArray] = None
         self._fullscreen_prog: Optional[moderngl.Program] = None
 
         self._ctx_id = 0
         self._prev_width: int = 0
         self._prev_height: int = 0
+        self._frame: int = 0
+        self._prev_view_proj: Optional[np.ndarray] = None
 
     def serialize(self) -> dict:
         d = super().serialize()
@@ -67,6 +75,7 @@ class RadianceCascadesGI(Component):
             "intensity": self._intensity,
             "step_size": self._step_size,
             "depth_threshold": self._depth_threshold,
+            "temporal_factor": self._temporal_factor,
             "show_overlay": self._show_overlay,
             "debug_mode": self._debug_mode,
         })
@@ -81,6 +90,7 @@ class RadianceCascadesGI(Component):
         r._intensity = float(data.get("intensity", 1.0))
         r._step_size = float(data.get("step_size", 0.5))
         r._depth_threshold = float(data.get("depth_threshold", 0.15))
+        r._temporal_factor = float(data.get("temporal_factor", 0.9))
         r._show_overlay = data.get("show_overlay", False)
         r._debug_mode = data.get("debug_mode", False)
         return r
@@ -153,27 +163,34 @@ class RadianceCascadesGI(Component):
             )
 
         if (self._gi_output_tex is None or self._prev_width != rw or self._prev_height != rh):
-            if self._gi_output_tex:
-                self._gi_output_tex.release()
-            if self._gi_output_fbo:
-                self._gi_output_fbo.release()
-            self._gi_output_tex = ctx.texture((rw, rh), 4, dtype="f4")
-            self._gi_output_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-            self._gi_output_tex.repeat_x = False
-            self._gi_output_tex.repeat_y = False
+            for tex in [self._gi_output_tex, self._gi_temp_tex, self._history_tex]:
+                if tex:
+                    tex.release()
+            for fbo in [self._gi_output_fbo, self._gi_temp_fbo, self._history_fbo]:
+                if fbo:
+                    fbo.release()
+            self._gi_output_tex = self._make_tex(ctx, rw, rh, moderngl.LINEAR)
+            self._gi_temp_tex = self._make_tex(ctx, rw, rh, moderngl.LINEAR)
+            self._history_tex = self._make_tex(ctx, rw, rh, moderngl.LINEAR)
             self._gi_output_fbo = ctx.framebuffer(color_attachments=[self._gi_output_tex])
+            self._gi_temp_fbo = ctx.framebuffer(color_attachments=[self._gi_temp_tex])
+            self._history_fbo = ctx.framebuffer(color_attachments=[self._history_tex])
             self._prev_width = rw
             self._prev_height = rh
 
         if (self._cascade_atlas is None or self._cascade_atlas.width != rw or self._cascade_atlas.height != rh):
             if self._cascade_atlas:
                 self._cascade_atlas.release()
-            self._cascade_atlas = ctx.texture((rw, rh), 4, dtype="f4")
-            self._cascade_atlas.filter = (moderngl.NEAREST, moderngl.NEAREST)
-            self._cascade_atlas.repeat_x = False
-            self._cascade_atlas.repeat_y = False
+            self._cascade_atlas = self._make_tex(ctx, rw, rh, moderngl.NEAREST)
 
         return True
+
+    def _make_tex(self, ctx, w, h, filter_mode):
+        tex = ctx.texture((w, h), 4, dtype="f4")
+        tex.filter = (filter_mode, filter_mode)
+        tex.repeat_x = False
+        tex.repeat_y = False
+        return tex
 
     def _dispatch(self, ctx: moderngl.Context, width: int, height: int,
                   view_mat, proj_mat, cam_pos, scene, renderer) -> bool:
@@ -195,6 +212,7 @@ class RadianceCascadesGI(Component):
         d = view_mat._d
         cam_right = (float(d[0, 0]), float(d[1, 0]), float(d[2, 0]))
         cam_forward = (-float(d[0, 2]), -float(d[1, 2]), -float(d[2, 2]))
+        cam_pos_tuple = (cam_pos.x, cam_pos.y, cam_pos.z)
 
         ctx.disable(moderngl.DEPTH_TEST)
 
@@ -202,10 +220,13 @@ class RadianceCascadesGI(Component):
             prog["u_screen_size"] = (float(rw), float(rh))
             prog["u_camera_right"] = cam_right
             prog["u_camera_forward"] = cam_forward
+            prog["u_camera_pos"] = cam_pos_tuple
             prog["u_step_size"] = self._step_size
             prog["u_depth_threshold"] = self._depth_threshold
             prog["u_intensity"] = self._intensity
+            prog["u_temporal_factor"] = self._temporal_factor
             prog["u_num_cascades"] = self.NUM_CASCADES
+            prog["u_frame"] = self._frame
 
             view_f32 = view_mat.to_f32().reshape(4, 4).T
             proj_f32 = proj_mat.to_f32().reshape(4, 4).T
@@ -213,6 +234,14 @@ class RadianceCascadesGI(Component):
             inv_vp = np.linalg.inv(vp)
             prog["u_inv_view_proj"].write(inv_vp.astype(np.float32).flatten(order='F').tobytes())
             prog["u_view_proj"].write(vp.astype(np.float32).flatten(order='F').tobytes())
+
+            if self._prev_view_proj is not None:
+                prog["u_prev_view_proj"].write(
+                    self._prev_view_proj.astype(np.float32).flatten(order='F').tobytes()
+                )
+            else:
+                prog["u_prev_view_proj"].write(vp.astype(np.float32).flatten(order='F').tobytes())
+            self._prev_view_proj = vp.copy()
         except KeyError as e:
             Logger.warning(f"RadianceCascades uniform missing: {e}")
             return False
@@ -231,10 +260,12 @@ class RadianceCascadesGI(Component):
             Logger.warning(f"RadianceCascades texture uniform missing: {e}")
             return False
 
-        self._cascade_atlas.bind_to_image(2, read=False, write=True)
+        groups_x = (rw + 7) // 8
+        groups_y = (rh + 7) // 8
 
+        self._cascade_atlas.bind_to_image(2, read=False, write=True)
         prog["u_mode"] = 0
-        prog.run(group_x=(rw + 7) // 8, group_y=(rh + 7) // 8, group_z=1)
+        prog.run(groups_x, groups_y, 1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
 
         self._cascade_atlas.bind_to_image(2, read=True, write=False)
@@ -242,13 +273,42 @@ class RadianceCascadesGI(Component):
 
         if self._debug_mode:
             prog["u_mode"] = 2
+            prog.run(groups_x, groups_y, 1)
+            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
         elif self._show_overlay:
-            prog["u_mode"] = 3
+            prog["u_mode"] = 6
+            prog.run(groups_x, groups_y, 1)
+            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
         else:
             prog["u_mode"] = 1
-        prog.run(group_x=(rw + 7) // 8, group_y=(rh + 7) // 8, group_z=1)
-        ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+            prog.run(groups_x, groups_y, 1)
+            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
 
+            if self._frame > 0:
+                self._history_tex.use(4)
+                prog["u_history_tex"] = 4
+                prog["u_mode"] = 5
+                prog.run(groups_x, groups_y, 1)
+                ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+
+            self._gi_temp_tex.bind_to_image(3, read=False, write=True)
+            self._gi_output_tex.use(5)
+            prog["u_gi_input_tex"] = 5
+            prog["u_mode"] = 3
+            prog.run(groups_x, groups_y, 1)
+            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+
+            self._gi_output_tex.bind_to_image(3, read=False, write=True)
+            self._gi_temp_tex.use(5)
+            prog["u_gi_input_tex"] = 5
+            prog["u_mode"] = 4
+            prog.run(groups_x, groups_y, 1)
+            ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+
+            if self._history_fbo and self._gi_output_fbo:
+                ctx.copy_framebuffer(self._history_fbo, self._gi_output_fbo)
+
+        self._frame += 1
         return True
 
     def _blit_to_fbo(self, ctx: moderngl.Context, target_fbo: moderngl.Framebuffer, width: int, height: int):
@@ -292,15 +352,19 @@ class RadianceCascadesGI(Component):
         self._release_gl()
 
     def _release_gl(self):
-        if self._cascade_atlas:
-            self._cascade_atlas.release()
-            self._cascade_atlas = None
-        if self._gi_output_tex:
-            self._gi_output_tex.release()
-            self._gi_output_tex = None
-        if self._gi_output_fbo:
-            self._gi_output_fbo.release()
-            self._gi_output_fbo = None
+        for tex in [self._cascade_atlas, self._gi_output_tex, self._gi_temp_tex, self._history_tex]:
+            if tex:
+                tex.release()
+        self._cascade_atlas = None
+        self._gi_output_tex = None
+        self._gi_temp_tex = None
+        self._history_tex = None
+        for fbo in [self._gi_output_fbo, self._gi_temp_fbo, self._history_fbo]:
+            if fbo:
+                fbo.release()
+        self._gi_output_fbo = None
+        self._gi_temp_fbo = None
+        self._history_fbo = None
         if self._program:
             self._program.release()
             self._program = None
@@ -310,3 +374,5 @@ class RadianceCascadesGI(Component):
         if self._fullscreen_quad:
             self._fullscreen_quad.release()
             self._fullscreen_quad = None
+        self._prev_view_proj = None
+        self._frame = 0

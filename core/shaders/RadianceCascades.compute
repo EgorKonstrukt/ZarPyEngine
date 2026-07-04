@@ -6,16 +6,17 @@
 //
 // Radiance Cascades Global Illumination
 // Based on the paper by Alexander Sannikov (Grinding Gear Games)
-// https://github.com/Raikiri/RadianceCascadesPaper
+// Implements temporal reprojection and edge-aware denoising (PoE2-style)
 
 ComputeShader "Zarin/RadianceCascades"
 {
     Properties
     {
         _StepSize("Step Size", Float) = 0.5
-        _DepthThreshold("Depth Threshold", Float) = 0.005
-        _NumCascades("Num Cascades", Int) = 7
+        _DepthThreshold("Depth Threshold", Float) = 0.02
+        _NumCascades("Num Cascades", Int) = 6
         _Intensity("GI Intensity", Float) = 1.0
+        _TemporalFactor("Temporal Blend", Float) = 0.9
     }
 
     GLSLPROGRAM
@@ -30,23 +31,37 @@ ComputeShader "Zarin/RadianceCascades"
     #define MODE_POPULATE 0
     #define MODE_RECONSTRUCT 1
     #define MODE_DEBUG_TEST 2
+    #define MODE_BLUR_H 3
+    #define MODE_BLUR_V 4
+    #define MODE_TEMPORAL 5
+    #define MODE_DEBUG_ATLAS 6
+    #define MODE_DEBUG_RECONSTRUCT 7
 
     layout(binding = 0) uniform sampler2D u_depth_tex;
     layout(binding = 1) uniform sampler2D u_color_tex;
+    layout(binding = 4) uniform sampler2D u_history_tex;
+    layout(binding = 5) uniform sampler2D u_gi_input_tex;
 
     uniform vec2 u_screen_size;
     uniform mat4 u_inv_view_proj;
     uniform mat4 u_view_proj;
+    uniform mat4 u_prev_view_proj;
     uniform vec3 u_camera_right;
     uniform vec3 u_camera_forward;
+    uniform vec3 u_camera_pos;
     uniform int u_num_cascades;
     uniform float u_step_size;
     uniform float u_depth_threshold;
     uniform float u_intensity;
+    uniform float u_temporal_factor;
     uniform int u_mode;
+    uniform int u_frame;
 
     layout(rgba32f, binding = 2) uniform image2D u_cascade_atlas;
     layout(rgba32f, binding = 3) uniform image2D u_gi_output;
+
+    shared vec3 s_radiance[64];
+    shared float s_beta[64];
 
     vec3 world_from_depth(vec2 uv, float depth) {
         vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
@@ -109,66 +124,87 @@ ComputeShader "Zarin/RadianceCascades"
         float beta = 1.0;
 
         if (probe_depth < 1.0 - EPS) {
-            vec3 self_color = texture(u_color_tex, probe_uv).rgb;
-            float self_max = max(self_color.r, max(self_color.g, self_color.b));
+            vec3 P = world_from_depth(probe_uv, probe_depth);
+            vec3 N = compute_normal(probe_uv);
 
-            if (self_max > 0.9) {
-                radiance = self_color;
-                beta = 0.0;
-            } else {
-                vec3 P = world_from_depth(probe_uv, probe_depth);
-                vec3 N = compute_normal(probe_uv);
+            vec2 texel = 1.0 / u_screen_size;
+            vec3 Px = world_from_depth(probe_uv + vec2(texel.x, 0.0), probe_depth);
+            float world_texel = max(length(Px - P), 1e-5);
 
-                vec2 texel = 1.0 / u_screen_size;
-                vec3 Px = world_from_depth(probe_uv + vec2(texel.x, 0.0), probe_depth);
-                float world_texel = max(length(Px - P), 1e-5);
+            float angle = (float(direction) + 0.5) / float(num_dirs) * TAU;
+            vec3 dir3d = dir_from_angle(angle, N);
 
-                float angle = (float(direction) + 0.5) / float(num_dirs) * TAU;
-                vec3 dir3d = dir_from_angle(angle, N);
+            float step_world = u_step_size * world_texel;
+            float min_range = float(spacing) * 0.25 * world_texel;
+            float max_range = float(spacing) * 4.0 * world_texel;
+            int max_steps = int((max_range - min_range) / step_world) + 1;
+            max_steps = min(max_steps, 128);
 
-                float step_world = u_step_size * world_texel;
-                float min_range = float(spacing) * 0.25 * world_texel;
-                float max_range = float(spacing) * 4.0 * world_texel;
-                int max_steps = int((max_range - min_range) / step_world) + 1;
-                max_steps = min(max_steps, 256);
+            for (int s = 0; s < max_steps && beta > EPS; s++) {
+                float t = min_range + float(s) * step_world;
+                vec3 sample_pos = P + dir3d * t;
 
-                for (int s = 0; s < max_steps && beta > EPS; s++) {
-                    float t = min_range + float(s) * step_world;
-                    vec3 sample_pos = P + dir3d * t;
+                bool valid;
+                vec3 proj = screen_from_world(sample_pos, valid);
+                if (!valid || proj.x < 0.0 || proj.x > 1.0 ||
+                    proj.y < 0.0 || proj.y > 1.0 || proj.z < 0.0 || proj.z > 1.0) break;
 
-                    bool valid;
-                    vec3 proj = screen_from_world(sample_pos, valid);
-                    if (!valid || proj.x < 0.0 || proj.x > 1.0 ||
-                        proj.y < 0.0 || proj.y > 1.0 || proj.z < 0.0 || proj.z > 1.0) break;
-
-                    float sample_depth = texture(u_depth_tex, proj.xy).r;
-                    if (sample_depth >= 1.0 - EPS) continue;
-
-                    vec3 hit_world = world_from_depth(proj.xy, sample_depth);
-                    float delta = dot(sample_pos - hit_world, u_camera_forward);
-
-                    if (delta <= 0.0) continue;
-                    if (delta > u_depth_threshold) {
-                        beta = 0.0;
-                        break;
-                    }
-
-                    vec3 hit_color = texture(u_color_tex, proj.xy).rgb;
-                    float hit_max = max(hit_color.r, max(hit_color.g, hit_color.b));
-                    if (hit_max > 0.9) {
-                        float dist = (t - min_range) / (max_range - min_range);
-                        float weight = clamp(1.0 - dist, 0.0, 1.0);
-                        radiance = hit_color * weight;
-                        beta = 1.0 - weight;
-                    } else {
-                        beta = 0.0;
-                    }
+                float sample_depth = texture(u_depth_tex, proj.xy).r;
+                if (sample_depth >= 1.0 - EPS) {
+                    beta = 1.0;
                     break;
                 }
+
+                vec3 hit_world = world_from_depth(proj.xy, sample_depth);
+                float delta = dot(sample_pos - hit_world, u_camera_forward);
+
+                if (delta <= 0.0) continue;
+                if (delta > u_depth_threshold) {
+                    beta = 0.0;
+                    break;
+                }
+
+                vec3 hit_color = texture(u_color_tex, proj.xy).rgb;
+                radiance = hit_color;
+                beta = 0.0;
+                break;
             }
         }
 
-        imageStore(u_cascade_atlas, atlas_pos, vec4(radiance, 1.0 - beta));
+        imageStore(u_cascade_atlas, atlas_pos, vec4(radiance, beta));
+    }
+
+    void populate() {
+        ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 atlas_size = imageSize(u_cascade_atlas);
+        if (pos.x >= atlas_size.x || pos.y >= atlas_size.y) return;
+
+        int screen_h = int(u_screen_size.y);
+        int cascade_idx = -1;
+        int local_y = 0;
+        int y_accum = 0;
+
+        for (int i = 0; i < u_num_cascades; i++) {
+            int h = cascade_height(i, screen_h);
+            if (pos.y >= y_accum && pos.y < y_accum + h) {
+                cascade_idx = i;
+                local_y = pos.y - y_accum;
+                break;
+            }
+            y_accum += h;
+        }
+
+        if (cascade_idx < 0) return;
+
+        int spacing = 1 << (cascade_idx + 1);
+        int num_dirs = spacing;
+        int probe_px = pos.x / spacing;
+        int probe_py = local_y;
+        int direction = pos.x % spacing;
+
+        if (direction >= num_dirs) return;
+
+        populate_probe(cascade_idx, probe_px, probe_py, direction, pos);
     }
 
     void reconstruct() {
@@ -179,7 +215,7 @@ ComputeShader "Zarin/RadianceCascades"
         vec2 uv = (vec2(pixel) + 0.5) / u_screen_size;
         float depth = texture(u_depth_tex, uv).r;
         if (depth >= 1.0 - EPS) {
-            imageStore(u_gi_output, pixel, vec4(0.0, 0.0, 0.0, 0.0));
+            imageStore(u_gi_output, pixel, vec4(0.0));
             return;
         }
 
@@ -245,48 +281,174 @@ ComputeShader "Zarin/RadianceCascades"
             if (norm > EPS) {
                 cascade_L /= norm;
                 cascade_beta /= norm;
-
                 indirect += remaining * cascade_L * (1.0 - cascade_beta);
                 remaining *= cascade_beta;
             }
         }
 
         indirect *= INV_PI * u_intensity;
-        indirect += 1e-10 * (u_camera_right + u_camera_forward);
-        imageStore(u_gi_output, pixel, vec4(max(indirect, 0.0) + 1e-10 * u_depth_threshold, 1.0));
+        imageStore(u_gi_output, pixel, vec4(max(indirect, 0.0), 1.0));
     }
 
-    void populate() {
-        ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-        ivec2 atlas_size = imageSize(u_cascade_atlas);
-        if (pos.x >= atlas_size.x || pos.y >= atlas_size.y) return;
+    void temporal_accumulate() {
+        ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 screen = imageSize(u_gi_output);
+        if (pixel.x >= screen.x || pixel.y >= screen.y) return;
 
-        int screen_h = int(u_screen_size.y);
-        int cascade_idx = -1;
-        int local_y = 0;
-        int y_accum = 0;
+        vec2 uv = (vec2(pixel) + 0.5) / u_screen_size;
+        float depth = texture(u_depth_tex, uv).r;
 
-        for (int i = 0; i < u_num_cascades; i++) {
-            int h = cascade_height(i, screen_h);
-            if (pos.y >= y_accum && pos.y < y_accum + h) {
-                cascade_idx = i;
-                local_y = pos.y - y_accum;
-                break;
-            }
-            y_accum += h;
+        vec4 current = imageLoad(u_gi_output, pixel);
+        if (depth >= 1.0 - EPS) {
+            imageStore(u_gi_output, pixel, vec4(0.0));
+            return;
         }
 
-        if (cascade_idx < 0) return;
+        vec3 world_pos = world_from_depth(uv, depth);
+        vec4 prev_clip = u_prev_view_proj * vec4(world_pos, 1.0);
+        vec3 prev_ndc = prev_clip.xyz / prev_clip.w;
+        vec2 prev_uv = prev_ndc.xy * 0.5 + 0.5;
 
-        int spacing = 1 << (cascade_idx + 1);
-        int num_dirs = spacing;
-        int probe_px = pos.x / spacing;
-        int probe_py = local_y;
-        int direction = pos.x % spacing;
+        if (prev_uv.x < 0.0 || prev_uv.x > 1.0 || prev_uv.y < 0.0 || prev_uv.y > 1.0) {
+            imageStore(u_gi_output, pixel, current);
+            return;
+        }
 
-        if (direction >= num_dirs) return;
+        ivec2 prev_pixel = ivec2(prev_uv * vec2(screen));
+        ivec2 history_size = textureSize(u_history_tex, 0);
+        if (prev_pixel.x >= history_size.x || prev_pixel.y >= history_size.y) {
+            imageStore(u_gi_output, pixel, current);
+            return;
+        }
 
-        populate_probe(cascade_idx, probe_px, probe_py, direction, pos);
+        vec4 history = texelFetch(u_history_tex, prev_pixel, 0);
+        float prev_depth = texture(u_depth_tex, prev_uv).r;
+        float depth_diff = abs(depth - prev_depth);
+        float blend = u_temporal_factor;
+        if (depth_diff > u_depth_threshold * 10.0) {
+            blend = 0.0;
+        }
+
+        vec3 result = mix(current.rgb, history.rgb, blend);
+        imageStore(u_gi_output, pixel, vec4(result, 1.0));
+    }
+
+    void blur_h() {
+        ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 screen = imageSize(u_gi_output);
+        if (pixel.x >= screen.x || pixel.y >= screen.y) return;
+
+        vec2 uv = (vec2(pixel) + 0.5) / u_screen_size;
+        float center_depth = texture(u_depth_tex, uv).r;
+        if (center_depth >= 1.0 - EPS) {
+            imageStore(u_gi_output, pixel, vec4(0.0));
+            return;
+        }
+
+        vec3 center_N = compute_normal(uv);
+        vec4 center = texelFetch(u_gi_input_tex, pixel, 0);
+
+        vec3 sum = center.rgb;
+        float total = 1.0;
+
+        for (int i = 1; i <= 4; i++) {
+            ivec2 off = ivec2(i, 0);
+            if (pixel.x + off.x >= screen.x) break;
+
+            vec4 sample = texelFetch(u_gi_input_tex, pixel + off, 0);
+            vec2 sample_uv = (vec2(pixel + off) + 0.5) / u_screen_size;
+            float sd = texture(u_depth_tex, sample_uv).r;
+            float depth_w = exp(-abs(sd - center_depth) * 50.0);
+
+            vec3 sn = compute_normal(sample_uv);
+            float normal_w = pow(max(dot(center_N, sn), 0.0), 16.0);
+
+            float spatial = exp(-float(i * i) * 0.5);
+            float w = spatial * depth_w * normal_w;
+
+            sum += sample.rgb * w;
+            total += w;
+        }
+
+        for (int i = 1; i <= 4; i++) {
+            ivec2 off = ivec2(i, 0);
+            if (pixel.x - off.x < 0) break;
+
+            vec4 sample = texelFetch(u_gi_input_tex, pixel - off, 0);
+            vec2 sample_uv = (vec2(pixel - off) + 0.5) / u_screen_size;
+            float sd = texture(u_depth_tex, sample_uv).r;
+            float depth_w = exp(-abs(sd - center_depth) * 50.0);
+
+            vec3 sn = compute_normal(sample_uv);
+            float normal_w = pow(max(dot(center_N, sn), 0.0), 16.0);
+
+            float spatial = exp(-float(i * i) * 0.5);
+            float w = spatial * depth_w * normal_w;
+
+            sum += sample.rgb * w;
+            total += w;
+        }
+
+        imageStore(u_gi_output, pixel, vec4(sum / total, 1.0));
+    }
+
+    void blur_v() {
+        ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 screen = imageSize(u_gi_output);
+        if (pixel.x >= screen.x || pixel.y >= screen.y) return;
+
+        vec2 uv = (vec2(pixel) + 0.5) / u_screen_size;
+        float center_depth = texture(u_depth_tex, uv).r;
+        if (center_depth >= 1.0 - EPS) {
+            imageStore(u_gi_output, pixel, vec4(0.0));
+            return;
+        }
+
+        vec3 center_N = compute_normal(uv);
+        vec4 center = texelFetch(u_gi_input_tex, pixel, 0);
+
+        vec3 sum = center.rgb;
+        float total = 1.0;
+
+        for (int i = 1; i <= 4; i++) {
+            ivec2 off = ivec2(0, i);
+            if (pixel.y + off.y >= screen.y) break;
+
+            vec4 sample = texelFetch(u_gi_input_tex, pixel + off, 0);
+            vec2 sample_uv = (vec2(pixel + off) + 0.5) / u_screen_size;
+            float sd = texture(u_depth_tex, sample_uv).r;
+            float depth_w = exp(-abs(sd - center_depth) * 50.0);
+
+            vec3 sn = compute_normal(sample_uv);
+            float normal_w = pow(max(dot(center_N, sn), 0.0), 16.0);
+
+            float spatial = exp(-float(i * i) * 0.5);
+            float w = spatial * depth_w * normal_w;
+
+            sum += sample.rgb * w;
+            total += w;
+        }
+
+        for (int i = 1; i <= 4; i++) {
+            ivec2 off = ivec2(0, i);
+            if (pixel.y - off.y < 0) break;
+
+            vec4 sample = texelFetch(u_gi_input_tex, pixel - off, 0);
+            vec2 sample_uv = (vec2(pixel - off) + 0.5) / u_screen_size;
+            float sd = texture(u_depth_tex, sample_uv).r;
+            float depth_w = exp(-abs(sd - center_depth) * 50.0);
+
+            vec3 sn = compute_normal(sample_uv);
+            float normal_w = pow(max(dot(center_N, sn), 0.0), 16.0);
+
+            float spatial = exp(-float(i * i) * 0.5);
+            float w = spatial * depth_w * normal_w;
+
+            sum += sample.rgb * w;
+            total += w;
+        }
+
+        imageStore(u_gi_output, pixel, vec4(sum / total, 1.0));
     }
 
     void debug_test() {
@@ -297,7 +459,7 @@ ComputeShader "Zarin/RadianceCascades"
         float d = texture(u_depth_tex, uv).r;
         vec3 color = vec3(uv.x, uv.y, 0.0);
         if (d >= 1.0 - EPS) color = vec3(1.0, 0.0, 0.0);
-        imageStore(u_gi_output, pixel, vec4(color + 1e-10 * (u_camera_right + u_camera_forward + vec3(u_depth_threshold)), 1.0));
+        imageStore(u_gi_output, pixel, vec4(color, 1.0));
     }
 
     void debug_atlas() {
@@ -306,7 +468,7 @@ ComputeShader "Zarin/RadianceCascades"
         if (pixel.x >= screen.x || pixel.y >= screen.y) return;
         vec4 data = imageLoad(u_cascade_atlas, ivec2(pixel.x, pixel.y));
         vec3 color = data.rgb * 0.5 + 0.25;
-        imageStore(u_gi_output, pixel, vec4(color + 1e-10 * (u_camera_right + u_camera_forward + vec3(u_depth_threshold)), 1.0));
+        imageStore(u_gi_output, pixel, vec4(color, 1.0));
     }
 
     void debug_reconstruct() {
@@ -316,7 +478,7 @@ ComputeShader "Zarin/RadianceCascades"
         vec2 uv = (vec2(pixel) + 0.5) / u_screen_size;
         float depth = texture(u_depth_tex, uv).r;
         if (depth >= 1.0 - EPS) {
-            imageStore(u_gi_output, pixel, vec4(0.0, 0.0, 0.0, 0.0));
+            imageStore(u_gi_output, pixel, vec4(0.0));
             return;
         }
         vec3 N = compute_normal(uv);
@@ -345,7 +507,7 @@ ComputeShader "Zarin/RadianceCascades"
                 }
             }
         }
-        imageStore(u_gi_output, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+        imageStore(u_gi_output, pixel, vec4(0.0));
     }
 
     void main() {
@@ -355,9 +517,15 @@ ComputeShader "Zarin/RadianceCascades"
             reconstruct();
         } else if (u_mode == MODE_DEBUG_TEST) {
             debug_test();
-        } else if (u_mode == 3) {
+        } else if (u_mode == MODE_BLUR_H) {
+            blur_h();
+        } else if (u_mode == MODE_BLUR_V) {
+            blur_v();
+        } else if (u_mode == MODE_TEMPORAL) {
+            temporal_accumulate();
+        } else if (u_mode == MODE_DEBUG_ATLAS) {
             debug_atlas();
-        } else if (u_mode == 4) {
+        } else if (u_mode == MODE_DEBUG_RECONSTRUCT) {
             debug_reconstruct();
         }
     }
