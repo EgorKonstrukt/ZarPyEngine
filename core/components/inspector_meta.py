@@ -50,6 +50,9 @@ class ListElementField:
     step: float = 0.1
     decimals: int = 4
     enum_class: Optional[Type[Enum]] = None
+    file_filter: str = ""
+    resource_type: str = ""
+    enum_options: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +70,7 @@ class InspectorField:
     decimals: int = 4
     readonly: bool = False
     element_fields: list[ListElementField] = field(default_factory=list)
+    enum_options: list[str] = field(default_factory=list)
 
 @dataclass
 class ComponentInspectorMeta:

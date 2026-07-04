@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt
 
 from editor.scene_viewport import SceneViewport
 from editor.panels.hierarchy_panel import HierarchyPanel
-from editor.panels.inspector_panel import InspectorPanel
+from editor.inspector import InspectorPanel
 from editor.panels.console_panel import ConsolePanel
 from editor.panels.profiler_panel import ProfilerPanel
 from editor.panels.plugin_manager_panel import PluginManagerPanel
