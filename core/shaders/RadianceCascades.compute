@@ -128,6 +128,14 @@ ComputeShader "Zarin/RadianceCascades"
             beta *= 0.85;
         }
 
+        if (probe_depth < 1.0 - EPS) {
+            vec3 self_color = texture(u_color_tex, probe_uv).rgb;
+            float self_max = max(self_color.r, max(self_color.g, self_color.b));
+            if (self_max > 0.9) {
+                radiance += self_color * 2.0;
+            }
+        }
+
         imageStore(u_cascade_atlas, atlas_pos, vec4(radiance, 1.0 - beta));
     }
 
@@ -210,6 +218,13 @@ ComputeShader "Zarin/RadianceCascades"
         }
 
         indirect *= INV_PI * u_intensity;
+        {
+            vec3 self_color = texture(u_color_tex, uv).rgb;
+            float self_max = max(self_color.r, max(self_color.g, self_color.b));
+            if (self_max > 0.9) {
+                indirect += self_color * 0.1;
+            }
+        }
         indirect += 1e-10 * (u_camera_right + u_camera_forward);
         imageStore(u_gi_output, pixel, vec4(max(indirect, 0.0) + 1e-10 * u_depth_threshold, 1.0));
     }

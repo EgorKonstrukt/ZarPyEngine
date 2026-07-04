@@ -42,6 +42,7 @@ ComputeShader "Zarin/Raytracing"
         float light_data[];
     };
     layout(rgba32f, binding = 0) uniform image2D output_image;
+    layout(rgba32f, binding = 1) uniform image2D emissive_image;
 
     uniform vec3 u_camera_pos;
     uniform mat4 u_inv_view_proj;
@@ -259,9 +260,12 @@ ComputeShader "Zarin/Raytracing"
         return contrib;
     }
 
+    vec3 g_emissive = vec3(0.0);
+
     vec3 trace_ray(vec3 ro, vec3 rd) {
         vec3 accumulated = vec3(0.0);
         vec3 throughput = vec3(1.0);
+        g_emissive = vec3(0.0);
 
         for (int bounce = 0; bounce <= u_max_bounces; bounce++) {
             vec3 hit_pos, hit_N;
@@ -284,7 +288,9 @@ ComputeShader "Zarin/Raytracing"
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
             if (em_intensity > EPS) {
-                accumulated += throughput * emission * em_intensity;
+                vec3 em = throughput * emission * em_intensity;
+                accumulated += em;
+                g_emissive += em;
             }
 
             vec3 V = -rd;
@@ -324,12 +330,16 @@ ComputeShader "Zarin/Raytracing"
 
         if (u_accum_frame <= 1) {
             imageStore(output_image, pix, vec4(color, 1.0));
+            imageStore(emissive_image, pix, vec4(g_emissive, 1.0));
         } else {
             vec4 prev = imageLoad(output_image, pix);
             float t = float(u_accum_frame);
             color = prev.rgb * ((t - 1.0) / t) + color / t;
             float a = prev.a * ((t - 1.0) / t) + 1.0 / t;
             imageStore(output_image, pix, vec4(color, a));
+            vec4 prev_em = imageLoad(emissive_image, pix);
+            vec3 em = prev_em.rgb * ((t - 1.0) / t) + g_emissive / t;
+            imageStore(emissive_image, pix, vec4(em, 1.0));
         }
     }
     ENDGLSL

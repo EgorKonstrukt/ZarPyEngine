@@ -58,6 +58,7 @@ class RaytracingRenderer(Component):
         self._program: Optional[moderngl.ComputeShader] = None
         self._output_tex: Optional[moderngl.Texture] = None
         self._output_fbo: Optional[moderngl.Framebuffer] = None
+        self._emissive_tex: Optional[moderngl.Texture] = None
         self._fullscreen_quad: Optional[moderngl.VertexArray] = None
         self._fullscreen_prog: Optional[moderngl.Program] = None
 
@@ -180,11 +181,17 @@ class RaytracingRenderer(Component):
                 self._output_tex.release()
             if self._output_fbo:
                 self._output_fbo.release()
+            if self._emissive_tex:
+                self._emissive_tex.release()
             self._output_tex = ctx.texture((rw, rh), 4, dtype="f4")
             self._output_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
             self._output_tex.repeat_x = False
             self._output_tex.repeat_y = False
             self._output_fbo = ctx.framebuffer(color_attachments=[self._output_tex])
+            self._emissive_tex = ctx.texture((rw, rh), 4, dtype="f4")
+            self._emissive_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._emissive_tex.repeat_x = False
+            self._emissive_tex.repeat_y = False
             self._prev_width = rw
             self._prev_height = rh
             self._accum_frame = 0
@@ -530,6 +537,10 @@ class RaytracingRenderer(Component):
         self._inst_buf.bind_to_storage_buffer(4)
         self._light_buf.bind_to_storage_buffer(5)
         self._output_tex.bind_to_image(0, read=False, write=True)
+        self._emissive_tex.bind_to_image(1, read=False, write=True)
+
+        if hasattr(renderer, '_raytracing_emissive_tex'):
+            renderer._raytracing_emissive_tex = self._emissive_tex
 
         prog.run(group_x=(rw + 7) // 8, group_y=(rh + 7) // 8, group_z=1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)

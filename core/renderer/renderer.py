@@ -865,8 +865,7 @@ void main() {
                 if rtr and rtr.enabled:
                     if rtr._dispatch(self._ctx, viewport_w, viewport_h, view_mat, proj_mat, cam_pos, scene, self):
                         rtr.blit_to_screen(self._ctx, viewport_w, viewport_h)
-                        if GraphicsEffect._registry and not self._effects_disabled:
-                            rtr._blit_to_fbo(self._ctx, self._scene_fbo, viewport_w, viewport_h)
+                        rtr._blit_to_fbo(self._ctx, self._scene_fbo, viewport_w, viewport_h)
                     break
 
         if scene:
