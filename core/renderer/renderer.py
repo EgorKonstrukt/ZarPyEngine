@@ -88,9 +88,10 @@ class _VideoItem:
 class _ProjectorItem:
     __slots__ = ('texture_path', 'color', 'intensity', 'range', 'spot_angle',
                  'aspect_ratio', 'near_plane', 'far_plane', 'vp_matrix',
-                 'position', 'direction')
+                 'position', 'direction', 'flip_y', 'flip_x', 'cast_shadows')
     def __init__(self, texture_path, color, intensity, range, spot_angle,
-                 aspect_ratio, near_plane, far_plane, vp_matrix, position, direction):
+                 aspect_ratio, near_plane, far_plane, vp_matrix, position, direction,
+                 flip_y=True, flip_x=False, cast_shadows=True):
         self.texture_path = texture_path
         c = list(color) if color else [1, 1, 1]
         self.color = c[:3]
@@ -103,6 +104,9 @@ class _ProjectorItem:
         self.vp_matrix = vp_matrix
         self.position = np.array(position.to_array(), dtype=np.float32)
         self.direction = np.array(direction.to_array(), dtype=np.float32)
+        self.flip_y = flip_y
+        self.flip_x = flip_x
+        self.cast_shadows = cast_shadows
 
 class _RenderSnapshot:
     __slots__ = (
@@ -643,7 +647,8 @@ void main() {
             snap.projectors.append(_ProjectorItem(
                 pj.texture_path, pj.color, pj.intensity, pj.range,
                 pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane,
-                vp, pos, fwd))
+                vp, pos, fwd, flip_y=pj.flip_y, flip_x=pj.flip_x,
+                cast_shadows=pj.cast_shadows))
         cam_right = Vec3(float(view_mat._d[0, 0]), float(view_mat._d[1, 0]), float(view_mat._d[2, 0]))
         cam_up = Vec3(float(view_mat._d[0, 1]), float(view_mat._d[1, 1]), float(view_mat._d[2, 1]))
         for ent in scene.get_entities_with_component(ParticleSystem):
@@ -723,6 +728,8 @@ void main() {
         if prof:
             prof.start("render_shadow_pass")
         self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, self._mesh_loader._meshes)
+        if snap.projectors:
+            self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables)
         if prof:
             prof.stop("render_shadow_pass")
         self._scene_fbo.use()
@@ -848,6 +855,7 @@ void main() {
             proj["u_inv_vp"].write(inv_vp.tobytes())
             proj["u_depth_tex"] = 14
             self._scene_depth_tex.use(14)
+            self._shadows.set_uniforms(proj)
             count = min(len(snap.projectors), 2)
             proj["u_projector_count"].value = count
             for i in range(count):
@@ -869,6 +877,8 @@ void main() {
                         proj[f"{suf}tex"].value = tex_unit
                         tex_loaded = True
                 proj[f"{suf}has_tex"].value = 1.0 if tex_loaded else 0.0
+                proj[f"{suf}flip_y"].value = 1.0 if px.flip_y else 0.0
+                proj[f"{suf}flip_x"].value = 1.0 if px.flip_x else 0.0
             self._projector_vao.render()
             self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             self._ctx.enable(moderngl.DEPTH_TEST)

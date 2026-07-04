@@ -53,6 +53,10 @@ class ShadowRenderer:
         self._area_light_far: float = 10.0
         self._area_light_fov_scale: float = 1.0
         self._area_shadow_bias: float = 0.005
+        self._projector_shadow_maps: list[Any] = []
+        self._projector_shadow_fbos: list[Any] = []
+        self._projector_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(2)]
+        self._has_projector_shadow: list[bool] = [False, False]
         self._create_csm_resources()
 
     def _create_csm_resources(self):
@@ -94,6 +98,15 @@ class ShadowRenderer:
         tex.repeat_y = False
         self._spot_shadow_map = tex
         self._spot_shadow_fbo = self._ctx.framebuffer(depth_attachment=self._spot_shadow_map)
+
+    def _create_projector_shadow_resources(self):
+        res = self._shadow_resolution
+        for _ in range(2):
+            tex = self._ctx.depth_texture((res, res))
+            tex.repeat_x = False
+            tex.repeat_y = False
+            self._projector_shadow_maps.append(tex)
+            self._projector_shadow_fbos.append(self._ctx.framebuffer(depth_attachment=tex))
 
     def _create_area_shadow_resources(self):
         res = self._shadow_resolution
@@ -356,6 +369,31 @@ class ShadowRenderer:
         )
         self.render_geometry(vp, self._area_shadow_fbo, renderable_shadow, resolution=self._shadow_resolution)
 
+    def render_projector_shadows(self, projectors, renderable_shadow):
+        if not renderable_shadow:
+            for i in range(2):
+                self._has_projector_shadow[i] = False
+            return
+        for i, pj in enumerate(projectors[:2]):
+            if not pj.cast_shadows:
+                self._has_projector_shadow[i] = False
+                continue
+            if len(self._projector_shadow_maps) <= i:
+                self._create_projector_shadow_resources()
+            light_pos_vec = Vec3(float(pj.position[0]), float(pj.position[1]), float(pj.position[2]))
+            light_dir_vec = Vec3(float(pj.direction[0]), float(pj.direction[1]), float(pj.direction[2]))
+            light_dir_vec = light_dir_vec.normalized()
+            light_range = max(pj.range, 0.1)
+            spot_fov = max(pj.spot_angle * 2.0, 1.0)
+            near_plane = 0.1
+            far_plane = light_range
+            view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, Vec3.up())
+            proj = Mat4.perspective(spot_fov, pj.aspect_ratio, near_plane, far_plane)
+            vp = (view._d @ proj._d).astype(np.float32)
+            self._projector_light_vps[i] = vp
+            self._has_projector_shadow[i] = True
+            self.render_geometry(vp, self._projector_shadow_fbos[i], renderable_shadow, resolution=self._shadow_resolution)
+
     def set_uniforms(self, prog):
         has_csm = self._cascade_splits[2] > 0.0
         if has_csm and "u_cascade_count" in prog:
@@ -433,6 +471,17 @@ class ShadowRenderer:
         else:
             if "u_area_shadow_light_index" in prog:
                 prog["u_area_shadow_light_index"].value = -1
+        for i in range(2):
+            suf = f"u_pj_{i}_shadow_map"
+            if self._has_projector_shadow[i] and suf in prog:
+                tex_unit = 16 + i
+                if i < len(self._projector_shadow_maps):
+                    self._projector_shadow_maps[i].use(tex_unit)
+                    prog[suf].value = tex_unit
+                if f"u_pj_{i}_shadow_vp" in prog:
+                    prog[f"u_pj_{i}_shadow_vp"].write(self._projector_light_vps[i].tobytes())
+            elif suf in prog:
+                prog[suf].value = 0
 
     def release(self):
         for sm in self._shadow_maps:
@@ -473,5 +522,15 @@ class ShadowRenderer:
         if self._area_shadow_fbo:
             try:
                 self._area_shadow_fbo.release()
+            except Exception:
+                pass
+        for sm in self._projector_shadow_maps:
+            try:
+                sm.release()
+            except Exception:
+                pass
+        for fbo in self._projector_shadow_fbos:
+            try:
+                fbo.release()
             except Exception:
                 pass

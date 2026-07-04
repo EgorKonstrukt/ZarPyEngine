@@ -26,6 +26,10 @@ class Projector(Component):
             InspectorField("aspect_ratio", "Aspect", FieldType.FLOAT, min_val=0.1, max_val=10.0, step=0.1, decimals=2),
             InspectorField("near_plane", "Near Plane", FieldType.FLOAT, min_val=0.01, max_val=10.0, step=0.1, decimals=2),
             InspectorField("far_plane", "Far Plane", FieldType.FLOAT, min_val=1.0, max_val=10000.0, step=1.0, decimals=1),
+            InspectorField("flip_y", "Flip Y", FieldType.BOOL),
+            InspectorField("flip_x", "Flip X", FieldType.BOOL),
+            InspectorField("cast_shadows", "Cast Shadows", FieldType.BOOL),
+
         ]
 
     def __init__(self):
@@ -38,6 +42,9 @@ class Projector(Component):
         self.aspect_ratio: float = 1.0
         self.near_plane: float = 0.1
         self.far_plane: float = 100.0
+        self.flip_y: bool = True
+        self.flip_x: bool = False
+        self.cast_shadows: bool = True
 
     def gizmo(self):
         tr = self.transform
@@ -106,6 +113,9 @@ class Projector(Component):
             "aspect_ratio": self.aspect_ratio,
             "near_plane": self.near_plane,
             "far_plane": self.far_plane,
+            "flip_y": self.flip_y,
+            "flip_x": self.flip_x,
+            "cast_shadows": self.cast_shadows,
         })
         return d
 
@@ -121,4 +131,7 @@ class Projector(Component):
         p.aspect_ratio = data.get("aspect_ratio", 1.0)
         p.near_plane = data.get("near_plane", 0.1)
         p.far_plane = data.get("far_plane", 100.0)
+        p.flip_y = data.get("flip_y", True)
+        p.flip_x = data.get("flip_x", False)
+        p.cast_shadows = data.get("cast_shadows", True)
         return p
