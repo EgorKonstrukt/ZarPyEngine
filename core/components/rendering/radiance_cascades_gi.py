@@ -33,7 +33,7 @@ class RadianceCascadesGI(Component):
             InspectorField("_resolution_scale", "Resolution Scale", FieldType.FLOAT, 0.25, 1.0),
             InspectorField("_intensity", "GI Intensity", FieldType.FLOAT, 0.0, 5.0),
             InspectorField("_step_size", "Step Size", FieldType.FLOAT, 0.1, 2.0),
-            InspectorField("_depth_threshold", "Depth Threshold", FieldType.FLOAT, 0.001, 0.1),
+            InspectorField("_depth_threshold", "Depth Threshold", FieldType.FLOAT, 0.01, 1.0),
             InspectorField("_show_overlay", "Show Overlay", FieldType.BOOL),
             InspectorField("_debug_mode", "Debug Mode", FieldType.BOOL),
         ]
@@ -44,7 +44,7 @@ class RadianceCascadesGI(Component):
         self._resolution_scale: float = 0.5
         self._intensity: float = 1.0
         self._step_size: float = 0.5
-        self._depth_threshold: float = 0.0001
+        self._depth_threshold: float = 0.15
         self._show_overlay: bool = False
         self._debug_mode: bool = False
 
@@ -80,7 +80,7 @@ class RadianceCascadesGI(Component):
         r._resolution_scale = float(data.get("resolution_scale", 0.5))
         r._intensity = float(data.get("intensity", 1.0))
         r._step_size = float(data.get("step_size", 0.5))
-        r._depth_threshold = float(data.get("depth_threshold", 0.005))
+        r._depth_threshold = float(data.get("depth_threshold", 0.15))
         r._show_overlay = data.get("show_overlay", False)
         r._debug_mode = data.get("debug_mode", False)
         return r
@@ -182,11 +182,11 @@ class RadianceCascadesGI(Component):
             self._release_gl()
             self._ctx_id = ctx_id
 
+        if not self._ensure_resources(ctx, width, height):
+            return False
+
         rw = max(1, int(width * self._resolution_scale))
         rh = max(1, int(height * self._resolution_scale))
-
-        if not self._ensure_resources(ctx, rw, rh):
-            return False
 
         prog = self._program
         if prog is None:
@@ -209,8 +209,10 @@ class RadianceCascadesGI(Component):
 
             view_f32 = view_mat.to_f32().reshape(4, 4).T
             proj_f32 = proj_mat.to_f32().reshape(4, 4).T
-            inv_vp = np.linalg.inv(proj_f32 @ view_f32)
+            vp = proj_f32 @ view_f32
+            inv_vp = np.linalg.inv(vp)
             prog["u_inv_view_proj"].write(inv_vp.astype(np.float32).flatten(order='F').tobytes())
+            prog["u_view_proj"].write(vp.astype(np.float32).flatten(order='F').tobytes())
         except KeyError as e:
             Logger.warning(f"RadianceCascades uniform missing: {e}")
             return False
