@@ -16,7 +16,7 @@ import moderngl
 from typing import Optional, Any, Callable
 
 from core.components import LightType, LightAreaType
-from core.components.lighting import Light
+from core.components.lighting import Light, Projector
 from core.engine import Engine
 from core.logger import Logger
 from core.components.transform import Transform
@@ -85,11 +85,31 @@ class _VideoItem:
         self.offset = offset
         self.audio_source_entity_id = audio_source_entity_id
 
+class _ProjectorItem:
+    __slots__ = ('texture_path', 'color', 'intensity', 'range', 'spot_angle',
+                 'aspect_ratio', 'near_plane', 'far_plane', 'vp_matrix',
+                 'position', 'direction')
+    def __init__(self, texture_path, color, intensity, range, spot_angle,
+                 aspect_ratio, near_plane, far_plane, vp_matrix, position, direction):
+        self.texture_path = texture_path
+        c = list(color) if color else [1, 1, 1]
+        self.color = c[:3]
+        self.intensity = intensity
+        self.range = range
+        self.spot_angle = spot_angle
+        self.aspect_ratio = aspect_ratio
+        self.near_plane = near_plane
+        self.far_plane = far_plane
+        self.vp_matrix = vp_matrix
+        self.position = np.array(position.to_array(), dtype=np.float32)
+        self.direction = np.array(direction.to_array(), dtype=np.float32)
+
 class _RenderSnapshot:
     __slots__ = (
         'lights', 'dir_light', 'sky_component', 'sky_entity', 'cloud_components',
         'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields', 'culling_cache',
+        'projectors',
     )
     def __init__(self):
         self.lights: list = []
@@ -106,6 +126,7 @@ class _RenderSnapshot:
         self.particle_systems: list = []
         self.force_fields: list = []
         self.culling_cache: dict = {}
+        self.projectors: list = []
 
 
 class Renderer:
@@ -129,6 +150,8 @@ class Renderer:
         self._video_prog: Optional[moderngl.Program] = None
         self._text_prog: Optional[moderngl.Program] = None
         self._overlay_prog: Optional[moderngl.Program] = None
+        self._projector_prog: Optional[moderngl.Program] = None
+        self._projector_vao: Optional[moderngl.VertexArray] = None
         self._quad_vbo: Optional[moderngl.Buffer] = None
         self._quad_ibo: Optional[moderngl.Buffer] = None
         self._quad_vao: Optional[moderngl.VertexArray] = None
@@ -278,6 +301,10 @@ class Renderer:
                 vertex_shader=read_shader("shadow_overlay.vert"),
                 fragment_shader=read_shader("shadow_overlay.frag")
             )
+            self._projector_prog = self._ctx.program(
+                vertex_shader=read_shader("projector.vert"),
+                fragment_shader=read_shader("projector.frag")
+            )
             PP_COPY_FRAG = """
 #version 460 core
 uniform sampler2D u_input_tex;
@@ -302,6 +329,11 @@ void main() {
             )
             self._quad_vao = self._ctx.vertex_array(
                 self._overlay_prog,
+                [(self._quad_vbo, '2f', 'in_position')],
+                self._quad_ibo
+            )
+            self._projector_vao = self._ctx.vertex_array(
+                self._projector_prog,
                 [(self._quad_vbo, '2f', 'in_position')],
                 self._quad_ibo
             )
@@ -593,6 +625,25 @@ void main() {
             snap.svg_items.append(_SvgItem(
                 tr.world_matrix, sr.color, sr.flip_x, sr.flip_y,
                 abs_path or "", sr.pixels_per_unit))
+        for ent in scene.get_entities_with_component(Projector):
+            if not ent.active:
+                continue
+            pj = ent.get_component(Projector)
+            if not pj or not pj.enabled:
+                continue
+            tr = ent.get_component(Transform)
+            if not tr:
+                continue
+            pos = tr.position
+            fwd = tr.forward
+            up = tr.up
+            view = Mat4.look_at(pos, pos + fwd, up)
+            proj = Mat4.perspective(pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane)
+            vp = (view @ proj).to_f32()
+            snap.projectors.append(_ProjectorItem(
+                pj.texture_path, pj.color, pj.intensity, pj.range,
+                pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane,
+                vp, pos, fwd))
         cam_right = Vec3(float(view_mat._d[0, 0]), float(view_mat._d[1, 0]), float(view_mat._d[2, 0]))
         cam_up = Vec3(float(view_mat._d[0, 1]), float(view_mat._d[1, 1]), float(view_mat._d[2, 1]))
         for ent in scene.get_entities_with_component(ParticleSystem):
@@ -840,6 +891,43 @@ void main() {
             self._ctx.enable(moderngl.DEPTH_TEST)
             if prof:
                 prof.stop("render_clouds")
+        if snap.projectors:
+            self._scene_fbo.use()
+            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.disable(moderngl.DEPTH_TEST)
+            self._ctx.enable(moderngl.BLEND)
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+            proj = self._projector_prog
+            combined = view_mat @ proj_mat
+            inv_vp = combined.inverted().to_f32()
+            proj["u_inv_vp"].write(inv_vp.tobytes())
+            proj["u_depth_tex"] = 14
+            self._scene_depth_tex.use(14)
+            count = min(len(snap.projectors), 2)
+            proj["u_projector_count"].value = count
+            for i in range(count):
+                px = snap.projectors[i]
+                suf = f"u_pj_{i}_"
+                proj[f"{suf}vp"].write(px.vp_matrix.tobytes())
+                proj[f"{suf}pos"].value = tuple(float(v) for v in px.position)
+                proj[f"{suf}dir"].value = tuple(float(v) for v in px.direction)
+                proj[f"{suf}color"].value = tuple(float(v) for v in px.color)
+                proj[f"{suf}intensity"].value = float(px.intensity)
+                proj[f"{suf}range"].value = float(px.range)
+                proj[f"{suf}spot_angle"].value = float(px.spot_angle)
+                tex_loaded = False
+                if px.texture_path and self._materials:
+                    tex = self._materials.load_texture(px.texture_path)
+                    if tex:
+                        tex_unit = 20 + i
+                        tex.use(tex_unit)
+                        proj[f"{suf}tex"].value = tex_unit
+                        tex_loaded = True
+                proj[f"{suf}has_tex"].value = 1.0 if tex_loaded else 0.0
+            self._projector_vao.render()
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            self._ctx.enable(moderngl.DEPTH_TEST)
         if prof:
             prof.start("render_overlay")
         if fbo is not None:
@@ -1375,11 +1463,16 @@ void main() {
                 self._pp_copy_vao.release()
             except Exception:
                 pass
+        if self._projector_vao:
+            try:
+                self._projector_vao.release()
+            except Exception:
+                pass
         for prog in [self._default_prog, self._grid_prog, self._gizmo_prog,
                      self._wireframe_prog, self._outline_prog,
                      self._gizmo_fatline_prog, self._gizmo_solid_prog,
                      self._shadow_prog, self._particle_prog, self._icon_prog, self._sprite_prog,
-                     self._text_prog, self._overlay_prog, self._pp_copy_prog]:
+                     self._text_prog, self._overlay_prog, self._projector_prog, self._pp_copy_prog]:
             if prog:
                 try:
                     prog.release()

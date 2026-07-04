@@ -710,7 +710,7 @@ Shader "Zarin/PBR"
                     if (i == u_spot_shadow_light_index) sf = min(sf, spot_shadow_factor);
                     if (i == u_area_shadow_light_index) sf = min(sf, area_shadow_factor);
                     if (u_lights[i].type == 3) {
-                        result += calc_area_light_pbr(u_lights[i], N, V, albedo, roughness, metallic, F0, aniso_T, aniso_B, _Anisotropy, _SubsurfaceColor, _SubsurfaceAmount) * sf;
+                    result += calc_area_light_pbr(u_lights[i], N, V, albedo, roughness, metallic, F0, aniso_T, aniso_B, _Anisotropy, _SubsurfaceColor, _SubsurfaceAmount) * sf;
                     } else {
                         result += calc_light_pbr(u_lights[i], N, V, albedo, roughness, metallic, F0, sf, aniso_T, aniso_B, _Anisotropy, _SubsurfaceColor, _SubsurfaceAmount);
                     }

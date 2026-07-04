@@ -5,5 +5,6 @@
 # Copyright (c) 2026 Zarrakun
 
 from core.components.lighting.light import Light, LightType, LightAreaType
+from core.components.lighting.projector import Projector
 
-__all__ = ["Light", "LightType", "LightAreaType"]
+__all__ = ["Light", "LightType", "LightAreaType", "Projector"]
