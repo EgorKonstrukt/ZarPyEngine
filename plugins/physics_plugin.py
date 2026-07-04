@@ -5,15 +5,16 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-import os
 import math
-from typing import Optional, TYPE_CHECKING
+import os
+from typing import TYPE_CHECKING
 from core.plugin_manager import PluginBase
 from core.logger import Logger
 from core.physics import PhysicsProcess, PhysicsScene
 from core.physics.shared_buffer import MAX_ENTITIES
 from core.physics.physics_solver import IPhysicsSolver
-from core.math3d import Vec2, Vec3
+from core.math3d import Vec2
+from core.physics.shape_utils import find_shape_info
 from core.config import get_project_config
 
 if TYPE_CHECKING:
@@ -21,103 +22,6 @@ if TYPE_CHECKING:
 
 _RAD = math.radians
 _DEG = math.degrees
-
-_SHAPE_TYPE_MAP = {
-    "BoxCollider": "box",
-    "SphereCollider": "sphere",
-    "CapsuleCollider": "capsule",
-    "MeshCollider": "mesh",
-    "BoxCollider2D": "box",
-    "CircleCollider2D": "cylinder",
-}
-
-
-def _find_shape_info(entity: "Entity", transform=None) -> Optional[dict]:
-    for comp in entity.get_all_components():
-        cname = type(comp).__name__
-        if cname not in _SHAPE_TYPE_MAP:
-            continue
-        params = {}
-        friction = 0.6
-        restitution = 0.0
-        is_trigger = False
-
-        if cname == "BoxCollider":
-            params["size"] = [comp.scaled_size.x, comp.scaled_size.y, comp.scaled_size.z]
-            params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-            friction = comp.material_friction
-            restitution = comp.material_bounciness
-            is_trigger = comp.is_trigger
-        elif cname == "SphereCollider":
-            params["radius"] = comp.scaled_radius
-            params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-            friction = comp.material_friction
-            restitution = comp.material_bounciness
-            is_trigger = comp.is_trigger
-        elif cname == "CapsuleCollider":
-            params["radius"] = comp.scaled_radius
-            params["height"] = comp.scaled_height
-            params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-            params["direction"] = comp.direction
-            is_trigger = comp.is_trigger
-        elif cname == "BoxCollider2D":
-            sz = comp.scaled_size
-            params["size"] = [sz.x, sz.y, 1.0]
-            off = comp.scaled_offset
-            params["center"] = [off.x, off.y, 0.0]
-            friction = comp.material_friction
-            restitution = comp.material_bounciness
-            is_trigger = comp.is_trigger
-        elif cname == "CircleCollider2D":
-            params["radius"] = comp.scaled_radius
-            params["height"] = 1.0
-            off = comp.scaled_offset
-            params["center"] = [off.x, off.y, 0.0]
-            friction = comp.material_friction
-            restitution = comp.material_bounciness
-            is_trigger = comp.is_trigger
-        elif cname == "MeshCollider":
-            params["file"] = comp.mesh_path
-            params["collision_mode"] = comp.collision_mode.value
-            params["max_vertices"] = comp.max_vertices
-            friction = comp.material_friction
-            restitution = comp.material_bounciness
-            is_trigger = comp.is_trigger
-
-        scale = _read_import_scale(params.get("file", ""))
-        s = transform.local_scale if transform else Vec3.one()
-        if scale is not None:
-            params["scale"] = [scale * s.x, scale * s.y, scale * s.z]
-        elif cname == "MeshCollider":
-            params["scale"] = [s.x, s.y, s.z]
-
-        return {
-            "type": _SHAPE_TYPE_MAP[cname],
-            "params": params,
-            "friction": friction,
-            "restitution": restitution,
-            "is_trigger": is_trigger,
-            "layer": getattr(comp, 'layer', 0),
-            "mask": getattr(comp, 'mask', 0xFFFF),
-        }
-    return None
-
-
-def _read_import_scale(mesh_path: str):
-    if not mesh_path:
-        return None
-    import json
-    import_path = mesh_path + ".import"
-    if not os.path.isabs(import_path):
-        import_path = os.path.normpath(os.path.join(
-            os.path.dirname(__file__), "..", import_path))
-    if os.path.exists(import_path):
-        try:
-            with open(import_path) as f:
-                return json.load(f).get("scale", 1.0)
-        except Exception:
-            pass
-    return None
 
 
 class PhysicsPlugin(PluginBase):
@@ -250,7 +154,7 @@ class PhysicsPlugin(PluginBase):
     def _body_with_slot_in_process(self, entity, tr, proc: PhysicsProcess) -> Optional[dict]:
         rb = entity._components.get("Rigidbody")
         rb2d = entity._components.get("Rigidbody2D")
-        shape_info = _find_shape_info(entity, tr)
+        shape_info = find_shape_info(entity, tr)
         if not shape_info:
             return None
         is_2d = rb2d is not None

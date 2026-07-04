@@ -9,18 +9,8 @@ import sys
 import os
 import ctypes
 import numpy as np
-from typing import Optional, Callable, Any
-from concurrent.futures import ThreadPoolExecutor, Future
-
-_thread_pool: Optional[ThreadPoolExecutor] = None
-_MAX_WORKERS = min(32, (os.cpu_count() or 4) + 4)
-
-
-def _get_thread_pool() -> ThreadPoolExecutor:
-    global _thread_pool
-    if _thread_pool is None or _thread_pool._shutdown_lock.locked():
-        _thread_pool = ThreadPoolExecutor(max_workers=_MAX_WORKERS)
-    return _thread_pool
+from typing import Optional, Callable
+from core.pool import asset as _get_asset_pool
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -344,14 +334,14 @@ def load_mesh_async(path: str, callback: Callable[[Optional[MeshImportData]], No
     def _task():
         result = load_mesh(path)
         callback(result)
-    _get_thread_pool().submit(_task)
+    _get_asset_pool().submit(_task)
 
 
 def load_obj_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
     def _task():
         result = load_obj(path)
         callback(result)
-    _get_thread_pool().submit(_task)
+    _get_asset_pool().submit(_task)
 
 
 def load_gif_frames(path: str) -> list[np.ndarray]:
@@ -413,12 +403,12 @@ def import_gif_to_flipbook_async(gif_path: str, callback: Callable[[Optional[tup
             if callback:
                 callback(None)
             return None
-    return _get_thread_pool().submit(_task)
+    return _get_asset_pool().submit(_task)
 
 
 def load_mesh_future(path: str) -> Future:
-    return _get_thread_pool().submit(load_mesh, path)
+    return _get_asset_pool().submit(load_mesh, path)
 
 
 def load_obj_future(path: str) -> Future:
-    return _get_thread_pool().submit(load_obj, path)
+    return _get_asset_pool().submit(load_obj, path)

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import threading
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from concurrent.futures import Future, as_completed
 from typing import Union
+from core.pool import bvh as _get_bvh_pool
 
 _LEAF_SIZE = 8
 _MAX_DEPTH = 48
@@ -275,8 +276,9 @@ class BVH:
                     ctx.node_count += 1
                 ctx.nodes[ni, 0:3] = bmin
                 ctx.nodes[ni, 3:6] = bmax
-                lf = _BVH_BUILD_POOL.submit(_sah_build, left_tris, depth + 1)
-                rf = _BVH_BUILD_POOL.submit(_sah_build, right_tris, depth + 1)
+                pool = _get_bvh_pool()
+                lf = pool.submit(_sah_build, left_tris, depth + 1)
+                rf = pool.submit(_sah_build, right_tris, depth + 1)
                 ctx.nodes[ni, 6] = float(lf.result())
                 ctx.nodes[ni, 7] = float(rf.result())
             else:
@@ -532,7 +534,7 @@ except ImportError:
 
 _BVH_CACHE: dict[int, Union[BVH, Future, None]] = {}
 _BVH_LOCK = threading.Lock()
-_BVH_BUILD_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bvh")
+
 
 
 def _build_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH:
@@ -548,7 +550,8 @@ def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> None:
         if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
             _BVH_CACHE[key] = None
             return
-        _BVH_CACHE[key] = _BVH_BUILD_POOL.submit(_build_bvh, vertices, indices)
+        pool = _get_bvh_pool()
+        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices)
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
@@ -558,7 +561,7 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
             if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
                 _BVH_CACHE[key] = None
             else:
-                _BVH_CACHE[key] = _BVH_BUILD_POOL.submit(_build_bvh, vertices, indices)
+                _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices)
         entry = _BVH_CACHE[key]
     if isinstance(entry, Future):
         if entry.done():

@@ -11,13 +11,11 @@ import ctypes
 import json
 import sys
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Optional, TYPE_CHECKING
 from core.logger import Logger
+from core.pool import plugin as _get_plugin_pool
 if TYPE_CHECKING:
     from core.engine import Engine
-
-_PLUGIN_POOL = ThreadPoolExecutor(max_workers=min(8, max(2, (os.cpu_count() or 4))), thread_name_prefix="plugin")
 
 class PluginBase:
     NAME: str = "UnnamedPlugin"
@@ -205,29 +203,23 @@ class PluginManager:
         for item in plugin._menu_items:
             reg["menu_items"].append({**item, "plugin": plugin_name})
 
+    def _load_python_plugin(self, mod_name: str, path: str):
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for attr in dir(mod):
+            obj = getattr(mod, attr)
+            if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:
+                inst = obj()
+                inst._native_plugin_path = path
+                self.register(inst)
+
     def load_from_file(self, path: str):
         try:
             if path.endswith(".py"):
-                spec = importlib.util.spec_from_file_location("_zplugin", path)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                for attr in dir(mod):
-                    obj = getattr(mod, attr)
-                    if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:
-                        inst = obj()
-                        inst._native_plugin_path = path
-                        self.register(inst)
+                self._load_python_plugin("_zplugin", path)
             elif path.endswith(".pyd"):
-                mod_name = os.path.splitext(os.path.basename(path))[0]
-                spec = importlib.util.spec_from_file_location(mod_name, path)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                for attr in dir(mod):
-                    obj = getattr(mod, attr)
-                    if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:
-                        inst = obj()
-                        inst._native_plugin_path = path
-                        self.register(inst)
+                self._load_python_plugin(os.path.splitext(os.path.basename(path))[0], path)
             elif path.endswith(".dll") or path.endswith(".so"):
                 lib = ctypes.CDLL(path)
                 get_plugin = lib.get_plugin
@@ -307,9 +299,10 @@ class PluginManager:
                 except Exception as e:
                     Logger.error(f"Plugin {method_name} error: {e}", e)
             return
+        from concurrent.futures import as_completed
         futures = []
         for p in plugins:
-            futures.append(_PLUGIN_POOL.submit(getattr(p, method_name), *args))
+            futures.append(_get_plugin_pool().submit(getattr(p, method_name), *args))
         for f in as_completed(futures):
             try:
                 f.result()

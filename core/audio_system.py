@@ -10,8 +10,8 @@ import os
 import subprocess
 import io
 import wave
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, Tuple
+from core.pool import audio as _get_audio_pool
 
 try:
     import openal as al
@@ -19,8 +19,6 @@ try:
 except Exception:
     _openal_available = False
     al = None
-
-_AUDIO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="audio")
 
 
 class AudioRolloffCurve:
@@ -232,7 +230,7 @@ class AudioSystem:
                 Logger.error(f"Failed to load audio clip '{path}': {e}")
                 clip = None
             callback(clip)
-        _AUDIO_POOL.submit(_load)
+        _get_audio_pool().submit(_load)
 
     def get_clip(self, path: str) -> Optional[AudioClip]:
         abs_path = os.path.abspath(path)
