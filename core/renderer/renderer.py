@@ -835,6 +835,43 @@ void main() {
             prof.stop("render_meshes")
         if use_polygon_mode:
             self._ctx.wireframe = False
+        if snap.projectors:
+            self._scene_fbo.use()
+            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.disable(moderngl.DEPTH_TEST)
+            self._ctx.enable(moderngl.BLEND)
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+            proj = self._projector_prog
+            combined = view_mat @ proj_mat
+            inv_vp = combined.inverted().to_f32()
+            proj["u_inv_vp"].write(inv_vp.tobytes())
+            proj["u_depth_tex"] = 14
+            self._scene_depth_tex.use(14)
+            count = min(len(snap.projectors), 2)
+            proj["u_projector_count"].value = count
+            for i in range(count):
+                px = snap.projectors[i]
+                suf = f"u_pj_{i}_"
+                proj[f"{suf}vp"].write(px.vp_matrix.tobytes())
+                proj[f"{suf}pos"].value = tuple(float(v) for v in px.position)
+                proj[f"{suf}dir"].value = tuple(float(v) for v in px.direction)
+                proj[f"{suf}color"].value = tuple(float(v) for v in px.color)
+                proj[f"{suf}intensity"].value = float(px.intensity)
+                proj[f"{suf}range"].value = float(px.range)
+                proj[f"{suf}spot_angle"].value = float(px.spot_angle)
+                tex_loaded = False
+                if px.texture_path and self._materials:
+                    tex = self._materials.load_texture(px.texture_path)
+                    if tex:
+                        tex_unit = 20 + i
+                        tex.use(tex_unit)
+                        proj[f"{suf}tex"].value = tex_unit
+                        tex_loaded = True
+                proj[f"{suf}has_tex"].value = 1.0 if tex_loaded else 0.0
+            self._projector_vao.render()
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            self._ctx.enable(moderngl.DEPTH_TEST)
         if prof:
             prof.start("render_text_world")
         if self._text and scene:
@@ -891,43 +928,6 @@ void main() {
             self._ctx.enable(moderngl.DEPTH_TEST)
             if prof:
                 prof.stop("render_clouds")
-        if snap.projectors:
-            self._scene_fbo.use()
-            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.disable(moderngl.DEPTH_TEST)
-            self._ctx.enable(moderngl.BLEND)
-            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
-            proj = self._projector_prog
-            combined = view_mat @ proj_mat
-            inv_vp = combined.inverted().to_f32()
-            proj["u_inv_vp"].write(inv_vp.tobytes())
-            proj["u_depth_tex"] = 14
-            self._scene_depth_tex.use(14)
-            count = min(len(snap.projectors), 2)
-            proj["u_projector_count"].value = count
-            for i in range(count):
-                px = snap.projectors[i]
-                suf = f"u_pj_{i}_"
-                proj[f"{suf}vp"].write(px.vp_matrix.tobytes())
-                proj[f"{suf}pos"].value = tuple(float(v) for v in px.position)
-                proj[f"{suf}dir"].value = tuple(float(v) for v in px.direction)
-                proj[f"{suf}color"].value = tuple(float(v) for v in px.color)
-                proj[f"{suf}intensity"].value = float(px.intensity)
-                proj[f"{suf}range"].value = float(px.range)
-                proj[f"{suf}spot_angle"].value = float(px.spot_angle)
-                tex_loaded = False
-                if px.texture_path and self._materials:
-                    tex = self._materials.load_texture(px.texture_path)
-                    if tex:
-                        tex_unit = 20 + i
-                        tex.use(tex_unit)
-                        proj[f"{suf}tex"].value = tex_unit
-                        tex_loaded = True
-                proj[f"{suf}has_tex"].value = 1.0 if tex_loaded else 0.0
-            self._projector_vao.render()
-            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-            self._ctx.enable(moderngl.DEPTH_TEST)
         if prof:
             prof.start("render_overlay")
         if fbo is not None:
