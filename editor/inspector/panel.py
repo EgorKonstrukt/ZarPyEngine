@@ -22,9 +22,7 @@ from core.components.animation.animator_controller import (
     AnimatorController, AnimatorState, AnimatorTransition,
     AnimatorCondition, AnimatorConditionMode,
 )
-from editor.inspector.constants import (_FUSION_BG, _FUSION_BG_CARD, _FUSION_BG_HEADER, _FUSION_BG_HOVER,
-    _FUSION_BG_INPUT, _FUSION_BORDER, _FUSION_BORDER_LIGHT, _FUSION_TEXT, _FUSION_TEXT_DIM,
-    _FUSION_TEXT_BRIGHT, _FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED, _FUSION_ACCENT_ORANGE,
+from editor.inspector.constants import (_FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED, _FUSION_ACCENT_ORANGE,
     _FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS, _accent)
 from editor.inspector.helpers import make_resource_picker, make_asset_picker
 from editor.inspector.component_widget import ComponentWidget
@@ -65,12 +63,10 @@ class InspectorPanel(QDockWidget):
 
     def _setup_ui(self):
         outer = QWidget()
-        outer.setStyleSheet(f"background: {_FUSION_BG};")
         outer_layout = QVBoxLayout(outer)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
         self._header_widget = QWidget()
-        self._header_widget.setStyleSheet(f"background: {_FUSION_BG};")
         header_layout = QHBoxLayout(self._header_widget)
         header_layout.setContentsMargins(6, 4, 6, 4)
         header_layout.setSpacing(4)
@@ -79,11 +75,6 @@ class InspectorPanel(QDockWidget):
         self._lock_btn.setCheckable(True)
         self._lock_btn.setChecked(False)
         self._lock_btn.setToolTip("Lock Inspector")
-        self._lock_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-            QPushButton:hover {{ color: {_FUSION_TEXT_BRIGHT}; background: {_FUSION_BG_HOVER}; }}
-            QPushButton:checked {{ color: {_FUSION_ACCENT_ORANGE}; border-color: {_FUSION_ACCENT_ORANGE}; }}
-        """)
         self._lock_btn.toggled.connect(self._on_lock_toggled)
         header_layout.addWidget(self._lock_btn)
         self._active_cb = QCheckBox()
@@ -94,12 +85,6 @@ class InspectorPanel(QDockWidget):
         self._name_edit.setPlaceholderText("Entity name")
         self._name_edit.setStyleSheet(f"""
             QLineEdit {{
-                background: {_FUSION_BG};
-                color: {_FUSION_TEXT_BRIGHT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 2px 4px;
-                font-size: 11px;
                 selection-background-color: {_accent()};
             }}
             QLineEdit:focus {{ border-color: {_accent()}; }}
@@ -109,32 +94,18 @@ class InspectorPanel(QDockWidget):
         self._tag_edit = QLineEdit()
         self._tag_edit.setPlaceholderText("Tag")
         self._tag_edit.setFixedWidth(scale(80))
-        self._tag_edit.setStyleSheet(f"""
-            QLineEdit {{
-                background: {_FUSION_BG};
-                color: {_FUSION_TEXT_DIM};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 2px 4px;
-                font-size: 10px;
-            }}
-            QLineEdit:focus {{ border-color: {_accent()}; color: {_FUSION_TEXT_BRIGHT}; }}
-        """)
+        self._tag_edit.setStyleSheet(f"QLineEdit:focus {{ border-color: {_accent()}; }}")
         self._tag_edit.textChanged.connect(self._on_tag_changed)
         header_layout.addWidget(self._tag_edit)
         layer_lbl = QLabel("Layer")
-        layer_lbl.setStyleSheet(f"color: {_FUSION_TEXT_DIM}; font-size: 10px; background: transparent;")
         header_layout.addWidget(layer_lbl)
         self._layer_sb = QSpinBox()
         self._layer_sb.setRange(0, 31)
         self._layer_sb.setFixedWidth(scale(46))
-        from editor.inspector.helpers import _FUSION_SPINBOX_STYLE
-        self._layer_sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
         self._layer_sb.valueChanged.connect(self._on_layer_changed)
         header_layout.addWidget(self._layer_sb)
         outer_layout.addWidget(self._header_widget)
         self._prefab_bar_widget = QWidget()
-        self._prefab_bar_widget.setStyleSheet(f"background: {_FUSION_BG};")
         prefab_bar_layout = QHBoxLayout(self._prefab_bar_widget)
         prefab_bar_layout.setContentsMargins(6, 2, 6, 2)
         self._prefab_label = QLabel()
@@ -146,11 +117,8 @@ class InspectorPanel(QDockWidget):
         prefab_bar_layout.addStretch()
         _prefab_btn_style = f"""
             QPushButton {{
-                color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT};
-                border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS};
                 padding: 2px 8px; font-size: 10px;
             }}
-            QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
         """
         self._apply_btn = QPushButton("Apply")
         self._apply_btn.setFixedHeight(scale(22))
@@ -170,35 +138,11 @@ class InspectorPanel(QDockWidget):
         outer_layout.addWidget(self._prefab_bar_widget)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_FUSION_BORDER};")
         outer_layout.addWidget(sep)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet(f"""
-            QScrollArea {{ border: none; background: {_FUSION_BG}; }}
-            QScrollBar:vertical {{
-                background: {_FUSION_BG};
-                width: 8px;
-                margin: 0;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {_FUSION_BORDER};
-                min-height: 20px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {_FUSION_BORDER_LIGHT};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-        """)
         self._content_widget = QWidget()
-        self._content_widget.setStyleSheet(f"background: {_FUSION_BG};")
         self._content_layout = QVBoxLayout(self._content_widget)
         self._content_layout.setContentsMargins(4, 4, 4, 4)
         self._content_layout.setSpacing(4)
@@ -206,22 +150,16 @@ class InspectorPanel(QDockWidget):
         self._scroll.setWidget(self._content_widget)
         outer_layout.addWidget(self._scroll, 1)
         bottom = QWidget()
-        bottom.setStyleSheet(f"background: {_FUSION_BG};")
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(6, 4, 6, 6)
         self._add_comp_btn = QPushButton("+ Add Component")
         self._add_comp_btn.setFixedHeight(scale(24))
         self._add_comp_btn.setStyleSheet(f"""
             QPushButton {{
-                color: {_FUSION_TEXT_BRIGHT};
-                background: {_FUSION_BG_HEADER};
-                border: 1px dashed {_FUSION_BORDER_LIGHT};
-                border-radius: {_FUSION_CARD_RADIUS};
                 font-size: 11px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
-                background: {_FUSION_BG_HOVER};
                 border-color: {_accent()};
                 color: {_accent()};
             }}
@@ -308,15 +246,12 @@ class InspectorPanel(QDockWidget):
         name = os.path.basename(self._asset_path)
         ext = os.path.splitext(name)[1].lower()
         title = QLabel(f"<b>{name}</b>")
-        title.setStyleSheet(f"color: {_FUSION_TEXT_BRIGHT}; padding: 4px 0; font-size: 12px;")
         self._add_asset_widget(title)
         info = QLabel(f"Path: {self._asset_path}")
-        info.setStyleSheet(f"color: {_FUSION_TEXT_DIM}; font-size: 10px;")
         info.setWordWrap(True)
         self._add_asset_widget(info)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_FUSION_BORDER};")
         self._add_asset_widget(sep)
         if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
             self._build_mesh_import_settings()
@@ -328,19 +263,16 @@ class InspectorPanel(QDockWidget):
             self._build_material_editor()
         else:
             lbl = QLabel("No import settings for this file type.")
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT_DIM};")
             self._add_asset_widget(lbl)
         self._updating = False
 
     def _build_labeled_field(self, label: str, widget: QWidget):
         row = QWidget()
-        row.setStyleSheet(f"background: transparent;")
         rl = QHBoxLayout(row)
         rl.setContentsMargins(0, 2, 0, 2)
         rl.setSpacing(4)
         lbl = QLabel(label)
         lbl.setFixedWidth(scale(120))
-        lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
         rl.addWidget(lbl)
         rl.addWidget(widget)
         self._add_asset_widget(row)
@@ -548,7 +480,6 @@ class InspectorPanel(QDockWidget):
         shader_rl.setContentsMargins(0, 2, 0, 2)
         shader_lbl = QLabel("Shader")
         shader_lbl.setFixedWidth(scale(120))
-        shader_lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px;")
         shader_rl.addWidget(shader_lbl)
         def _on_shader_pick(p):
             mat.shader_path = p
@@ -568,7 +499,6 @@ class InspectorPanel(QDockWidget):
                 self._add_shader_property_widget(sp, props, _save, _update_preview)
             if tex_props:
                 sep = QLabel("<b>Textures</b>")
-                sep.setStyleSheet(f"color: {_FUSION_TEXT}; padding: 4px 0; font-size: 11px;")
                 self._add_asset_widget(sep)
                 for sp in tex_props:
                     self._add_shader_property_widget(sp, props, _save, _update_preview)
@@ -587,7 +517,6 @@ class InspectorPanel(QDockWidget):
             for key, cfg in known_keys.items():
                 if cfg["widget"] == "texture" and not tex_seen:
                     sep = QLabel("<b>Textures</b>")
-                    sep.setStyleSheet(f"color: {_FUSION_TEXT}; padding: 4px 0; font-size: 11px;")
                     self._add_asset_widget(sep)
                     tex_seen = True
                 self._add_fallback_widget(key, cfg, props, _save, _update_preview)
@@ -603,10 +532,8 @@ class InspectorPanel(QDockWidget):
             row = QWidget()
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
-            row.setStyleSheet("background: transparent;")
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             def _on_pick(p):
                 props[key] = p
@@ -617,12 +544,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif prop_type == "Color":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             from editor.color_picker import ColorLineEdit
             cl = ColorLineEdit(props.get(key, [1.0, 1.0, 1.0, 1.0]))
@@ -635,12 +560,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif prop_type == "Range":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             sb = QDoubleSpinBox()
             sb.setRange(sp.range_min, sp.range_max)
@@ -655,12 +578,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif prop_type in ("Float", "Int"):
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             if prop_type == "Int":
                 sb = QSpinBox()
@@ -679,12 +600,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif prop_type == "Gradient":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             from editor.gradient_editor import GradientLineEdit
             gle = GradientLineEdit(props.get(key, None))
@@ -703,12 +622,10 @@ class InspectorPanel(QDockWidget):
         widget_type = cfg["widget"]
         if widget_type == "texture":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             def _on_pick(p, _key=key):
                 props[_key] = p
@@ -719,12 +636,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif widget_type == "color":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             from editor.color_picker import ColorLineEdit
             cl = ColorLineEdit(props.get(key, [1.0, 1.0, 1.0, 1.0]))
@@ -737,12 +652,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif widget_type == "slider":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             sb = QDoubleSpinBox()
             sb.setRange(cfg.get("min", 0.0), cfg.get("max", 1.0))
@@ -757,12 +670,10 @@ class InspectorPanel(QDockWidget):
             self._add_asset_widget(row)
         elif widget_type == "gradient":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
             lbl.setFixedWidth(scale(120))
-            lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
             rl.addWidget(lbl)
             from editor.gradient_editor import GradientLineEdit
             gle = GradientLineEdit(props.get(key, None))
@@ -815,12 +726,12 @@ class InspectorPanel(QDockWidget):
         has_exit_cb = QCheckBox("Has Exit Time")
         has_exit_cb.setChecked(trans.has_exit_time)
         has_exit_cb.toggled.connect(lambda v: setattr(trans, 'has_exit_time', v))
-        has_exit_cb.setStyleSheet("color: #ccc; font-size: 10px;")
+        has_exit_cb.setStyleSheet("font-size: 10px;")
         self._content_layout.addWidget(has_exit_cb)
         fixed_dur_cb = QCheckBox("Fixed Duration")
         fixed_dur_cb.setChecked(trans.has_fixed_duration)
         fixed_dur_cb.toggled.connect(lambda v: setattr(trans, 'has_fixed_duration', v))
-        fixed_dur_cb.setStyleSheet("color: #ccc; font-size: 10px;")
+        fixed_dur_cb.setStyleSheet("font-size: 10px;")
         self._content_layout.addWidget(fixed_dur_cb)
         self._build_section_title("Conditions")
         for cond in trans.conditions:
@@ -877,16 +788,13 @@ class InspectorPanel(QDockWidget):
 
     def _build_section_title(self, text: str):
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold; padding: 4px 0;")
         self._content_layout.addWidget(lbl)
 
     def _animator_input_style(self) -> str:
-        return f"background: {_FUSION_BG_INPUT}; color: {_FUSION_TEXT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 4px; font-size: 10px;"
+        return ""
 
     def _animator_btn_style(self) -> str:
-        return (f"QPushButton {{ background: #3a3a3a; color: {_FUSION_TEXT}; border: 1px solid #555; "
-                f"border-radius: 3px; font-size: 10px; padding: 2px 8px; }} "
-                f"QPushButton:hover {{ background: #4a4a4a; }}")
+        return ""
 
     def _rebuild(self):
         self._content_widget.setVisible(False)

@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTextEdit
 from PyQt6.QtGui import QFont, QColor
-from editor.inspector.constants import _FUSION_BG, _FUSION_BORDER, _FUSION_TEXT_DIM
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -23,19 +22,17 @@ class SourceViewerDialog(QDialog):
         if not os.path.isabs(file_path):
             abs_path = os.path.join(_PROJECT_ROOT, file_path)
         path_label = QLabel(f"  {abs_path} (line {line_number})")
-        path_label.setStyleSheet(f"color: {_FUSION_TEXT_DIM}; font-size: 10px; padding: 2px 0;")
+        path_label.setStyleSheet("font-size: 10px; padding: 2px 0;")
         layout.addWidget(path_label)
         self._text_edit = QTextEdit()
         self._text_edit.setReadOnly(True)
         self._text_edit.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
-        self._text_edit.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {_FUSION_BG};
-                color: #d4d4d4;
+        self._text_edit.setStyleSheet("""
+            QTextEdit {
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 12px;
-                border: 1px solid {_FUSION_BORDER};
-            }}
+                border: 1px solid;
+            }
         """)
         try:
             if os.path.exists(abs_path):

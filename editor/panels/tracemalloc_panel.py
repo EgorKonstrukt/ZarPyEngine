@@ -31,6 +31,7 @@ class TracemallocPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.setMinimumSize(200, 150)
 
         root = QWidget()
         self.setWidget(root)
@@ -74,7 +75,7 @@ class TracemallocPanel(QDockWidget):
         trace_layout.addLayout(btn_row)
 
         self._trace_status = QLabel("tracemalloc not started")
-        self._trace_status.setStyleSheet("font-family: monospace; color: #888;")
+        self._trace_status.setStyleSheet("font-family: monospace;")
         trace_layout.addWidget(self._trace_status)
 
         self._trace_tree = QTreeWidget()
@@ -108,13 +109,13 @@ class TracemallocPanel(QDockWidget):
         self._btn_analyze.clicked.connect(self._on_analyze)
         analysis_btn_row.addWidget(self._btn_analyze)
         self._analysis_status = QLabel("press Run Analysis to sample garbage")
-        self._analysis_status.setStyleSheet("font-family: monospace; color: #888;")
+        self._analysis_status.setStyleSheet("font-family: monospace;")
         analysis_btn_row.addWidget(self._analysis_status, 1)
         analysis_layout.addLayout(analysis_btn_row)
         self._analysis_text = QPlainTextEdit()
         self._analysis_text.setReadOnly(True)
         self._analysis_text.setMaximumBlockCount(200)
-        self._analysis_text.setStyleSheet("font-family: monospace; font-size: 9px; color: #ccc; background: #1e1e1e;")
+        self._analysis_text.setStyleSheet("font-family: monospace; font-size: 9px;")
         analysis_layout.addWidget(self._analysis_text)
 
         self._report_row = QHBoxLayout()
@@ -189,7 +190,6 @@ class TracemallocPanel(QDockWidget):
         p("=" * 72)
         p()
 
-        # в”Ђв”Ђ summary в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         p("в”Њв”Ђ GC")
         p(f"в”‚ collections:  gen0={counts[0]}  gen1={counts[1]}  gen2={counts[2]}  total={sum(counts)}")
         p(f"в”‚ thresholds:   gen0={thresh[0]}  gen1={thresh[1]}  gen2={thresh[2]}")

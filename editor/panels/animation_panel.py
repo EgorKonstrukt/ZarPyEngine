@@ -28,16 +28,6 @@ _ROW_HEIGHT = 22
 _LEFT_PANEL_WIDTH = 180
 _LABEL_WIDTH = 180
 
-_TICK_COLOR = QColor(60, 60, 60)
-_GRID_COLOR = QColor(50, 50, 50)
-_BG_COLOR = QColor(37, 37, 37)
-_CURVE_COLOR = QColor(90, 156, 245)
-_KEY_COLOR = QColor(255, 200, 80)
-_KEY_SEL_COLOR = QColor(255, 220, 120)
-_HEADER_BG = QColor(45, 45, 45)
-_TEXT_COLOR = QColor(200, 200, 200)
-_TEXT_DIM = QColor(140, 140, 140)
-_ACCENT = QColor(90, 156, 245)
 
 
 class TimelineRuler(QWidget):
@@ -75,42 +65,42 @@ class TimelineRuler(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, _HEADER_BG)
-        p.fillRect(0, 0, _LABEL_WIDTH, h, QColor(40, 40, 40))
-        p.setPen(QPen(QColor(50, 50, 50), 1))
+        p.fillRect(0, 0, w, h, self.palette().window())
+        p.fillRect(0, 0, _LABEL_WIDTH, h, self.palette().window())
+        p.setPen(QPen(self.palette().mid(), 1))
         p.drawLine(QPointF(_LABEL_WIDTH, 0), QPointF(_LABEL_WIDTH, h))
         clip_len = self._clip.length if self._clip else 1.0
         total_w = clip_len * self._pixels_per_second
         major_interval = self._get_major_interval()
         minor_interval = major_interval / 5.0
-        p.setPen(QPen(_TICK_COLOR, 1))
+        p.setPen(QPen(self.palette().mid(), 1))
         t = 0.0
         while t <= clip_len:
             x = _LABEL_WIDTH + t * self._pixels_per_second
             is_major = abs(t % major_interval) < 0.001
             is_minor = abs(t % minor_interval) < 0.001
             if is_major:
-                p.setPen(QPen(QColor(100, 100, 100), 1))
+                p.setPen(QPen(self.palette().mid(), 1))
                 p.drawLine(QPointF(x, 8), QPointF(x, h))
-                p.setPen(QPen(_TEXT_DIM, 1))
+                p.setPen(QPen(self.palette().placeholderText(), 1))
                 font = p.font()
                 font.setPointSize(8)
                 p.setFont(font)
                 p.drawText(QRectF(x + 3, 0, 50, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                            f"{t:.1f}s")
             elif is_minor:
-                p.setPen(QPen(_TICK_COLOR, 1))
+                p.setPen(QPen(self.palette().mid(), 1))
                 p.drawLine(QPointF(x, 14), QPointF(x, h))
             t += minor_interval
         cursor_x = _LABEL_WIDTH + self._current_time * self._pixels_per_second
-        p.setPen(QPen(_ACCENT, 2))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Highlight), 2))
         p.drawLine(QPointF(cursor_x, 0), QPointF(cursor_x, h))
         triangle = QPainterPath()
         triangle.moveTo(cursor_x - 5, h)
         triangle.lineTo(cursor_x + 5, h)
         triangle.lineTo(cursor_x, h - 8)
         triangle.closeSubpath()
-        p.fillPath(triangle, _ACCENT)
+        p.fillPath(triangle, self.palette().color(QPalette.ColorRole.Highlight))
 
     def _get_major_interval(self) -> float:
         raw = 50.0 / self._pixels_per_second
@@ -190,19 +180,19 @@ class Dopesheet(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         clip_len = self._clip.length if self._clip else 1.0
-        p.fillRect(0, 0, w, h, _BG_COLOR)
-        p.fillRect(0, 0, _LABEL_WIDTH, h, QColor(40, 40, 40))
-        p.setPen(QPen(QColor(50, 50, 50), 1))
+        p.fillRect(0, 0, w, h, self.palette().window())
+        p.fillRect(0, 0, _LABEL_WIDTH, h, self.palette().window())
+        p.setPen(QPen(self.palette().mid(), 1))
         p.drawLine(QPointF(_LABEL_WIDTH, 0), QPointF(_LABEL_WIDTH, h))
         total_w = clip_len * self._pixels_per_second
         for x in range(_LABEL_WIDTH, int(total_w) + _LABEL_WIDTH + 1, int(self._pixels_per_second)):
-            p.setPen(QPen(_GRID_COLOR, 1))
+            p.setPen(QPen(self.palette().mid(), 1))
             p.drawLine(QPointF(x, 0), QPointF(x, h))
         cursor_x = _LABEL_WIDTH + self._current_time * self._pixels_per_second
-        p.setPen(QPen(QColor(255, 100, 100, 80), 1))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Highlight), 1))
         p.drawLine(QPointF(cursor_x, 0), QPointF(cursor_x, h))
         if not self._clip:
-            p.setPen(_TEXT_DIM)
+            p.setPen(self.palette().placeholderText())
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No clip selected")
             p.end()
             return
@@ -214,15 +204,15 @@ class Dopesheet(QWidget):
     def _draw_curve_row(self, p: QPainter, path: str, curve: Curve, y: float):
         is_sel = path == self._selected_property
         if is_sel:
-            p.fillRect(0, y, _LABEL_WIDTH, _ROW_HEIGHT, QColor(55, 55, 65))
-        p.setPen(QPen(_TEXT_BRIGHT if is_sel else _TEXT_DIM, 1))
+            p.fillRect(0, y, _LABEL_WIDTH, _ROW_HEIGHT, self.palette().highlight().color())
+        p.setPen(QPen(self.palette().text() if is_sel else self.palette().placeholderText(), 1))
         fm = QFontMetrics(p.font())
         elided = fm.elidedText(path, Qt.TextElideMode.ElideRight, _LABEL_WIDTH - 8)
         p.drawText(QRectF(4, y, _LABEL_WIDTH - 8, _ROW_HEIGHT), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
         for k in curve.keys:
             kx = _LABEL_WIDTH + self._time_to_x(k.time)
             is_sel_key = (path, k) in self._selected_keys
-            color = _KEY_SEL_COLOR if is_sel_key else _KEY_COLOR
+            color = self.palette().color(QPalette.ColorRole.Highlight) if is_sel_key else self.palette().color(QPalette.ColorRole.Highlight)
             p.setPen(QPen(color, 1))
             p.setBrush(QBrush(color))
             p.drawRect(QRectF(kx - _KEYFRAME_SIZE / 2, y + _ROW_HEIGHT / 2 - _KEYFRAME_SIZE / 2,
@@ -337,24 +327,24 @@ class CurveEditorWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor(30, 30, 30))
-        p.setPen(QPen(QColor(60, 60, 60), 1))
+        p.fillRect(0, 0, w, h, self.palette().window())
+        p.setPen(QPen(self.palette().mid(), 1))
         p.drawRect(self._margin, self._margin, w - self._margin * 2, h - self._margin * 2)
         grid_x = self._view_rect.width() / 5.0
         grid_y = self._view_rect.height() / 5.0
         for i in range(1, 6):
             gx = self._margin + i * (w - self._margin * 2) / 5.0
-            p.setPen(QPen(_GRID_COLOR, 1))
+            p.setPen(QPen(self.palette().mid(), 1))
             p.drawLine(QPointF(gx, self._margin), QPointF(gx, h - self._margin))
         for i in range(1, 6):
             gy = self._margin + i * (h - self._margin * 2) / 5.0
-            p.setPen(QPen(_GRID_COLOR, 1))
+            p.setPen(QPen(self.palette().mid(), 1))
             p.drawLine(QPointF(self._margin, gy), QPointF(w - self._margin, gy))
-        p.setPen(QPen(QColor(80, 80, 80), 1))
+        p.setPen(QPen(self.palette().mid(), 1))
         zero_y = self._map_from_curve(QPointF(0, 0)).y()
         p.drawLine(QPointF(self._margin, zero_y), QPointF(w - self._margin, zero_y))
         if not self._curve or len(self._curve.keys) < 1:
-            p.setPen(_TEXT_DIM)
+            p.setPen(self.palette().placeholderText())
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"No keys for {self._path}" if self._path else "Select a property")
             p.end()
             return
@@ -370,23 +360,23 @@ class CurveEditorWidget(QWidget):
                 first = False
             else:
                 path.lineTo(pt)
-        p.setPen(QPen(_CURVE_COLOR, 2))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Highlight), 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
         for k in self._curve.keys:
             pt = self._map_from_curve(QPointF(k.time, k.value))
             is_sel = k is self._selected_key
-            color = _KEY_SEL_COLOR if is_sel else _KEY_COLOR
+            color = self.palette().color(QPalette.ColorRole.Highlight) if is_sel else self.palette().color(QPalette.ColorRole.Highlight)
             p.setPen(QPen(color, 1))
             p.setBrush(QBrush(color))
             p.drawEllipse(pt, 5, 5)
             if k.tangent_mode != TangentMode.CONSTANT:
                 in_pt = self._map_from_curve(QPointF(k.time - 0.3, k.value - k.in_tangent * 0.3))
                 out_pt = self._map_from_curve(QPointF(k.time + 0.3, k.value + k.out_tangent * 0.3))
-                p.setPen(QPen(QColor(180, 180, 180), 1))
+                p.setPen(QPen(self.palette().text(), 1))
                 p.drawLine(in_pt, pt)
                 p.drawLine(pt, out_pt)
-                p.setPen(QPen(QColor(180, 180, 180), 2))
+                p.setPen(QPen(self.palette().text(), 2))
                 p.drawEllipse(in_pt, 3, 3)
                 p.drawEllipse(out_pt, 3, 3)
 
@@ -460,6 +450,7 @@ class AnimationPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.setMinimumSize(300, 200)
         self._build_ui()
         self._play_timer = QTimer(self)
         self._play_timer.timeout.connect(self._tick)
@@ -496,29 +487,24 @@ class AnimationPanel(QDockWidget):
 
     def _build_toolbar(self) -> QWidget:
         tb = QWidget()
-        tb.setStyleSheet(f"background: #2d2d2d; border-bottom: 1px solid #3a3a3a;")
         layout = QHBoxLayout(tb)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
         self._play_btn = QPushButton("\u25b6")
         self._play_btn.setFixedSize(*scale_xy(26, 22))
         self._play_btn.clicked.connect(self._toggle_play)
-        self._play_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._play_btn)
         self._stop_btn = QPushButton("\u25a0")
         self._stop_btn.setFixedSize(*scale_xy(26, 22))
         self._stop_btn.clicked.connect(self._stop_playback)
-        self._stop_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._stop_btn)
         self._record_btn = QPushButton("\u25cf")
         self._record_btn.setFixedSize(*scale_xy(26, 22))
-        self._record_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._record_btn)
         self._key_btn = QPushButton("K")
         self._key_btn.setFixedSize(*scale_xy(26, 22))
         self._key_btn.setToolTip("Add Keyframe")
         self._key_btn.clicked.connect(self._add_keyframe)
-        self._key_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._key_btn)
         self._time_spin = QDoubleSpinBox()
         self._time_spin.setRange(0.0, 99999.0)
@@ -527,28 +513,22 @@ class AnimationPanel(QDockWidget):
         self._time_spin.setValue(0.0)
         self._time_spin.valueChanged.connect(self._on_spin_time)
         self._time_spin.setFixedWidth(scale(70))
-        self._time_spin.setStyleSheet(f"background: #1e1e1e; color: {_to_hex(_TEXT_COLOR)}; border: 1px solid #444; border-radius: 3px; padding: 1px 4px;")
+        self._time_spin.setStyleSheet("border: 1px solid; border-radius: 3px; padding: 1px 4px;")
         layout.addWidget(self._time_spin)
         self._add_prop_btn = QPushButton("+ Add Property")
         self._add_prop_btn.setFixedHeight(scale(22))
-        self._add_prop_btn.setStyleSheet(self._btn_style())
         self._add_prop_btn.clicked.connect(self._add_property)
         layout.addWidget(self._add_prop_btn)
         self._clip_combo = QComboBox()
         self._clip_combo.setMinimumWidth(150)
-        self._clip_combo.setStyleSheet(f"background: #1e1e1e; color: {_to_hex(_TEXT_COLOR)}; border: 1px solid #444; border-radius: 3px; padding: 1px 4px;")
+        self._clip_combo.setStyleSheet("border: 1px solid; border-radius: 3px; padding: 1px 4px;")
         layout.addWidget(self._clip_combo)
         layout.addStretch()
         return tb
 
     def _btn_style(self) -> str:
-        return (f"QPushButton {{ background: #3a3a3a; color: {_to_hex(_TEXT_COLOR)}; border: 1px solid #555; "
-                f"border-radius: 3px; font-size: 11px; }} "
-                f"QPushButton:hover {{ background: #4a4a4a; }} "
-                f"QPushButton:pressed {{ background: #555; }}")
+        return ""
 
-    def _to_hex(self, c: QColor) -> str:
-        return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"
 
     def set_entity(self, entity):
         self._entity = entity
@@ -731,6 +711,3 @@ class AnimationPanel(QDockWidget):
     def load_config(self, config):
         pass
 
-
-def _to_hex(c: QColor) -> str:
-    return f"#{c.red():02x}{c.green():02x}{c.blue():02x}"

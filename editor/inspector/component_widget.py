@@ -24,16 +24,13 @@ from core.components.animation.animator_controller import (
 )
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
 from core.config import get_project_config
-from editor.inspector.constants import (_FUSION_BG, _FUSION_BG_CARD, _FUSION_BG_HEADER, _FUSION_BG_HOVER,
-    _FUSION_BG_INPUT, _FUSION_BORDER, _FUSION_BORDER_LIGHT, _FUSION_TEXT, _FUSION_TEXT_DIM,
-    _FUSION_TEXT_BRIGHT, _FUSION_TEXT_DISABLED, _FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED,
-    _FUSION_ACCENT_ORANGE, _FUSION_ACCENT_YELLOW, _FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS,
-    _XYZ_COLORS, _COMPONENT_MIME, _accent, _checkbox_style)
+from editor.inspector.constants import (_FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED,
+    _FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS,
+    _COMPONENT_MIME, _accent)
 from editor.inspector.helpers import (make_spinbox, make_clickable_label, get_component_icon_pixmap,
     get_component_source_path, get_property_line_number, collapse_value, make_resource_picker,
     make_gameobject_picker, make_resource_type_picker, make_asset_picker, make_vec2_row,
-    make_vec3_row, make_vec4_row, make_vec2_slider_row, make_vec3_slider_row, _FUSION_SPINBOX_STYLE)
-
+    make_vec3_row, make_vec4_row, make_vec2_slider_row, make_vec3_slider_row)
 
 class ComponentWidget(QWidget):
     remove_requested = pyqtSignal(str, str)
@@ -51,35 +48,20 @@ class ComponentWidget(QWidget):
         self._collapsed = False
         self.setStyleSheet(f"""
             ComponentWidget {{
-                background: {_FUSION_BG_CARD};
-                border: 1px solid {_FUSION_BORDER};
                 border-radius: {_FUSION_CARD_RADIUS};
             }}
         """)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        self._header_bg_style = f"""
-            #compHeader {{
-                background-color: {_FUSION_BG_HEADER};
-                border-top-left-radius: {_FUSION_CARD_RADIUS};
-                border-top-right-radius: {_FUSION_CARD_RADIUS};
-                border-bottom: 1px solid {_FUSION_BORDER};
-            }}
-        """
         self._header_widget = QWidget()
         self._header_widget.setObjectName("compHeader")
-        self._header_widget.setStyleSheet(self._header_bg_style)
         header_layout = QHBoxLayout(self._header_widget)
         header_layout.setContentsMargins(6, 3, 6, 3)
         header_layout.setSpacing(4)
         self._collapse_btn = QPushButton("\u25bc")
         self._collapse_btn.setFixedSize(*scale_xy(14, 14))
         self._collapse_btn.setFlat(True)
-        self._collapse_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_TEXT_DIM}; font-size: 8px; border: none; background: transparent; }}
-            QPushButton:hover {{ color: {_FUSION_TEXT_BRIGHT}; }}
-        """)
         self._collapse_btn.clicked.connect(self._toggle_collapse)
         header_layout.addWidget(self._collapse_btn)
         self._icon_label = QLabel()
@@ -91,7 +73,6 @@ class ComponentWidget(QWidget):
         self._icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         header_layout.addWidget(self._icon_label)
         self._name_label = QLabel(type(component).__name__)
-        self._name_label.setStyleSheet(f"color: {_FUSION_TEXT_BRIGHT}; font-size: 11px; font-weight: 600; background: transparent;")
         self._name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         header_layout.addWidget(self._name_label, 1)
         self._drag_start_pos = None
@@ -103,21 +84,11 @@ class ComponentWidget(QWidget):
         self._move_up_btn = QPushButton("^")
         self._move_up_btn.setFixedSize(*scale_xy(16, 16))
         self._move_up_btn.setFlat(True)
-        self._move_up_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_TEXT_DIM}; font-size: 9px; font-weight: bold; border: none; background: transparent; }}
-            QPushButton:hover {{ color: {_FUSION_TEXT_BRIGHT}; background: {_FUSION_BG_HOVER}; border-radius: 2px; }}
-            QPushButton:disabled {{ color: #444; }}
-        """)
         self._move_up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._component_key))
         header_layout.addWidget(self._move_up_btn)
         self._move_down_btn = QPushButton("v")
         self._move_down_btn.setFixedSize(*scale_xy(16, 16))
         self._move_down_btn.setFlat(True)
-        self._move_down_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_TEXT_DIM}; font-size: 9px; font-weight: bold; border: none; background: transparent; }}
-            QPushButton:hover {{ color: {_FUSION_TEXT_BRIGHT}; background: {_FUSION_BG_HOVER}; border-radius: 2px; }}
-            QPushButton:disabled {{ color: #444; }}
-        """)
         self._move_down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._component_key))
         header_layout.addWidget(self._move_down_btn)
         self._header_widget.installEventFilter(self)
@@ -126,7 +97,6 @@ class ComponentWidget(QWidget):
         self._content_widget.setObjectName("compBody")
         self._content_widget.setStyleSheet(f"""
             #compBody {{
-                background: {_FUSION_BG_CARD};
                 border-bottom-left-radius: {_FUSION_CARD_RADIUS};
                 border-bottom-right-radius: {_FUSION_CARD_RADIUS};
             }}
@@ -297,15 +267,7 @@ class ComponentWidget(QWidget):
                 btn.setText(f"{', '.join(selected[:3])}... (+{len(selected)-3})")
 
     def _update_appearance(self):
-        enabled = self._component.enabled
-        disabled_border = f"1px solid {_FUSION_BORDER};"
-        header_color = f"background-color: {_FUSION_BG_HEADER if enabled else '#222222'};"
-        self._header_widget.setStyleSheet(
-            f"#compHeader {{ {header_color} border-top-left-radius: {_FUSION_CARD_RADIUS}; border-top-right-radius: {_FUSION_CARD_RADIUS}; border-bottom: {disabled_border} }}"
-        )
-        name_color = _FUSION_TEXT_BRIGHT if enabled else _FUSION_TEXT_DISABLED
-        self._name_label.setStyleSheet(f"color: {name_color}; font-size: 11px; font-weight: 600; background: transparent;")
-        self._content_widget.setEnabled(enabled)
+        self._content_widget.setEnabled(self._component.enabled)
 
     def _on_enabled_toggled(self, checked: bool):
         old = not checked
@@ -318,29 +280,6 @@ class ComponentWidget(QWidget):
 
     def _show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background: {_FUSION_BG_CARD};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 4px;
-            }}
-            QMenu::item {{
-                color: {_FUSION_TEXT};
-                padding: 4px 20px;
-                border-radius: 2px;
-                font-size: 11px;
-            }}
-            QMenu::item:selected {{
-                background: {_FUSION_BG_HOVER};
-                color: {_FUSION_TEXT_BRIGHT};
-            }}
-            QMenu::separator {{
-                height: 1px;
-                background: {_FUSION_BORDER};
-                margin: 4px 8px;
-            }}
-        """)
         from editor.inspector.panel import InspectorPanel
         copy_comp = QAction("Copy Component", self)
         copy_comp.triggered.connect(self._copy_component)
@@ -440,7 +379,6 @@ class ComponentWidget(QWidget):
         rl.setSpacing(4)
         lbl = QLabel(label)
         lbl.setFixedWidth(scale(100))
-        lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
         rl.addWidget(lbl)
         rl.addWidget(widget, 1)
         if prop_name:
@@ -464,7 +402,6 @@ class ComponentWidget(QWidget):
                     font-weight: 600;
                     font-size: 11px;
                     padding: 5px 0 3px 0;
-                    border-bottom: 1px solid {_FUSION_BORDER};
                 }}
             """)
             self._layout.addWidget(header)
@@ -478,7 +415,6 @@ class ComponentWidget(QWidget):
         elif field.field_type.value == "int":
             if field.readonly:
                 lbl = QLabel(str(value))
-                lbl.setStyleSheet(f"color: {_FUSION_TEXT_DIM}; padding: 4px 8px; font-size: 11px;")
                 self._add_field(field.label, lbl)
             else:
                 sb = QSpinBox()
@@ -487,13 +423,11 @@ class ComponentWidget(QWidget):
                 sb.setRange(min_i, max_i)
                 sb.setValue(max(min_i, min(max_i, int(value))))
                 sb.setMinimumWidth(60)
-                sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
                 comp_cls = type(c)
                 sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
                 self._add_field(field.label, sb, prop_name, field.toggle_field)
         elif field.field_type.value == "slider":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(4)
@@ -506,7 +440,7 @@ class ComponentWidget(QWidget):
                 QSlider::groove:horizontal {{
                     border: none;
                     height: 4px;
-                    background: {_FUSION_BORDER};
+                    background: {self.palette().mid().name()};
                     border-radius: 2px;
                 }}
                 QSlider::handle:horizontal {{
@@ -547,7 +481,6 @@ class ComponentWidget(QWidget):
             self._add_field(field.label, row, prop_name, field.toggle_field)
         elif field.field_type.value == "int_slider":
             row = QWidget()
-            row.setStyleSheet("background: transparent;")
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.setSpacing(4)
@@ -561,7 +494,6 @@ class ComponentWidget(QWidget):
                 QSlider::groove:horizontal {{
                     border: none;
                     height: 4px;
-                    background: {_FUSION_BORDER};
                     border-radius: 2px;
                 }}
                 QSlider::handle:horizontal {{
@@ -584,7 +516,6 @@ class ComponentWidget(QWidget):
             sb.setRange(min_i, max_i)
             sb.setValue(max(min_i, min(max_i, int(value))))
             sb.setMinimumWidth(50)
-            sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
             comp_cls = type(c)
             sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
             _updating_int = [False]
@@ -606,7 +537,7 @@ class ComponentWidget(QWidget):
         elif field.field_type.value == "bool":
             cb = QCheckBox()
             cb.setChecked(value)
-            cb.setStyleSheet(_checkbox_style())
+            
             comp_cls = type(c)
             cb.toggled.connect(self._undo_setter_all(comp_cls, prop_name))
             self._add_field(field.label, cb, prop_name, field.toggle_field)
@@ -614,57 +545,43 @@ class ComponentWidget(QWidget):
         elif field.field_type.value == "button":
             btn = QPushButton(field.label)
             btn.setStyleSheet(f"""
-                QPushButton {{
-                    color: {_FUSION_TEXT};
-                    background: {_FUSION_BG_INPUT};
-                    border: 1px solid {_FUSION_BORDER_LIGHT};
-                    border-radius: {_FUSION_INPUT_RADIUS};
-                    padding: 4px 12px;
-                    font-size: 11px;
-                }}
                 QPushButton:hover {{
-                    background: {_FUSION_BG_HOVER};
-                    color: {_FUSION_TEXT_BRIGHT};
                     border-color: {_accent()};
                 }}
             """)
             btn.clicked.connect(lambda: getattr(c, prop_name, lambda: None)())
             self._add_field("", btn)
         elif field.field_type.value == "color":
-            from PyQt6.QtWidgets import QColorDialog
-            color_btn = QPushButton()
-            color_btn.setFixedSize(*scale_xy(50, 20))
-            qcolor = QColor()
+            from editor.color_picker import ColorLineEdit
+            initial = None
             if isinstance(value, (list, tuple)):
-                qcolor.setRgbF(*value[:3])
+                initial = QColor.fromRgbF(*value[:4])
             elif isinstance(value, Vec3):
-                qcolor.setRgbF(value.x, value.y, value.z)
+                initial = QColor.fromRgbF(value.x, value.y, value.z)
             elif isinstance(value, Vec4):
-                qcolor.setRgbF(value.x, value.y, value.z, value.w)
-            def _on_click(*_):
-                col = QColorDialog.getColor(qcolor, self, f"Pick {field.label}")
-                if col.isValid():
-                    rgb = [col.redF(), col.greenF(), col.blueF()]
-                    if isinstance(value, Vec4):
-                        rgb.append(1.0)
-                    if isinstance(value, Vec3):
-                        setattr(c, prop_name, Vec3(*rgb))
-                    elif isinstance(value, Vec4):
-                        setattr(c, prop_name, Vec4(*rgb))
-                    elif isinstance(value, list):
-                        setattr(c, prop_name, rgb)
-                    elif isinstance(value, tuple):
-                        setattr(c, prop_name, tuple(rgb))
-                    import json, os
-                    qss = f"background: rgba({col.red()}, {col.green()}, {col.blue()}, 255); border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: {_FUSION_INPUT_RADIUS};"
-                    color_btn.setStyleSheet(qss)
-                    get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, rgb))
-            qss = f"background: rgba({int(qcolor.redF()*255)}, {int(qcolor.greenF()*255)}, {int(qcolor.blueF()*255)}, 255); border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: {_FUSION_INPUT_RADIUS};"
-            color_btn.setStyleSheet(qss)
-            color_btn.clicked.connect(_on_click)
-            self._add_field(field.label, color_btn, prop_name, field.toggle_field)
+                initial = QColor.fromRgbF(value.x, value.y, value.z, value.w)
+            elif isinstance(value, QColor):
+                initial = value
+            color_edit = ColorLineEdit(initial)
+            comp_cls = type(c)
+            def _on_color_changed(col, _pn=prop_name, _val=value, _cls=comp_cls):
+                rgb = [col.redF(), col.greenF(), col.blueF()]
+                if isinstance(_val, Vec4):
+                    rgb.append(col.alphaF())
+                if isinstance(_val, Vec3):
+                    setattr(c, _pn, Vec3(*rgb))
+                elif isinstance(_val, Vec4):
+                    setattr(c, _pn, Vec4(*rgb))
+                elif isinstance(_val, list):
+                    setattr(c, _pn, rgb)
+                elif isinstance(_val, tuple):
+                    setattr(c, _pn, tuple(rgb))
+                elif isinstance(_val, QColor):
+                    setattr(c, _pn, col)
+                get_history().execute(SetComponentCommand(self._entity, _cls, _pn, _val, rgb))
+            color_edit.colorChanged.connect(_on_color_changed)
+            self._add_field(field.label, color_edit, prop_name, field.toggle_field)
         elif field.field_type.value == "enum":
-            from PyQt6.QtWidgets import QColorDialog
             combo = QComboBox()
             options = field.enum_options or []
             for opt in options:
@@ -726,9 +643,6 @@ class ComponentWidget(QWidget):
                 te.setFixedHeight(scale(60))
                 te.setStyleSheet(f"""
                     QPlainTextEdit {{
-                        background: {_FUSION_BG_INPUT};
-                        color: {_FUSION_TEXT_BRIGHT};
-                        border: 1px solid {_FUSION_BORDER};
                         border-radius: {_FUSION_INPUT_RADIUS};
                         padding: 2px 4px;
                         font-size: 11px;
@@ -744,9 +658,6 @@ class ComponentWidget(QWidget):
                 te.setText(str(value) if value else "")
                 te.setStyleSheet(f"""
                     QLineEdit {{
-                        background: {_FUSION_BG_INPUT};
-                        color: {_FUSION_TEXT_BRIGHT};
-                        border: 1px solid {_FUSION_BORDER};
                         border-radius: {_FUSION_INPUT_RADIUS};
                         padding: 2px 4px;
                         font-size: 11px;
@@ -792,29 +703,17 @@ class ComponentWidget(QWidget):
             btn = QPushButton("Everything")
             btn.setStyleSheet(f"""
                 QPushButton {{
-                    color: {_FUSION_TEXT};
-                    background: {_FUSION_BG_INPUT};
-                    border: 1px solid {_FUSION_BORDER};
                     border-radius: {_FUSION_INPUT_RADIUS};
                     padding: 2px 6px;
                     font-size: 10px;
                     text-align: left;
-                }}
-                QPushButton:hover {{
-                    background: {_FUSION_BG_HOVER};
-                    color: {_FUSION_TEXT_BRIGHT};
                 }}
             """)
             btn.setMinimumHeight(22)
             cfg = get_project_config()
             layer_names = cfg.get("physics.layer_names", DEFAULT_LAYER_NAMES) if cfg else DEFAULT_LAYER_NAMES
             menu = QMenu(self)
-            menu.setStyleSheet(f"""
-                QMenu {{ background: {_FUSION_BG_CARD}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 4px; }}
-                QMenu::item {{ color: {_FUSION_TEXT}; padding: 4px 16px; border-radius: 2px; font-size: 11px; }}
-                QMenu::item:selected {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
-                QMenu::indicator {{ width: 14px; height: 14px; }}
-            """)
+
             all_act = menu.addAction("Everything")
             all_act.setCheckable(True)
             all_act.setChecked(True)
@@ -833,6 +732,134 @@ class ComponentWidget(QWidget):
             _mask = int(getattr(self._component, prop_name))
             self._update_layer_mask_text(btn, _mask, layer_names)
             self._add_field(field.label, btn, prop_name, field.toggle_field)
+        elif field.field_type.value == "vec4":
+            w, sbs = make_vec4_row(field.label, value, lambda: None)
+            comp_cls = type(c)
+            for i, sb in enumerate(sbs):
+                def make_setter(idx):
+                    def setter(v):
+                        vec = getattr(c, prop_name)
+                        lst = [vec.x, vec.y, vec.z, vec.w]
+                        lst[idx] = v
+                        setattr(c, prop_name, type(vec)(*lst))
+                    return setter
+                sb.valueChanged.connect(make_setter(i))
+            self._layout.addWidget(w)
+        elif field.field_type.value == "keybinding":
+            te = QLineEdit()
+            te.setText(str(value) if value else "")
+            te.setStyleSheet(f"""
+                QLineEdit {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 4px;
+                    font-size: 11px;
+                    selection-background-color: {_accent()};
+                }}
+                QLineEdit:focus {{ border-color: {_accent()}; }}
+            """)
+            te.textChanged.connect(lambda: setattr(c, prop_name, te.text()))
+            comp_cls = type(c)
+            te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
+            self._add_field(field.label, te, prop_name, field.toggle_field)
+        elif field.field_type.value == "vec2_slider":
+            w, sbs = make_vec2_slider_row(field.label, value, lambda: None, field.min_val, field.max_val)
+            comp_cls = type(c)
+            for i, sb in enumerate(sbs):
+                def make_setter(idx):
+                    def setter(v):
+                        vec = getattr(c, prop_name)
+                        lst = [vec.x, vec.y]
+                        lst[idx] = v
+                        setattr(c, prop_name, type(vec)(*lst))
+                    return setter
+                sb.valueChanged.connect(make_setter(i))
+            self._layout.addWidget(w)
+        elif field.field_type.value == "vec3_slider":
+            w, sbs = make_vec3_slider_row(field.label, value, lambda: None, field.min_val, field.max_val)
+            comp_cls = type(c)
+            for i, sb in enumerate(sbs):
+                def make_setter(idx):
+                    def setter(v):
+                        vec = getattr(c, prop_name)
+                        lst = [vec.x, vec.y, vec.z]
+                        lst[idx] = v
+                        setattr(c, prop_name, type(vec)(*lst))
+                    return setter
+                sb.valueChanged.connect(make_setter(i))
+            self._layout.addWidget(w)
+        elif field.field_type.value == "gradient":
+            grad_preview = QPushButton()
+            grad_preview.setFixedHeight(22)
+            grad_preview.setMinimumWidth(120)
+            grad_preview.setToolTip("Click to edit gradient")
+            def _paint_gradient(btn, grad_data=value):
+                if not grad_data:
+                    return
+                stops = []
+                for pos, rgba in grad_data:
+                    r, g, b, a = (int(c * 255) for c in rgba[:4])
+                    stops.append((pos, f"rgba({r},{g},{b},{a})"))
+                if stops:
+                    css = ", ".join(f"stop:{p} {c}" for p, c in stops)
+                    btn.setStyleSheet(
+                        f"QPushButton {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, {css}); "
+                        f"border-radius: {_FUSION_INPUT_RADIUS}; border: 1px solid; }}"
+                    )
+            _paint_gradient(grad_preview)
+            def _open_gradient_editor():
+                from editor.gradient_editor import GradientEditorDialog
+                dlg = GradientEditorDialog(value, "Edit Gradient", self)
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    new_gradient = dlg.get_stops()
+                    setattr(c, prop_name, new_gradient)
+                    _paint_gradient(grad_preview, new_gradient)
+                    get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, new_gradient))
+            grad_preview.clicked.connect(_open_gradient_editor)
+            self._add_field(field.label, grad_preview, prop_name, field.toggle_field)
+        elif field.field_type.value == "resource_path":
+            pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter(prop_name))
+            self._add_field(field.label, pw, prop_name, field.toggle_field)
+        elif field.field_type.value == "string":
+            te = QLineEdit()
+            te.setText(str(value) if value else "")
+            te.setStyleSheet(f"""
+                QLineEdit {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 4px;
+                    font-size: 11px;
+                    selection-background-color: {_accent()};
+                }}
+                QLineEdit:focus {{ border-color: {_accent()}; }}
+            """)
+            te.textChanged.connect(lambda: setattr(c, prop_name, te.text()))
+            comp_cls = type(c)
+            te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
+            self._add_field(field.label, te, prop_name, field.toggle_field)
+        elif field.field_type.value == "textarea":
+            te = QPlainTextEdit()
+            te.setPlainText(str(value) if value else "")
+            te.setFixedHeight(scale(60))
+            te.setStyleSheet(f"""
+                QPlainTextEdit {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 4px;
+                    font-size: 11px;
+                    selection-background-color: {_accent()};
+                }}
+                QPlainTextEdit:focus {{ border-color: {_accent()}; }}
+            """)
+            te.textChanged.connect(lambda: setattr(c, prop_name, te.toPlainText()))
+            comp_cls = type(c)
+            te.focusOutEvent = lambda ev: (get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.toPlainText())), QPlainTextEdit.focusOutEvent(te, ev))
+            self._add_field(field.label, te, prop_name, field.toggle_field)
+        elif field.field_type.value == "layer":
+            sb = QSpinBox()
+            sb.setRange(0, 31)
+            sb.setValue(int(value) if value is not None else 0)
+            sb.setMinimumWidth(60)
+            comp_cls = type(c)
+            sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
+            self._add_field(field.label, sb, prop_name, field.toggle_field)
 
     def _build_list_field_standalone(self, field, prop_name):
         c = self._component
@@ -846,13 +873,12 @@ class ComponentWidget(QWidget):
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(2)
         lbl = QLabel(field.label)
-        lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
+        
         hl.addWidget(lbl)
         add_btn = QPushButton("+")
         add_btn.setFixedSize(*scale_xy(18, 18))
         add_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_ACCENT_GREEN}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-            QPushButton:hover {{ background: {_FUSION_BG_HOVER}; }}
+            QPushButton {{ color: {_FUSION_ACCENT_GREEN}; font-size: 10px; background: transparent; border: none; }}
         """)
         add_btn.clicked.connect(lambda: self._list_add_item(c, prop_name))
         hl.addStretch()
@@ -881,8 +907,7 @@ class ComponentWidget(QWidget):
         remove_btn = QPushButton("\u2212")
         remove_btn.setFixedSize(*scale_xy(16, 16))
         remove_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_ACCENT_RED}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-            QPushButton:hover {{ background: #3a1a1a; color: {_FUSION_ACCENT_RED}; }}
+            QPushButton {{ color: {_FUSION_ACCENT_RED}; font-size: 10px; background: transparent; border: none; }}
         """)
         remove_btn.clicked.connect(lambda: self._list_remove_item(self._component, prop_name, index))
         rl.addWidget(remove_btn)
@@ -912,7 +937,6 @@ class ComponentWidget(QWidget):
             sb = QSpinBox()
             sb.setRange(-2147483648, 2147483647)
             sb.setValue(val.get(ef.name, 0) if isinstance(val, dict) else 0)
-            sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
             def on_change(v, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
@@ -981,9 +1005,6 @@ class ComponentWidget(QWidget):
             te.setText(str(val.get(ef.name, "")) if isinstance(val, dict) else "")
             te.setStyleSheet(f"""
                 QLineEdit {{
-                    background: {_FUSION_BG_INPUT};
-                    color: {_FUSION_TEXT_BRIGHT};
-                    border: 1px solid {_FUSION_BORDER};
                     border-radius: {_FUSION_INPUT_RADIUS};
                     padding: 2px 4px; font-size: 11px;
                     selection-background-color: {_accent()};
@@ -1014,7 +1035,7 @@ class ComponentWidget(QWidget):
             rgb = val.get(ef.name, [1, 1, 1]) if isinstance(val, dict) else [1, 1, 1]
             qcolor = QColor()
             qcolor.setRgbF(*rgb[:3])
-            qss = f"background: rgba({int(qcolor.redF()*255)}, {int(qcolor.greenF()*255)}, {int(qcolor.blueF()*255)}, 255); border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: {_FUSION_INPUT_RADIUS};"
+            qss = f"background: rgba({int(qcolor.redF()*255)}, {int(qcolor.greenF()*255)}, {int(qcolor.blueF()*255)}, 255); border-radius: {_FUSION_INPUT_RADIUS};"
             color_btn.setStyleSheet(qss)
             def on_change(idx=index, pn=prop_name, fn=ef.name, boxes=sbs):
                 items = list(getattr(self._component, pn))
@@ -1103,7 +1124,6 @@ class ComponentWidget(QWidget):
             sb = QSpinBox()
             sb.setRange(-2147483648, 2147483647)
             sb.setValue(int(value or 0))
-            sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
             def _on_int_changed(v, n=prop_name):
                 setattr(comp, n, v)
             sb.valueChanged.connect(_on_int_changed)
@@ -1120,9 +1140,6 @@ class ComponentWidget(QWidget):
             te.setText(str(value or ""))
             te.setStyleSheet(f"""
                 QLineEdit {{
-                    background: {_FUSION_BG_INPUT};
-                    color: {_FUSION_TEXT_BRIGHT};
-                    border: 1px solid {_FUSION_BORDER};
                     border-radius: {_FUSION_INPUT_RADIUS};
                     padding: 2px 4px;
                     font-size: 11px;
@@ -1171,10 +1188,10 @@ class ComponentWidget(QWidget):
             from PyQt6.QtWidgets import QPushButton, QSizePolicy
             btn = QPushButton(value or f"Pick {field.label}")
             btn.setStyleSheet(f"""
-                QPushButton {{ color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT};
-                border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 2px 6px; font-size: 10px; text-align: left; }}
-                QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
+                QPushButton {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 6px; font-size: 10px; text-align: left;
+                }}
             """)
             btn.clicked.connect(_on_click_r)
             self._add_field(field.label or prop_name, btn)
@@ -1189,10 +1206,10 @@ class ComponentWidget(QWidget):
             from PyQt6.QtWidgets import QPushButton, QSizePolicy
             btn = QPushButton(value or f"Pick {field.label}")
             btn.setStyleSheet(f"""
-                QPushButton {{ color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT};
-                border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 2px 6px; font-size: 10px; text-align: left; }}
-                QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
+                QPushButton {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 6px; font-size: 10px; text-align: left;
+                }}
             """)
             btn.clicked.connect(_on_click_rt)
             self._add_field(field.label or prop_name, btn)

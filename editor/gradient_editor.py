@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
 from PyQt6.QtGui import (
-    QPainter, QPen, QColor, QLinearGradient, QPolygonF
+    QPainter, QPen, QColor, QLinearGradient, QPolygonF, QPalette
 )
 
 from editor.color_picker import ColorLineEdit
@@ -60,8 +60,8 @@ class GradientPreview(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         if not self._stops:
-            p.fillRect(0, 0, w, h, QColor(50, 50, 50))
-            p.setPen(QColor(120, 120, 120))
+            p.fillRect(0, 0, w, h, self.palette().color(QPalette.ColorRole.Window))
+            p.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "empty")
             p.end()
             return
@@ -71,7 +71,7 @@ class GradientPreview(QWidget):
             r, g, b, a = rgba
             grad.setColorAt(pos, QColor.fromRgbF(r, g, b, a))
         p.fillRect(0, 0, w, h, grad)
-        p.setPen(QPen(QColor(60, 60, 60), 1))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Window).darker(130), 1))
         p.drawRect(0, 0, w - 1, h - 1)
         p.end()
 
@@ -116,7 +116,7 @@ class _GradientBar(QWidget):
             r, g, b, a = rgba
             grad.setColorAt(pos, QColor.fromRgbF(r, g, b, a))
         p.fillRect(bar_rect, grad)
-        p.setPen(QPen(QColor(60, 60, 60), 1))
+        p.setPen(QPen(self.palette().color(QPalette.ColorRole.Window).darker(130), 1))
         p.drawRect(bar_rect)
 
         for i, (pos, rgba) in enumerate(self._stops):
@@ -130,7 +130,7 @@ class _GradientBar(QWidget):
                 (x - tri_size, tri_y),
                 (x + tri_size, tri_y),
             ]
-            p.setPen(QPen(Qt.GlobalColor.black if is_sel else QColor(80, 80, 80), 1))
+            p.setPen(QPen(Qt.GlobalColor.black if is_sel else self.palette().color(QPalette.ColorRole.Dark), 1))
             col = QColor.fromRgbF(r, g, b)
             p.setBrush(col)
             poly = QPolygonF()
@@ -246,24 +246,29 @@ class GradientEditorDialog(QDialog):
         self._stops = [list(s) for s in (stops or _default_gradient())]
         self._updating = False
 
-        self.setStyleSheet("""
-            QDialog { background: #1e1e1e; }
-            QLabel { color: #cccccc; font-size: 11px; background: transparent; }
-            QDoubleSpinBox {
-                background: #2a2a2a; color: #eeeeee;
-                border: 1px solid #3c3c3c; border-radius: 3px;
+        pal = self.palette()
+        bg = pal.color(QPalette.ColorRole.Window)
+        fg = pal.color(QPalette.ColorRole.WindowText)
+        mid = pal.color(QPalette.ColorRole.Mid)
+        highlight = pal.color(QPalette.ColorRole.Highlight)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {bg.name()}; }}
+            QLabel {{ color: {fg.name()}; font-size: 11px; background: transparent; }}
+            QDoubleSpinBox {{
+                background: {bg.name()}; color: {fg.name()};
+                border: 1px solid {mid.name()}; border-radius: 3px;
                 padding: 1px 2px 1px 4px; font-size: 11px; min-height: 20px;
-                selection-background-color: #5a9cf5;
-            }
-            QDoubleSpinBox:hover { border-color: #4a4a4a; }
-            QDoubleSpinBox:focus { border-color: #5a9cf5; }
-            QPushButton {
-                color: #cccccc; background: #2a2a2a;
-                border: 1px solid #4a4a4a; border-radius: 3px;
+                selection-background-color: {highlight.name()};
+            }}
+            QDoubleSpinBox:hover {{ border-color: {mid.name()}; }}
+            QDoubleSpinBox:focus {{ border-color: {highlight.name()}; }}
+            QPushButton {{
+                color: {fg.name()}; background: {bg.name()};
+                border: 1px solid {mid.name()}; border-radius: 3px;
                 padding: 4px 16px; font-size: 11px;
-            }
-            QPushButton:hover { background: #333333; color: #eeeeee; }
-            QScrollArea { border: none; background: transparent; }
+            }}
+            QPushButton:hover {{ background: {mid.name()}; color: {fg.name()}; }}
+            QScrollArea {{ border: none; background: transparent; }}
         """)
 
         layout = QVBoxLayout(self)

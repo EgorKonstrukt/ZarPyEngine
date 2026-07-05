@@ -89,7 +89,7 @@ class SceneViewport(QOpenGLWidget):
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumSize(100, 100)
+        self.setMinimumSize(40, 40)
         self.setContentsMargins(0, 0, 0, 0)
         self._area_selecting = False
         self._area_start = (0, 0)

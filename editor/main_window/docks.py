@@ -42,6 +42,7 @@ def _make_dock(mw, title: str, widget, obj_name: str = "") -> QDockWidget:
     if obj_name:
         dock.setObjectName(obj_name)
     dock.setWidget(widget)
+    dock.setMinimumSize(40, 40)
     dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
     dock.setFeatures(
         QDockWidget.DockWidgetFeature.DockWidgetMovable |
@@ -64,6 +65,7 @@ def setup_docks(mw):
 
 
 def register_dock(mw, dock: QDockWidget, area: Qt.DockWidgetArea) -> QDockWidget:
+    dock.setMinimumSize(40, 40)
     mw._docks.append(dock)
     return dock
 
@@ -85,7 +87,8 @@ def register_default_docks(mw):
     mw._viewport_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
     mw._viewport_dock.setContentsMargins(0, 0, 0, 0)
     mw._viewport_dock.setStyleSheet(
-        "QDockWidget { border: none; } QDockWidget::title { background: #2d2d2d; padding: 2px 6px; font-size: 11px; }")
+        "QDockWidget { border: none; } QDockWidget::title { padding: 2px 6px; font-size: 11px; }")
+    mw._viewport_dock.setMinimumSize(40, 40)
     register_dock(mw, mw._viewport_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._hierarchy = HierarchyPanel(mw._engine, mw)
     mw._hierarchy.load_config(get_global_config())

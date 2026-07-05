@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QSlider, QSpinBox, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPixmap, QPainter, QLinearGradient, QConicalGradient, QBrush, QPen, QImage
+from PyQt6.QtGui import QColor, QPixmap, QPainter, QLinearGradient, QConicalGradient, QBrush, QPen, QImage, QPalette
 
 
 def _hsv_to_rgb(h, s, v):
@@ -153,7 +153,7 @@ class _ColorWheelWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(grad))
         p.drawEllipse(int(cx - R_out), int(cy - R_out), int(R_out * 2), int(R_out * 2))
-        p.setBrush(QBrush(QColor(35, 35, 35)))
+        p.setBrush(QBrush(self.palette().color(QPalette.ColorRole.Window).darker(130)))
         p.drawEllipse(int(cx - R_in), int(cy - R_in), int(R_in * 2), int(R_in * 2))
         p.end()
         self._wheel_pixmap = pm
@@ -552,7 +552,7 @@ class ColorLineEdit(QWidget):
     def _update_swatch(self):
         r, g, b, a = self._color.red(), self._color.green(), self._color.blue(), self._color.alpha()
         self._preview.setStyleSheet(
-            f"background: rgba({r},{g},{b},{a/255}); border: 1px solid #555; border-radius: 3px;"
+            f"background: rgba({r},{g},{b},{a/255}); border-radius: 3px;"
         )
 
     def _open_dialog(self):

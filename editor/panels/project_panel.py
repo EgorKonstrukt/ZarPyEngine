@@ -10,17 +10,18 @@ import shutil
 import datetime
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                              QTreeWidget, QTreeWidgetItem, QPushButton,
-                              QLabel, QLineEdit, QMenu, QFileDialog, QSplitter,
-                              QListWidget, QListWidgetItem, QAbstractItemView,
-                              QToolButton, QSlider, QStyle, QFileIconProvider,
-                              QStackedWidget, QFrame, QHeaderView, QSizePolicy,
-                              QGraphicsDropShadowEffect, QStyledItemDelegate,
-                              QAbstractItemDelegate)
+                             QTreeWidget, QTreeWidgetItem, QPushButton,
+                             QLabel, QLineEdit, QMenu, QFileDialog, QSplitter,
+                             QListWidget, QListWidgetItem, QAbstractItemView,
+                             QToolButton, QSlider, QStyle, QFileIconProvider,
+                             QStackedWidget, QFrame, QHeaderView, QSizePolicy,
+                             QGraphicsDropShadowEffect, QStyledItemDelegate,
+                             QAbstractItemDelegate, QApplication)
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QMimeData, QByteArray, QSize, QFileInfo, QUrl, QTimer
 from PyQt6.QtGui import (QAction, QDrag, QIcon, QWheelEvent, QKeyEvent, QGuiApplication,
                           QShortcut, QKeySequence, QColor, QPainter, QPainterPath, QFont,
-                          QPen, QBrush, QPixmap, QFontMetrics)
+                          QPen, QBrush, QPixmap, QFontMetrics, QPalette)
+
 if TYPE_CHECKING:
     from core.engine import Engine
 from editor.resource_picker import _get_thumbnail, _format_size
@@ -30,188 +31,6 @@ from core.editor_scale import scale, scale_xy
 
 _file_clipboard: list[str] = []
 _clipboard_is_cut: bool = False
-
-_WIN10_BG = "#1e1e1e"
-_WIN10_PANEL = "#252526"
-_WIN10_TOOLBAR = "#2d2d2d"
-_WIN10_BORDER = "#3c3c3c"
-_WIN10_BORDER_LIGHT = "#4a4a4a"
-_WIN10_TEXT = "#cccccc"
-_WIN10_TEXT_DIM = "#888888"
-_WIN10_TEXT_BRIGHT = "#ffffff"
-_WIN10_ACCENT = "#4fc3f7"
-_WIN10_ACCENT_DIM = "#1a5276"
-_WIN10_HOVER = "#37373d"
-_WIN10_SELECTED = "#264f78"
-_WIN10_GROUP_HEADER = "#333333"
-_WIN10_SEARCH_BG = "#3c3c3c"
-_WIN10_ADDRESS_BG = "#2d2d2d"
-_WIN10_SCROLLBAR = "#424242"
-_WIN10_FOLDER_TREE_BG = "#252526"
-_WIN10_STATUSBAR_BG = "#007acc"
-
-_WIN10_STYLE = f"""
-QDockWidget {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT};
-}}
-QDockWidget::title {{
-    background: {_WIN10_TOOLBAR};
-    padding: 4px 8px;
-    font-size: 11px;
-    color: {_WIN10_TEXT};
-    border-bottom: 1px solid {_WIN10_BORDER};
-}}
-QWidget {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT};
-    font-size: 12px;
-}}
-QListWidget {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT};
-    border: none;
-    outline: none;
-    font-size: 12px;
-    padding: 2px;
-}}
-QListWidget::item {{
-    padding: 2px 4px;
-    border: 1px solid transparent;
-    border-radius: 2px;
-}}
-QListWidget::item:selected {{
-    background: {_WIN10_SELECTED};
-    color: {_WIN10_TEXT_BRIGHT};
-    border: 1px solid {_WIN10_ACCENT_DIM};
-}}
-QListWidget::item:hover:!selected {{
-    background: {_WIN10_HOVER};
-    border: 1px solid {_WIN10_BORDER};
-}}
-QTreeWidget {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT};
-    border: none;
-    outline: none;
-}}
-QTreeWidget::item {{
-    padding: 2px 4px;
-    border: 1px solid transparent;
-    border-radius: 2px;
-}}
-QTreeWidget::item:selected {{
-    background: {_WIN10_SELECTED};
-    color: {_WIN10_TEXT_BRIGHT};
-    border: 1px solid {_WIN10_ACCENT_DIM};
-}}
-QTreeWidget::item:hover:!selected {{
-    background: {_WIN10_HOVER};
-    border: 1px solid {_WIN10_BORDER};
-}}
-QTreeWidget::branch {{
-    background: transparent;
-}}
-QHeaderView::section {{
-    background: {_WIN10_TOOLBAR};
-    color: {_WIN10_TEXT};
-    border: none;
-    border-right: 1px solid {_WIN10_BORDER};
-    border-bottom: 2px solid {_WIN10_BORDER};
-    padding: 4px 8px;
-    font-size: 11px;
-    font-weight: normal;
-}}
-QHeaderView::section:hover {{
-    background: {_WIN10_HOVER};
-}}
-QHeaderView::section:pressed {{
-    background: #444;
-}}
-QScrollBar:vertical {{
-    background: transparent;
-    width: 10px;
-    margin: 0;
-}}
-QScrollBar::handle:vertical {{
-    background: {_WIN10_SCROLLBAR};
-    min-height: 30px;
-    border-radius: 5px;
-    margin: 2px;
-}}
-QScrollBar::handle:vertical:hover {{
-    background: #666;
-}}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
-}}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-    background: transparent;
-}}
-QScrollBar:horizontal {{
-    background: transparent;
-    height: 10px;
-    margin: 0;
-}}
-QScrollBar::handle:horizontal {{
-    background: {_WIN10_SCROLLBAR};
-    min-width: 30px;
-    border-radius: 5px;
-    margin: 2px;
-}}
-QScrollBar::handle:horizontal:hover {{
-    background: #666;
-}}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-    width: 0px;
-}}
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-    background: transparent;
-}}
-QMenu {{
-    background: {_WIN10_PANEL};
-    color: {_WIN10_TEXT};
-    border: 1px solid {_WIN10_BORDER};
-    padding: 4px 0;
-}}
-QMenu::item {{
-    padding: 5px 24px 5px 28px;
-    border: 1px solid transparent;
-}}
-QMenu::item:selected {{
-    background: {_WIN10_HOVER};
-    border: 1px solid {_WIN10_BORDER_LIGHT};
-}}
-QMenu::separator {{
-    height: 1px;
-    background: {_WIN10_BORDER};
-    margin: 4px 8px;
-}}
-QSplitter::handle {{
-    background: {_WIN10_BORDER};
-}}
-QSplitter::handle:horizontal {{
-    width: 1px;
-}}
-QSplitter::handle:vertical {{
-    height: 1px;
-}}
-QSlider::groove:horizontal {{
-    background: {_WIN10_BORDER};
-    height: 3px;
-    border-radius: 1px;
-}}
-QSlider::handle:horizontal {{
-    background: {_WIN10_TEXT_DIM};
-    width: 10px;
-    height: 10px;
-    margin: -4px 0;
-    border-radius: 5px;
-}}
-QSlider::handle:horizontal:hover {{
-    background: {_WIN10_ACCENT};
-}}
-"""
 
 
 class _NavButton(QToolButton):
@@ -224,16 +43,12 @@ class _NavButton(QToolButton):
         self.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
-                color: {_WIN10_TEXT_DIM};
                 border: 1px solid transparent;
                 border-radius: 3px;
                 font-size: 11px;
                 padding: 0;
             }}
             QToolButton:hover {{
-                background: {_WIN10_HOVER};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_BORDER};
             }}
             QToolButton:pressed {{
                 background: #444;
@@ -243,7 +58,6 @@ class _NavButton(QToolButton):
             }}
         """)
 
-
 class _AddressBar(QLineEdit):
     path_changed = pyqtSignal(str)
 
@@ -252,19 +66,14 @@ class _AddressBar(QLineEdit):
         self.setReadOnly(True)
         self.setStyleSheet(f"""
             QLineEdit {{
-                background: {_WIN10_ADDRESS_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_BORDER};
                 border-radius: 2px;
                 padding: 2px 8px;
                 font-size: 12px;
                 min-height: 22px;
             }}
             QLineEdit:focus {{
-                border: 1px solid {_WIN10_ACCENT};
             }}
         """)
-
 
 class _SearchBar(QLineEdit):
     def __init__(self, parent=None):
@@ -274,22 +83,16 @@ class _SearchBar(QLineEdit):
         self.setMaximumWidth(scale(200))
         self.setStyleSheet(f"""
             QLineEdit {{
-                background: {_WIN10_SEARCH_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_BORDER};
                 border-radius: 2px;
                 padding: 2px 24px 2px 8px;
                 font-size: 11px;
                 min-height: 22px;
             }}
             QLineEdit:focus {{
-                border: 1px solid {_WIN10_ACCENT};
             }}
             QLineEdit::placeholder {{
-                color: {_WIN10_TEXT_DIM};
             }}
         """)
-
 
 class _GroupHeader(QWidget):
     def __init__(self, text, count=0, parent=None):
@@ -298,15 +101,11 @@ class _GroupHeader(QWidget):
         self._count = count
         self.setFixedHeight(scale(26))
         self.setStyleSheet(f"""
-            background: {_WIN10_GROUP_HEADER};
-            border-bottom: 1px solid {_WIN10_BORDER};
         """)
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(_WIN10_GROUP_HEADER))
-        p.setPen(QPen(QColor(_WIN10_TEXT), 1))
         font = p.font()
         font.setPointSize(9)
         font.setBold(False)
@@ -318,10 +117,8 @@ class _GroupHeader(QWidget):
             count_text = f" ({self._count})"
             fm = QFontMetrics(font)
             text_w = fm.horizontalAdvance(self._text)
-            p.setPen(QPen(QColor(_WIN10_TEXT_DIM), 1))
             p.drawText(x + text_w + scale(4), y, count_text)
         p.end()
-
 
 class FileListWidget(QListWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
@@ -398,7 +195,6 @@ class FileListWidget(QListWidget):
         if path:
             self._panel._open_path(path)
 
-
 class FileDetailWidget(QTreeWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
         super().__init__(parent)
@@ -468,7 +264,6 @@ class FileDetailWidget(QTreeWidget):
     def startDrag(self, supportedActions):
         self._panel._start_drag_detail(supportedActions)
 
-
 class FolderTreeWidget(QTreeWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
         super().__init__(parent)
@@ -479,8 +274,6 @@ class FolderTreeWidget(QTreeWidget):
         self.setIndentation(scale(16))
         self.setStyleSheet(f"""
             QTreeWidget {{
-                background: {_WIN10_FOLDER_TREE_BG};
-                color: {_WIN10_TEXT};
                 border: none;
                 outline: none;
                 font-size: 12px;
@@ -493,13 +286,8 @@ class FolderTreeWidget(QTreeWidget):
                 min-height: 22px;
             }}
             QTreeWidget::item:selected {{
-                background: {_WIN10_SELECTED};
-                color: {_WIN10_TEXT_BRIGHT};
-                border: 1px solid {_WIN10_ACCENT_DIM};
             }}
             QTreeWidget::item:hover:!selected {{
-                background: {_WIN10_HOVER};
-                border: 1px solid {_WIN10_BORDER};
             }}
             QTreeWidget::branch {{
                 background: transparent;
@@ -509,7 +297,6 @@ class FolderTreeWidget(QTreeWidget):
                 width: 8px;
             }}
             QScrollBar::handle:vertical {{
-                background: {_WIN10_SCROLLBAR};
                 min-height: 30px;
                 border-radius: 4px;
                 margin: 2px;
@@ -542,7 +329,6 @@ class FolderTreeWidget(QTreeWidget):
         else:
             super().dropEvent(event)
 
-
 class _AddressBreadcrumb(QLineEdit):
     def __init__(self, pane: _FilePane, parent=None):
         super().__init__(parent)
@@ -553,7 +339,6 @@ class _AddressBreadcrumb(QLineEdit):
         self.setStyleSheet(f"""
             QLineEdit {{
                 background: transparent;
-                color: {_WIN10_TEXT};
                 border: 1px solid transparent;
                 border-radius: 2px;
                 padding: 2px 6px;
@@ -561,9 +346,6 @@ class _AddressBreadcrumb(QLineEdit):
                 min-height: 20px;
             }}
             QLineEdit:focus {{
-                background: {_WIN10_ADDRESS_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_ACCENT};
                 padding: 2px 6px;
             }}
         """)
@@ -586,14 +368,10 @@ class _AddressBreadcrumb(QLineEdit):
         self.setCursor(Qt.CursorShape.IBeamCursor)
         self.setStyleSheet(f"""
             QLineEdit {{
-                background: {_WIN10_ADDRESS_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_ACCENT};
                 border-radius: 2px;
                 padding: 2px 6px;
                 font-size: 12px;
                 min-height: 20px;
-                selection-background-color: {_WIN10_ACCENT_DIM};
             }}
         """)
 
@@ -605,7 +383,6 @@ class _AddressBreadcrumb(QLineEdit):
         self.setStyleSheet(f"""
             QLineEdit {{
                 background: transparent;
-                color: {_WIN10_TEXT};
                 border: 1px solid transparent;
                 border-radius: 2px;
                 padding: 2px 6px;
@@ -613,9 +390,6 @@ class _AddressBreadcrumb(QLineEdit):
                 min-height: 20px;
             }}
             QLineEdit:focus {{
-                background: {_WIN10_ADDRESS_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_ACCENT};
                 padding: 2px 6px;
             }}
         """)
@@ -636,7 +410,6 @@ class _AddressBreadcrumb(QLineEdit):
     def focusOutEvent(self, event):
         self._exit_edit_mode()
         super().focusOutEvent(event)
-
 
 class _FilePane(QWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
@@ -703,8 +476,7 @@ class _FilePane(QWidget):
     def set_active(self, active: bool):
         self._active = active
         if self._panel._dual_pane:
-            border = f"border: 1px solid {_WIN10_ACCENT};" if active else "border: 1px solid transparent;"
-            self._stack.setStyleSheet(border)
+            self._stack.setStyleSheet(f"border: 1px solid {self.palette().color(QPalette.ColorRole.Highlight).name()};")
         else:
             self._stack.setStyleSheet("")
 
@@ -1022,20 +794,17 @@ class _FilePane(QWidget):
     def refresh(self):
         self.populate_files(self._current_dir)
 
-
 class _NavBar(QWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
         super().__init__(parent)
         self._panel = panel
-        self.setFixedHeight(scale(34))
+        self.setFixedHeight(scale(26))
         self.setStyleSheet(f"""
             QWidget {{
-                background: {_WIN10_TOOLBAR};
-                border-bottom: 1px solid {_WIN10_BORDER};
             }}
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(scale(4), scale(2), scale(4), scale(2))
+        layout.setContentsMargins(scale(4), scale(1), scale(4), scale(1))
         layout.setSpacing(scale(1))
 
         self._back_btn = _NavButton("\u25C0", "Back (Alt+Left)")
@@ -1054,7 +823,6 @@ class _NavBar(QWidget):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet(f"color: {_WIN10_BORDER};")
         sep.setFixedWidth(1)
         layout.addWidget(sep)
 
@@ -1062,17 +830,12 @@ class _NavBar(QWidget):
         self._address_bar.setReadOnly(True)
         self._address_bar.setStyleSheet(f"""
             QLineEdit {{
-                background: {_WIN10_ADDRESS_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_BORDER};
                 border-radius: 2px;
-                padding: 3px 8px;
-                font-size: 12px;
-                min-height: 22px;
-                selection-background-color: {_WIN10_ACCENT_DIM};
+                padding: 2px 8px;
+                font-size: 11px;
+                min-height: 18px;
             }}
             QLineEdit:focus {{
-                border: 1px solid {_WIN10_ACCENT};
             }}
         """)
         layout.addWidget(self._address_bar, 1)
@@ -1080,23 +843,18 @@ class _NavBar(QWidget):
         self._search_bar = QLineEdit()
         self._search_bar.setPlaceholderText("\U0001F50D Search...")
         self._search_bar.setClearButtonEnabled(True)
-        self._search_bar.setMaximumWidth(scale(200))
+        self._search_bar.setMaximumWidth(scale(120))
         self._search_bar.textChanged.connect(self._on_search)
         self._search_bar.setStyleSheet(f"""
             QLineEdit {{
-                background: {_WIN10_SEARCH_BG};
-                color: {_WIN10_TEXT};
-                border: 1px solid {_WIN10_BORDER};
                 border-radius: 2px;
                 padding: 2px 24px 2px 8px;
                 font-size: 11px;
-                min-height: 20px;
+                min-height: 18px;
             }}
             QLineEdit:focus {{
-                border: 1px solid {_WIN10_ACCENT};
             }}
             QLineEdit::placeholder {{
-                color: {_WIN10_TEXT_DIM};
             }}
         """)
         layout.addWidget(self._search_bar)
@@ -1109,38 +867,31 @@ class _NavBar(QWidget):
         display = display.replace("\\", " \u25B8 ").replace("/", " \u25B8 ")
         self._address_bar.setText(display)
 
-
 class _StatusBar(QWidget):
     def __init__(self, panel: ProjectPanel, parent=None):
         super().__init__(parent)
         self._panel = panel
-        self.setFixedHeight(scale(22))
+        self.setFixedHeight(scale(18))
         self.setStyleSheet(f"""
             QWidget {{
-                background: {_WIN10_TOOLBAR};
-                border-top: 1px solid {_WIN10_BORDER};
             }}
         """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(scale(10), 0, scale(10), 0)
-        layout.setSpacing(scale(20))
+        layout.setContentsMargins(scale(8), 0, scale(8), 0)
+        layout.setSpacing(scale(12))
 
         self._count_label = QLabel("0 items")
-        self._count_label.setStyleSheet(f"color: {_WIN10_TEXT}; font-size: 11px; border: none; background: transparent;")
         layout.addWidget(self._count_label)
 
         sep = QLabel("|")
-        sep.setStyleSheet(f"color: {_WIN10_BORDER}; font-size: 11px; border: none; background: transparent;")
         layout.addWidget(sep)
 
         self._selected_label = QLabel("")
-        self._selected_label.setStyleSheet(f"color: {_WIN10_TEXT_DIM}; font-size: 11px; border: none; background: transparent;")
         layout.addWidget(self._selected_label)
 
         layout.addStretch()
 
         self._path_label = QLabel("")
-        self._path_label.setStyleSheet(f"color: {_WIN10_TEXT_DIM}; font-size: 11px; border: none; background: transparent;")
         layout.addWidget(self._path_label)
 
     def update_counts(self, total: int, selected: int = 0):
@@ -1156,7 +907,6 @@ class _StatusBar(QWidget):
             short = "..." + short[-57:]
         self._path_label.setText(short)
 
-
 class _FileListDelegate(QStyledItemDelegate):
     def __init__(self, panel, parent=None):
         super().__init__(parent)
@@ -1168,8 +918,6 @@ class _FileListDelegate(QStyledItemDelegate):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             rect = option.rect
-            painter.fillRect(rect, QColor(_WIN10_GROUP_HEADER))
-            line_pen = QPen(QColor(_WIN10_BORDER), 1)
             painter.setPen(line_pen)
             painter.drawLine(rect.x(), rect.y(), rect.x() + rect.width(), rect.y())
             painter.drawLine(rect.x(), rect.y() + rect.height() - 1, rect.x() + rect.width(), rect.y() + rect.height() - 1)
@@ -1182,11 +930,9 @@ class _FileListDelegate(QStyledItemDelegate):
             fm = QFontMetrics(font)
             x = rect.x() + scale(8)
             y = rect.y() + (rect.height() + fm.ascent() - fm.descent()) // 2
-            painter.setPen(QPen(QColor(_WIN10_TEXT), 1))
             painter.drawText(x, y, text)
             if count > 0:
                 count_text = f" ({count})"
-                painter.setPen(QPen(QColor(_WIN10_TEXT_DIM), 1))
                 text_w = fm.horizontalAdvance(text)
                 painter.drawText(x + text_w + scale(2), y, count_text)
             painter.restore()
@@ -1198,7 +944,6 @@ class _FileListDelegate(QStyledItemDelegate):
         if group_type == "group_header":
             return QSize(0, scale(24))
         return super().sizeHint(option, index)
-
 
 class ProjectPanel(QDockWidget):
     file_double_clicked = pyqtSignal(str)
@@ -1221,7 +966,6 @@ class ProjectPanel(QDockWidget):
         self._setup_ui()
         self._populate_tree()
         self._push_history(self._project_root)
-        self.setStyleSheet(_WIN10_STYLE)
 
     def load_config(self, config) -> None:
         thumb_size = config.get("project.thumb_size", self._thumb_size)
@@ -1298,34 +1042,29 @@ class ProjectPanel(QDockWidget):
         main_layout.setSpacing(0)
 
         toolbar = QWidget()
-        toolbar.setFixedHeight(scale(32))
+        toolbar.setFixedHeight(scale(24))
         toolbar.setStyleSheet(f"""
             QWidget {{
-                background: {_WIN10_TOOLBAR};
-                border-bottom: 1px solid {_WIN10_BORDER};
             }}
         """)
         toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(scale(4), scale(2), scale(4), scale(2))
+        toolbar_layout.setContentsMargins(scale(4), scale(1), scale(4), scale(1))
         toolbar_layout.setSpacing(scale(2))
 
         create_btn = QToolButton()
         create_btn.setText("+ New")
         create_btn.setToolTip("Create new asset")
-        create_btn.setFixedHeight(scale(26))
+        create_btn.setFixedHeight(scale(20))
         create_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         create_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
-                color: {_WIN10_TEXT};
                 border: 1px solid transparent;
                 border-radius: 3px;
-                font-size: 11px;
-                padding: 0 8px;
+                font-size: 10px;
+                padding: 0 6px;
             }}
             QToolButton:hover {{
-                background: {_WIN10_HOVER};
-                border: 1px solid {_WIN10_BORDER};
             }}
             QToolButton:pressed {{
                 background: #444;
@@ -1348,33 +1087,28 @@ class ProjectPanel(QDockWidget):
 
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.Shape.VLine)
-        sep1.setStyleSheet(f"color: {_WIN10_BORDER};")
         sep1.setFixedWidth(1)
         toolbar_layout.addWidget(sep1)
 
         self._view_mode_btn = QToolButton()
-        self._view_mode_btn.setFixedSize(scale(26), scale(26))
+        self._view_mode_btn.setFixedSize(scale(22), scale(22))
         self._view_mode_btn.setToolTip("View Mode")
         self._view_mode_btn.clicked.connect(self._toggle_view_mode)
         self._update_view_mode_icon()
         self._view_mode_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
-                color: {_WIN10_TEXT_DIM};
                 border: 1px solid transparent;
                 border-radius: 3px;
                 font-size: 13px;
             }}
             QToolButton:hover {{
-                background: {_WIN10_HOVER};
-                border: 1px solid {_WIN10_BORDER};
-                color: {_WIN10_TEXT};
             }}
         """)
         toolbar_layout.addWidget(self._view_mode_btn)
 
         self._zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self._zoom_slider.setFixedWidth(scale(80))
+        self._zoom_slider.setFixedWidth(scale(50))
         self._zoom_slider.setRange(MIN_THUMB, MAX_THUMB)
         self._zoom_slider.setValue(self._thumb_size)
         self._zoom_slider.valueChanged.connect(self._on_zoom_changed)
@@ -1382,12 +1116,11 @@ class ProjectPanel(QDockWidget):
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.VLine)
-        sep2.setStyleSheet(f"color: {_WIN10_BORDER};")
         sep2.setFixedWidth(1)
         toolbar_layout.addWidget(sep2)
 
         self._dual_pane_btn = QToolButton()
-        self._dual_pane_btn.setFixedSize(scale(26), scale(26))
+        self._dual_pane_btn.setFixedSize(scale(22), scale(22))
         self._dual_pane_btn.setToolTip("Dual Pane")
         self._dual_pane_btn.setCheckable(True)
         self._dual_pane_btn.setChecked(False)
@@ -1396,41 +1129,30 @@ class ProjectPanel(QDockWidget):
         self._dual_pane_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
-                color: {_WIN10_TEXT_DIM};
                 border: 1px solid transparent;
                 border-radius: 3px;
                 font-size: 11px;
             }}
             QToolButton:hover {{
-                background: {_WIN10_HOVER};
-                border: 1px solid {_WIN10_BORDER};
-                color: {_WIN10_TEXT};
             }}
             QToolButton:checked {{
-                background: {_WIN10_ACCENT_DIM};
-                border: 1px solid {_WIN10_ACCENT};
-                color: {_WIN10_ACCENT};
             }}
         """)
         toolbar_layout.addWidget(self._dual_pane_btn)
 
         refresh_btn = QToolButton()
-        refresh_btn.setFixedSize(scale(26), scale(26))
+        refresh_btn.setFixedSize(scale(22), scale(22))
         refresh_btn.setToolTip("Refresh (F5)")
         refresh_btn.setText("\u21BB")
         refresh_btn.clicked.connect(self._refresh)
         refresh_btn.setStyleSheet(f"""
             QToolButton {{
                 background: transparent;
-                color: {_WIN10_TEXT_DIM};
                 border: 1px solid transparent;
                 border-radius: 3px;
                 font-size: 14px;
             }}
             QToolButton:hover {{
-                background: {_WIN10_HOVER};
-                border: 1px solid {_WIN10_BORDER};
-                color: {_WIN10_TEXT};
             }}
         """)
         toolbar_layout.addWidget(refresh_btn)
@@ -1447,15 +1169,14 @@ class ProjectPanel(QDockWidget):
         content_layout.setSpacing(0)
 
         self._folder_tree = FolderTreeWidget(self)
-        self._folder_tree.setMinimumWidth(scale(160))
-        self._folder_tree.setMaximumWidth(scale(280))
+        self._folder_tree.setMinimumWidth(scale(100))
+        self._folder_tree.setMaximumWidth(scale(240))
         self._folder_tree.itemClicked.connect(self._on_folder_selected)
         self._folder_tree.setDragEnabled(True)
         content_layout.addWidget(self._folder_tree)
 
         tree_separator = QFrame()
         tree_separator.setFrameShape(QFrame.Shape.VLine)
-        tree_separator.setStyleSheet(f"color: {_WIN10_BORDER}; background: {_WIN10_BORDER};")
         tree_separator.setFixedWidth(1)
         content_layout.addWidget(tree_separator)
 
@@ -1468,7 +1189,6 @@ class ProjectPanel(QDockWidget):
         self._pane_splitter.setHandleWidth(1)
         self._pane_splitter.setStyleSheet(f"""
             QSplitter::handle {{
-                background: {_WIN10_BORDER};
             }}
             QSplitter::handle:horizontal {{
                 width: 1px;
@@ -1615,10 +1335,6 @@ class ProjectPanel(QDockWidget):
                 fl.setSpacing(2)
                 fl.setUniformItemSizes(True)
                 fl.setResizeMode(QListWidget.ResizeMode.Adjust)
-            else:
-                pt = max(7, min(20, int(self._thumb_size / 6)))
-                pane._detail_tree.setStyleSheet(
-                    f"font-size: {pt}px; background: {_WIN10_BG}; color: {_WIN10_TEXT}; border: none;")
         self._zoom_slider.setVisible(True)
 
     def wheelEvent(self, event: QWheelEvent):
@@ -1648,8 +1364,6 @@ class ProjectPanel(QDockWidget):
             for pane in (self._pane_a, self._pane_b):
                 if not pane:
                     continue
-                pane._detail_tree.setStyleSheet(
-                    f"font-size: {pt}px; background: {_WIN10_BG}; color: {_WIN10_TEXT}; border: none;")
                 pane._detail_tree.setIconSize(QSize(icon_sz, icon_sz))
 
     def _open_path(self, path: str):
@@ -1858,7 +1572,6 @@ class ProjectPanel(QDockWidget):
         widget = self.sender()
         item = widget.itemAt(pos) if isinstance(widget, (QTreeWidget, QListWidget)) else None
         menu = QMenu(self)
-        menu.setStyleSheet(_WIN10_STYLE)
         if item:
             path = (item.data(0, Qt.ItemDataRole.UserRole) if isinstance(item, QTreeWidgetItem)
                     else item.data(Qt.ItemDataRole.UserRole))

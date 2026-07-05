@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QFrame, QDoubleSpinBox, QLineEdit, QComboBox, QMenu,
     QInputDialog, QMessageBox, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsObject, QSizePolicy, QCheckBox,
-    QGraphicsEllipseItem, QGraphicsTextItem, QSpinBox,
+    QGraphicsEllipseItem, QGraphicsTextItem, QSpinBox, QGraphicsLineItem,
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, QRectF, QPointF, QLineF, QTimer,
@@ -471,6 +471,7 @@ class AnimatorPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.setMinimumSize(300, 200)
         self._build_ui()
 
     def _build_ui(self):
@@ -500,35 +501,29 @@ class AnimatorPanel(QDockWidget):
 
     def _build_toolbar(self) -> QWidget:
         tb = QWidget()
-        tb.setStyleSheet("background: #2d2d2d; border-bottom: 1px solid #3a3a3a;")
         layout = QHBoxLayout(tb)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
         self._add_state_btn = QPushButton("+ State")
         self._add_state_btn.setFixedHeight(scale(22))
         self._add_state_btn.clicked.connect(self._add_state)
-        self._add_state_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._add_state_btn)
         self._add_param_btn = QPushButton("+ Parameter")
         self._add_param_btn.setFixedHeight(scale(22))
         self._add_param_btn.clicked.connect(self._add_parameter)
-        self._add_param_btn.setStyleSheet(self._btn_style())
         layout.addWidget(self._add_param_btn)
         self._ctrl_name_label = QLabel("No Controller")
-        self._ctrl_name_label.setStyleSheet("color: #ccc; font-size: 11px; padding: 0 8px;")
+        self._ctrl_name_label.setStyleSheet("font-size: 11px; padding: 0 8px;")
         layout.addWidget(self._ctrl_name_label)
         layout.addStretch()
         self._live_link_cb = QCheckBox("Live Link")
-        self._live_link_cb.setStyleSheet("color: #aaa; font-size: 10px;")
+        self._live_link_cb.setStyleSheet("font-size: 10px;")
         self._live_link_cb.setChecked(True)
         layout.addWidget(self._live_link_cb)
         return tb
 
     def _btn_style(self) -> str:
-        return ("QPushButton { background: #3a3a3a; color: #ccc; border: 1px solid #555; "
-                "border-radius: 3px; font-size: 10px; padding: 2px 8px; } "
-                "QPushButton:hover { background: #4a4a4a; } "
-                "QPushButton:pressed { background: #555; }")
+        return ""
 
     def _build_params_panel(self) -> QWidget:
         w = QWidget()
@@ -536,13 +531,11 @@ class AnimatorPanel(QDockWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         header = QLabel("Parameters")
-        header.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold; padding: 4px 6px; background: #333; "
-                             "border-bottom: 1px solid #444;")
+        header.setStyleSheet("font-size: 10px; font-weight: bold; padding: 4px 6px; "
+                             "border-bottom: 1px solid;")
         layout.addWidget(header)
         self._param_list = QListWidget()
-        self._param_list.setStyleSheet(
-            "QListWidget { background: #2d2d2d; border: none; color: #ccc; font-size: 10px; } "
-            "QListWidget::item:selected { background: #3a3a3a; }")
+        self._param_list.setStyleSheet("border: none; font-size: 10px;")
         self._param_list.itemClicked.connect(self._on_param_selected)
         self._param_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._param_list.customContextMenuRequested.connect(self._param_context_menu)
@@ -552,18 +545,17 @@ class AnimatorPanel(QDockWidget):
         ar_layout.setContentsMargins(4, 2, 4, 2)
         self._param_name_edit = QLineEdit()
         self._param_name_edit.setPlaceholderText("param name")
-        self._param_name_edit.setStyleSheet("background: #1e1e1e; color: #ccc; border: 1px solid #444; "
+        self._param_name_edit.setStyleSheet("border: 1px solid; "
                                             "border-radius: 3px; padding: 2px 4px; font-size: 10px;")
         ar_layout.addWidget(self._param_name_edit)
         self._param_type_combo = QComboBox()
         self._param_type_combo.addItems(["Float", "Int", "Bool", "Trigger"])
-        self._param_type_combo.setStyleSheet("background: #1e1e1e; color: #ccc; border: 1px solid #444; "
+        self._param_type_combo.setStyleSheet("border: 1px solid; "
                                              "border-radius: 3px; font-size: 10px;")
         ar_layout.addWidget(self._param_type_combo)
         add_btn = QPushButton("+")
         add_btn.setFixedSize(*scale_xy(22, 22))
         add_btn.clicked.connect(self._add_parameter)
-        add_btn.setStyleSheet(self._btn_style())
         ar_layout.addWidget(add_btn)
         layout.addWidget(add_row)
         return w

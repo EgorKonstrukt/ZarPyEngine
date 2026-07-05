@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QListW
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QFont, QPainter, QBrush, QPen
 from core.editor_scale import scale, scale_xy
-from editor.inspector.constants import _FUSION_BG, _FUSION_BG_CARD, _FUSION_BG_INPUT, _FUSION_BG_HOVER, _FUSION_BORDER, _FUSION_BORDER_LIGHT, _FUSION_TEXT, _FUSION_TEXT_DIM, _FUSION_TEXT_BRIGHT, _FUSION_INPUT_RADIUS, _accent
+from editor.inspector.constants import _accent
 from editor.inspector.helpers import get_component_icon_pixmap
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -71,56 +71,6 @@ class ComponentPickerDialog(QDialog):
         self._load_data()
         self._show_categories()
     def _setup_ui(self):
-        self.setStyleSheet(f"""
-            QDialog {{
-                background: {_FUSION_BG};
-            }}
-            QLineEdit {{
-                background: {_FUSION_BG_INPUT};
-                color: {_FUSION_TEXT_BRIGHT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 3px 6px;
-                font-size: 11px;
-                selection-background-color: {_accent()};
-            }}
-            QLineEdit:focus {{ border-color: {_accent()}; }}
-            QListWidget {{
-                background: {_FUSION_BG_CARD};
-                color: {_FUSION_TEXT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                font-size: 11px;
-                outline: none;
-            }}
-            QListWidget::item {{
-                padding: 4px 6px;
-                border-radius: 2px;
-            }}
-            QListWidget::item:selected {{
-                background: {_FUSION_BG_HOVER};
-                color: {_FUSION_TEXT_BRIGHT};
-            }}
-            QListWidget::item:hover {{
-                background: {_FUSION_BG_HOVER};
-            }}
-            QPushButton {{
-                color: {_FUSION_TEXT};
-                background: {_FUSION_BG_INPUT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 4px 16px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background: {_FUSION_BG_HOVER};
-                color: {_FUSION_TEXT_BRIGHT};
-            }}
-            QPushButton:disabled {{
-                color: {_FUSION_TEXT_DIM};
-                background: {_FUSION_BG};
-            }}
-        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -133,17 +83,10 @@ class ComponentPickerDialog(QDialog):
         self._nav_layout.setContentsMargins(0, 0, 0, 0)
         self._nav_layout.setSpacing(4)
         self._back_btn = QPushButton("\u25C0  Back")
-        self._back_btn.setStyleSheet(f"""
-            QPushButton {{
-                color: {_accent()}; background: transparent; border: none;
-                font-size: 11px; padding: 2px 4px; text-align: left;
-            }}
-            QPushButton:hover {{ color: {_FUSION_TEXT_BRIGHT}; }}
-        """)
+        self._back_btn.setStyleSheet(f"color: {_accent()}; background: transparent; border: none; font-size: 11px; padding: 2px 4px; text-align: left;")
         self._back_btn.clicked.connect(self._show_categories)
         self._back_btn.hide()
         self._nav_title = QLabel()
-        self._nav_title.setStyleSheet(f"color: {_FUSION_TEXT_BRIGHT}; font-size: 12px; font-weight: bold; background: transparent;")
         self._nav_layout.addWidget(self._back_btn)
         self._nav_layout.addWidget(self._nav_title)
         self._nav_layout.addStretch()
@@ -240,7 +183,6 @@ class ComponentPickerDialog(QDialog):
             item = QListWidgetItem(QIcon(pix), name)
             item.setData(Qt.ItemDataRole.UserRole, {"type": "component", "name": name})
             if already:
-                item.setForeground(QColor(_FUSION_TEXT_DIM))
                 item.setToolTip("Already added")
             else:
                 item.setToolTip(f"Add {name} component")
@@ -271,7 +213,6 @@ class ComponentPickerDialog(QDialog):
             item = QListWidgetItem(QIcon(pix), name)
             item.setData(Qt.ItemDataRole.UserRole, {"type": "component", "name": name})
             if already:
-                item.setForeground(QColor(_FUSION_TEXT_DIM))
                 item.setToolTip("Already added")
             else:
                 item.setToolTip(f"Add {name} component")

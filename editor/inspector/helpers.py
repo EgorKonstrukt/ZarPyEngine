@@ -11,54 +11,11 @@ from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSp
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as QF
 from core.editor_scale import scale, scale_xy
-from editor.inspector.constants import _FUSION_BG, _FUSION_BG_INPUT, _FUSION_BORDER, _FUSION_BORDER_LIGHT, _FUSION_TEXT, _FUSION_TEXT_DIM, _FUSION_TEXT_BRIGHT, _FUSION_ACCENT_RED, _FUSION_BG_HOVER, _XYZ_COLORS, _FUSION_INPUT_RADIUS, _accent
+from editor.inspector.constants import _XYZ_COLORS, _accent
 from editor.inspector.widgets import _FocusSpinBox, _DragLabel, _ResourceDropLabel, _EntityDropLabel, EntityPickerDialog
 from core.math3d import Vec2, Vec3, Vec4
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
-_FUSION_SPINBOX_STYLE = f"""
-    QDoubleSpinBox, QSpinBox {{
-        background: {_FUSION_BG_INPUT};
-        color: {_FUSION_TEXT_BRIGHT};
-        border: 1px solid {_FUSION_BORDER};
-        border-radius: {_FUSION_INPUT_RADIUS};
-        padding: 1px 2px 1px 4px;
-        font-size: 11px;
-        min-height: 20px;
-        selection-background-color: {_accent()};
-    }}
-    QDoubleSpinBox:hover, QSpinBox:hover {{
-        border-color: {_FUSION_BORDER_LIGHT};
-    }}
-    QDoubleSpinBox:focus, QSpinBox:focus {{
-        border-color: {_accent()};
-    }}
-    QDoubleSpinBox::up-button, QSpinBox::up-button {{
-        border: none;
-        background: transparent;
-        width: 12px;
-        subcontrol-origin: border;
-        subcontrol-position: top right;
-    }}
-    QDoubleSpinBox::down-button, QSpinBox::down-button {{
-        border: none;
-        background: transparent;
-        width: 12px;
-        subcontrol-origin: border;
-        subcontrol-position: bottom right;
-    }}
-    QDoubleSpinBox::up-arrow, QSpinBox::up-arrow {{
-        width: 6px;
-        height: 6px;
-        border: none;
-    }}
-    QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {{
-        width: 6px;
-        height: 6px;
-        border: none;
-    }}
-"""
 
 def make_spinbox(val: float, lo: float = -1e9, hi: float = 1e9, step: float = 0.1, decimals: int = 4) -> QDoubleSpinBox:
     sb = _FocusSpinBox()
@@ -67,7 +24,6 @@ def make_spinbox(val: float, lo: float = -1e9, hi: float = 1e9, step: float = 0.
     sb.setDecimals(decimals)
     sb.setValue(val)
     sb.setMinimumWidth(60)
-    sb.setStyleSheet(_FUSION_SPINBOX_STYLE)
     return sb
 
 def make_clickable_label(text: str, on_click: Callable[[], None]) -> QLabel:
@@ -77,9 +33,6 @@ def make_clickable_label(text: str, on_click: Callable[[], None]) -> QLabel:
             color: {_accent()};
             font-size: 9px;
             padding: 0px;
-        }}
-        QLabel:hover {{
-            color: #8abbff;
         }}
     """)
     lbl.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -136,15 +89,11 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     name = os.path.basename(path) if path else ""
     icon_lbl = QLabel()
     icon_lbl.setFixedSize(*scale_xy(20, 20))
-    icon_lbl.setStyleSheet(f"border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 2px; background: {_FUSION_BG};")
     update_resource_icon(icon_lbl, path, 20)
     layout.addWidget(icon_lbl)
     def _on_resource_drop(p: str):
         _update_display(p)
     name_lbl = _ResourceDropLabel(_on_resource_drop, name if name else "None")
-    name_lbl.setStyleSheet(
-        f"color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
-    )
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else "No resource selected")
     layout.addWidget(name_lbl, 1)
@@ -159,11 +108,6 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     btn = QPushButton("\u25CB")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip("Pick Resource")
-    btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 11px;
-        background: {_FUSION_BG_INPUT}; font-size: 14px; }}
-        QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
-    """)
     def _pick():
         p = pick_resource(w, "Select Resource", filter_str, path)
         if p:
@@ -173,10 +117,6 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     clear_btn = QPushButton("x")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
-    clear_btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: none; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-        QPushButton:hover {{ color: {_FUSION_ACCENT_RED}; background: #3a1a1a; }}
-    """)
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
@@ -193,7 +133,6 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     name = target_entity.name if target_entity else ""
     icon_lbl = QLabel()
     icon_lbl.setFixedSize(*scale_xy(20, 20))
-    icon_lbl.setStyleSheet(f"border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 2px; background: {_FUSION_BG};")
     icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
     if target_entity:
         for c in target_entity.get_all_components():
@@ -205,9 +144,6 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     def _on_entity_drop(eid: str):
         _update_entity_display(eid)
     name_lbl = _EntityDropLabel(_on_entity_drop, name if name else "None")
-    name_lbl.setStyleSheet(
-        f"color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
-    )
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(entity_id if entity_id else "No entity selected")
     layout.addWidget(name_lbl, 1)
@@ -229,11 +165,6 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     btn = QPushButton("\u25CB")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip("Pick Entity")
-    btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 11px;
-        background: {_FUSION_BG_INPUT}; font-size: 14px; }}
-        QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
-    """)
     def _pick():
         dlg = EntityPickerDialog(scene, w)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -245,10 +176,6 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     clear_btn = QPushButton("x")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
-    clear_btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: none; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-        QPushButton:hover {{ color: {_FUSION_ACCENT_RED}; background: #3a1a1a; }}
-    """)
     def _clear():
         _update_entity_display("")
     clear_btn.clicked.connect(_clear)
@@ -267,15 +194,11 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
     name = os.path.basename(path) if path else ""
     icon_lbl = QLabel()
     icon_lbl.setFixedSize(*scale_xy(20, 20))
-    icon_lbl.setStyleSheet(f"border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 2px; background: {_FUSION_BG};")
     update_resource_icon(icon_lbl, path, 20)
     layout.addWidget(icon_lbl)
     def _on_resource_drop(p: str):
         _update_display(p)
     name_lbl = _ResourceDropLabel(_on_resource_drop, name if name else f"None ({resource_type})")
-    name_lbl.setStyleSheet(
-        f"color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
-    )
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else f"No {resource_type} selected")
     layout.addWidget(name_lbl, 1)
@@ -289,11 +212,6 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
     btn = QPushButton("\u25CB")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip(f"Pick {resource_type}")
-    btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 11px;
-        background: {_FUSION_BG_INPUT}; font-size: 14px; }}
-        QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
-    """)
     def _pick():
         p = pick_resource(w, f"Select {resource_type}", filter_str, path)
         if p:
@@ -303,10 +221,6 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
     clear_btn = QPushButton("x")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
-    clear_btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: none; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-        QPushButton:hover {{ color: {_FUSION_ACCENT_RED}; background: #3a1a1a; }}
-    """)
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
@@ -325,15 +239,11 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     name = os.path.basename(path) if path else ""
     icon_lbl = QLabel()
     icon_lbl.setFixedSize(*scale_xy(20, 20))
-    icon_lbl.setStyleSheet(f"border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 2px; background: {_FUSION_BG};")
     update_resource_icon(icon_lbl, path, 20)
     layout.addWidget(icon_lbl)
     def _on_asset_drop(p: str):
         _update_display(p)
     name_lbl = _ResourceDropLabel(_on_asset_drop, name if name else f"None ({asset_type})")
-    name_lbl.setStyleSheet(
-        f"color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
-    )
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else f"No {asset_type} selected")
     layout.addWidget(name_lbl, 1)
@@ -347,11 +257,6 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     btn = QPushButton("\u25CB")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip(f"Pick {asset_type}")
-    btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 11px;
-        background: {_FUSION_BG_INPUT}; font-size: 14px; }}
-        QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: {_FUSION_TEXT_BRIGHT}; }}
-    """)
     def _pick():
         p = pick_resource(w, f"Select {asset_type}", filter_str, path)
         if p:
@@ -361,11 +266,6 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     create_btn = QPushButton("+")
     create_btn.setFixedSize(*scale_xy(22, 22))
     create_btn.setToolTip(f"Create new {asset_type}")
-    create_btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER_LIGHT}; border-radius: 11px;
-        background: {_FUSION_BG_INPUT}; font-size: 14px; }}
-        QPushButton:hover {{ background: {_FUSION_BG_HOVER}; color: #4ec9b0; }}
-    """)
     def _create():
         _create_asset_dialog(w, asset_type, _update_display)
     create_btn.clicked.connect(_create)
@@ -373,10 +273,6 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     clear_btn = QPushButton("x")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
-    clear_btn.setStyleSheet(f"""
-        QPushButton {{ color: {_FUSION_TEXT_DIM}; border: none; border-radius: {_FUSION_INPUT_RADIUS}; font-size: 10px; background: transparent; }}
-        QPushButton:hover {{ color: {_FUSION_ACCENT_RED}; background: #3a1a1a; }}
-    """)
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
@@ -453,10 +349,6 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
         btn.setText("\u21ba")
         btn.setFixedSize(*scale_xy(18, 18))
         btn.setToolTip(f"Reset {label}")
-        btn.setStyleSheet(f"""
-            QPushButton {{ font-size: 12px; color: {_FUSION_TEXT_DIM}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; background: transparent; }}
-            QPushButton:hover {{ color: {_accent()}; border-color: {_accent()}; background: {_FUSION_BG_HOVER}; }}
-        """)
         def _reset():
             for sb, v in zip(spinboxes, reset_to):
                 sb.setValue(v)
@@ -490,7 +382,6 @@ def make_vec2_slider_row(label: str, vec: Vec2, callback, lo=0.0, hi=1.0) -> tup
     if label:
         lbl = QLabel(label)
         lbl.setFixedWidth(scale(80))
-        lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
@@ -512,7 +403,6 @@ def make_vec3_slider_row(label: str, vec: Vec3, callback, lo=0.0, hi=1.0) -> tup
     if label:
         lbl = QLabel(label)
         lbl.setFixedWidth(scale(80))
-        lbl.setStyleSheet(f"color: {_FUSION_TEXT}; font-size: 11px; background: transparent;")
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:

@@ -185,11 +185,9 @@ class HierarchyView(QTreeWidget):
         self.setAnimated(True)
         self.setItemDelegate(BarDelegate(self))
         self.setStyleSheet("""
-            QTreeWidget { background: #1a1a1a; color: #ccc; border: none; font: 9pt 'Segoe UI'; }
+            QTreeWidget { border: none; font: 9pt 'Segoe UI'; }
             QTreeWidget::item { padding: 1px 2px; min-height: 22px; }
-            QTreeWidget::item:alternate { background: #1f1f1f; }
-            QTreeWidget::item:selected { background: #2a3a4a; color: #fff; }
-            QHeaderView::section { background: #252525; color: #999; border: 1px solid #333;
+            QHeaderView::section { border: 1px solid;
                 padding: 3px 6px; font: 8pt 'Segoe UI'; }
         """)
         self.setColumnCount(6)
@@ -563,34 +561,27 @@ class FlameGraphWidget(QWidget):
 class ProfilerHeader(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet("background: #151515; border-bottom: 1px solid #2a2a2a;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(12)
         bf = _FONT_BOLD
         self._fps_lbl = QLabel("FPS: 0")
         self._fps_lbl.setFont(bf)
-        self._fps_lbl.setStyleSheet("color: #4FC3F7;")
         layout.addWidget(self._fps_lbl)
         self._frame_lbl = QLabel("Frame: 0")
         self._frame_lbl.setFont(bf)
-        self._frame_lbl.setStyleSheet("color: #aaa;")
         layout.addWidget(self._frame_lbl)
         self._time_lbl = QLabel("0.00ms")
         self._time_lbl.setFont(bf)
-        self._time_lbl.setStyleSheet("color: #81C784;")
         layout.addWidget(self._time_lbl)
         self._min_lbl = QLabel("Min: 0.00")
         self._min_lbl.setFont(_FONT)
-        self._min_lbl.setStyleSheet("color: #888;")
         layout.addWidget(self._min_lbl)
         self._avg_lbl = QLabel("Avg: 0.00")
         self._avg_lbl.setFont(_FONT)
-        self._avg_lbl.setStyleSheet("color: #888;")
         layout.addWidget(self._avg_lbl)
         self._max_lbl = QLabel("Max: 0.00")
         self._max_lbl.setFont(_FONT)
-        self._max_lbl.setStyleSheet("color: #FF8A65;")
         layout.addWidget(self._max_lbl)
         layout.addStretch()
         self._budget_indicator = QLabel("")
@@ -599,12 +590,8 @@ class ProfilerHeader(QFrame):
     def update_stats(self, fps: float, frame_count: int, frame_time_ms: float,
                      min_ms: float, avg_ms: float, max_ms: float):
         self._fps_lbl.setText(f"FPS: {fps:.1f}")
-        fps_color = "#4FC3F7" if fps >= 55 else ("#FFD54F" if fps >= 30 else "#FF6B6B")
-        self._fps_lbl.setStyleSheet(f"color: {fps_color};")
         self._frame_lbl.setText(f"Frame: {frame_count}")
         self._time_lbl.setText(f"{frame_time_ms:.2f}ms")
-        time_color = "#81C784" if frame_time_ms < 16.67 else ("#FFD54F" if frame_time_ms < 33.33 else "#FF6B6B")
-        self._time_lbl.setStyleSheet(f"color: {time_color};")
         self._min_lbl.setText(f"Min: {min_ms:.2f}")
         self._avg_lbl.setText(f"Avg: {avg_ms:.2f}")
         self._max_lbl.setText(f"Max: {max_ms:.2f}")
@@ -652,11 +639,10 @@ class ProfilerPanel(QDockWidget):
         layout.addWidget(self._timeline_overview)
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet("""
-            QTabWidget::pane { background: #1a1a1a; border: none; }
-            QTabBar::tab { background: #2a2a2a; color: #888; padding: 5px 14px; border: none;
+            QTabWidget::pane { border: none; }
+            QTabBar::tab { padding: 5px 14px; border: none;
                 font: 9pt 'Segoe UI'; }
-            QTabBar::tab:selected { background: #1a1a1a; color: #fff; border-bottom: 2px solid #4FC3F7; }
-            QTabBar::tab:hover { background: #333; }
+            QTabBar::tab:selected { border-bottom: 2px solid; }
         """)
         self._hierarchy_tree = HierarchyView()
         self._tabs.addTab(self._hierarchy_tree, "Hierarchy")
@@ -665,7 +651,7 @@ class ProfilerPanel(QDockWidget):
         self._flame_graph = FlameGraphWidget()
         scroll_fg = QScrollArea()
         scroll_fg.setWidgetResizable(True)
-        scroll_fg.setStyleSheet("QScrollArea { border: none; background: #181818; }")
+        scroll_fg.setStyleSheet("QScrollArea { border: none; }")
         scroll_fg.setWidget(self._flame_graph)
         self._tabs.addTab(scroll_fg, "Flame Graph")
         layout.addWidget(self._tabs, 1)

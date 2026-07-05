@@ -30,17 +30,11 @@ if TYPE_CHECKING:
     from core.engine import Engine
 from core.editor_scale import scale, scale_xy
 
-_STYLE_BTN = ("QPushButton { color: #ccc; background: #2d2d2d; border: 1px solid #4a4a4a; "
-              "border-radius: 3px; padding: 4px 8px; font-size: 11px; } "
-              "QPushButton:hover { background: #3d3d3d; color: #fff; } "
-              "QPushButton:pressed { background: #4a4a4a; }")
-_STYLE_BTN_ACCENT = ("QPushButton { color: #fff; background: #2a6ea5; border: 1px solid #3a8ec5; "
-                     "border-radius: 3px; padding: 4px 8px; font-size: 11px; } "
-                     "QPushButton:hover { background: #3a8ec5; } "
-                     "QPushButton:pressed { background: #1a5e95; }")
-_STYLE_LABEL = "color: #aaa; font-size: 10px; padding: 2px 0;"
-_STYLE_GROUP = ("QGroupBox { color: #8ab4f8; font-size: 11px; font-weight: bold; "
-                "border: 1px solid #3c3c3c; border-radius: 4px; margin-top: 8px; padding-top: 14px; } "
+_STYLE_BTN = ("QPushButton { border-radius: 3px; padding: 4px 8px; font-size: 11px; }")
+_STYLE_BTN_ACCENT = ("QPushButton { border-radius: 3px; padding: 4px 8px; font-size: 11px; }")
+_STYLE_LABEL = "font-size: 10px; padding: 2px 0;"
+_STYLE_GROUP = ("QGroupBox { font-size: 11px; font-weight: bold; "
+                "border: 1px solid; border-radius: 4px; margin-top: 8px; padding-top: 14px; } "
                 "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }")
 
 
@@ -74,7 +68,6 @@ def _sep() -> QFrame:
     f = QFrame()
     f.setFrameShape(QFrame.Shape.HLine)
     f.setFrameShadow(QFrame.Shadow.Sunken)
-    f.setStyleSheet("color: #3c3c3c;")
     return f
 
 
@@ -137,7 +130,7 @@ class MeshEditorPanel(QDockWidget):
         self._primitive_combo = QComboBox()
         for name in get_primitive_names():
             self._primitive_combo.addItem(name)
-        self._primitive_combo.setStyleSheet("color: #ccc; background: #2a2a2a; border: 1px solid #4a4a4a; padding: 2px 4px;")
+        self._primitive_combo.setStyleSheet("border: 1px solid; padding: 2px 4px;")
         row1.addWidget(self._primitive_combo, 1)
         create_btn = _make_btn("Create", "Create primitive as new mesh", accent=True)
         create_btn.clicked.connect(self._on_create_primitive)
@@ -153,7 +146,7 @@ class MeshEditorPanel(QDockWidget):
         self._size_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._size_label = QLabel("1.0")
         self._size_label.setFixedWidth(scale(28))
-        self._size_label.setStyleSheet("color: #aaa;")
+        self._size_label.setStyleSheet("")
         self._size_slider.valueChanged.connect(lambda v: self._size_label.setText(f"{v/50:.1f}"))
         size_row.addWidget(self._size_slider)
         size_row.addWidget(self._size_label)
@@ -168,7 +161,7 @@ class MeshEditorPanel(QDockWidget):
         self._detail_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._detail_label = QLabel("32")
         self._detail_label.setFixedWidth(scale(28))
-        self._detail_label.setStyleSheet("color: #aaa;")
+        self._detail_label.setStyleSheet("")
         self._detail_slider.valueChanged.connect(lambda v: self._detail_label.setText(f"{max(4, v*32//50)}"))
         detail_row.addWidget(self._detail_slider)
         detail_row.addWidget(self._detail_label)
@@ -289,7 +282,7 @@ class MeshEditorPanel(QDockWidget):
         smooth_row.addWidget(self._smooth_angle)
         self._smooth_label = QLabel("45")
         self._smooth_label.setFixedWidth(scale(24))
-        self._smooth_label.setStyleSheet("color: #aaa;")
+        self._smooth_label.setStyleSheet("")
         smooth_row.addWidget(self._smooth_label)
         layout.addLayout(smooth_row)
 

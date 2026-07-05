@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 from typing import Optional
-from PyQt6.QtWidgets import QDoubleSpinBox, QLabel, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QDialog
+from PyQt6.QtWidgets import QDoubleSpinBox, QLabel, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget, \
+    QListWidgetItem, QPushButton, QDialog, QApplication
 from PyQt6.QtCore import Qt, QTimer, QMimeData
 from PyQt6.QtGui import QPixmap, QFont, QColor, QPainter, QBrush, QPen, QFont as QF, QCursor, QIcon
 from core.editor_scale import scale, scale_xy
-from editor.inspector.constants import _FUSION_BG, _FUSION_BG_CARD, _FUSION_BG_INPUT, _FUSION_BG_HOVER, _FUSION_BORDER, _FUSION_BORDER_LIGHT, _FUSION_TEXT, _FUSION_TEXT_DIM, _FUSION_TEXT_BRIGHT, _FUSION_INPUT_RADIUS, _accent
+from editor.inspector.constants import _accent
 def _get_component_icon_pixmap(cls, size=16):
     from editor.inspector.helpers import get_component_icon_pixmap
     return get_component_icon_pixmap(cls, size)
@@ -81,15 +82,13 @@ class _DragLabel(QLabel):
             event.accept()
 
 class _DropLabelMixin:
-    _HIGHLIGHT_STYLE = f"background: {_FUSION_BG_HOVER}; border: 1px solid {_accent()}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
-    _NORMAL_STYLE = f"color: {_FUSION_TEXT}; background: {_FUSION_BG_INPUT}; border: 1px solid {_FUSION_BORDER}; border-radius: {_FUSION_INPUT_RADIUS}; padding: 2px 6px;"
     def _highlight(self, on=True):
         if on:
             if not hasattr(self, '_cached_style'):
-                self._cached_style = self.styleSheet() or self._NORMAL_STYLE
-            self.setStyleSheet(self._HIGHLIGHT_STYLE)
+                self._cached_style = self.styleSheet()
+            self.setStyleSheet("border: 1px solid;")
         else:
-            style = getattr(self, '_cached_style', self._NORMAL_STYLE)
+            style = getattr(self, '_cached_style', "")
             self.setStyleSheet(style)
 
 class _ResourceDropLabel(QLabel, _DropLabelMixin):
@@ -165,56 +164,6 @@ class EntityPickerDialog(QDialog):
         self._setup_ui()
         self._populate()
     def _setup_ui(self):
-        self.setStyleSheet(f"""
-            QDialog {{
-                background: {_FUSION_BG};
-            }}
-            QLineEdit {{
-                background: {_FUSION_BG_INPUT};
-                color: {_FUSION_TEXT_BRIGHT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 3px 6px;
-                font-size: 11px;
-                selection-background-color: {_accent()};
-            }}
-            QLineEdit:focus {{ border-color: {_accent()}; }}
-            QListWidget {{
-                background: {_FUSION_BG_CARD};
-                color: {_FUSION_TEXT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                font-size: 11px;
-                outline: none;
-            }}
-            QListWidget::item {{
-                padding: 3px 6px;
-                border-radius: 2px;
-            }}
-            QListWidget::item:selected {{
-                background: {_FUSION_BG_HOVER};
-                color: {_FUSION_TEXT_BRIGHT};
-            }}
-            QListWidget::item:hover {{
-                background: {_FUSION_BG_HOVER};
-            }}
-            QPushButton {{
-                color: {_FUSION_TEXT};
-                background: {_FUSION_BG_INPUT};
-                border: 1px solid {_FUSION_BORDER};
-                border-radius: {_FUSION_INPUT_RADIUS};
-                padding: 4px 16px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background: {_FUSION_BG_HOVER};
-                color: {_FUSION_TEXT_BRIGHT};
-            }}
-            QPushButton:disabled {{
-                color: {_FUSION_TEXT_DIM};
-                background: {_FUSION_BG};
-            }}
-        """)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)

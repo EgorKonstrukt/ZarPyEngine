@@ -63,40 +63,35 @@ class CollaborationPanel(QDockWidget):
         layout.setSpacing(4)
 
         title = QLabel("Collaboration")
-        title.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold; padding: 2px;")
+        title.setStyleSheet("font-size: 11px; font-weight: bold; padding: 2px;")
         layout.addWidget(title)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: #333;")
         layout.addWidget(sep)
 
         self._status_label = QLabel("Disconnected")
-        self._status_label.setStyleSheet("color: #888; font-size: 10px;")
+        self._status_label.setStyleSheet("font-size: 10px;")
         layout.addWidget(self._status_label)
 
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("Your name")
         self._name_input.setText("User")
-        self._name_input.setStyleSheet("background: #2a2a2a; color: #ddd; border: 1px solid #444; padding: 2px 4px;")
         layout.addWidget(self._name_input)
 
         host_row = QHBoxLayout()
         self._host_input = QLineEdit()
         self._host_input.setPlaceholderText("Host")
         self._host_input.setText("0.0.0.0")
-        self._host_input.setStyleSheet("background: #2a2a2a; color: #ddd; border: 1px solid #444; padding: 2px 4px;")
         host_row.addWidget(self._host_input)
 
         self._port_input = QSpinBox()
         self._port_input.setRange(1024, 65535)
         self._port_input.setValue(9876)
-        self._port_input.setStyleSheet("background: #2a2a2a; color: #ddd; border: 1px solid #444;")
         host_row.addWidget(self._port_input)
         layout.addLayout(host_row)
 
         self._host_btn = QPushButton("Host Session")
-        self._host_btn.setStyleSheet("background: #2d5a8e; color: #fff; border: 1px solid #4a7ab5; padding: 4px;")
         self._host_btn.clicked.connect(self._on_host)
         layout.addWidget(self._host_btn)
 
@@ -104,91 +99,77 @@ class CollaborationPanel(QDockWidget):
         self._connect_host_input = QLineEdit()
         self._connect_host_input.setPlaceholderText("Server IP")
         self._connect_host_input.setText("127.0.0.1")
-        self._connect_host_input.setStyleSheet("background: #2a2a2a; color: #ddd; border: 1px solid #444; padding: 2px 4px;")
         connect_row.addWidget(self._connect_host_input)
 
         self._connect_port_input = QSpinBox()
         self._connect_port_input.setRange(1024, 65535)
         self._connect_port_input.setValue(9876)
-        self._connect_port_input.setStyleSheet("background: #2a2a2a; color: #ddd; border: 1px solid #444;")
         connect_row.addWidget(self._connect_port_input)
         layout.addLayout(connect_row)
 
         self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setStyleSheet("background: #3a6a3a; color: #fff; border: 1px solid #5a9a5a; padding: 4px;")
         self._connect_btn.clicked.connect(self._on_connect)
         layout.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("Disconnect")
-        self._disconnect_btn.setStyleSheet("background: #6a3a3a; color: #fff; border: 1px solid #9a5a5a; padding: 4px;")
         self._disconnect_btn.clicked.connect(self._on_disconnect)
         self._disconnect_btn.setEnabled(False)
         layout.addWidget(self._disconnect_btn)
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet("color: #333;")
         layout.addWidget(sep2)
 
         self._play_btn = QPushButton("Play Mode (Lock)")
         self._play_btn.setCheckable(True)
-        self._play_btn.setStyleSheet("background: #5a3a1a; color: #ddd; border: 1px solid #8a6a3a; padding: 4px;")
         self._play_btn.clicked.connect(self._on_play_toggle)
         layout.addWidget(self._play_btn)
 
         bw_row = QHBoxLayout()
         self._bw_sent_label = QLabel("Up: 0 B/s")
-        self._bw_sent_label.setStyleSheet("color: #888; font-size: 9px;")
+        self._bw_sent_label.setStyleSheet("font-size: 9px;")
         bw_row.addWidget(self._bw_sent_label)
         self._bw_recv_label = QLabel("Down: 0 B/s")
-        self._bw_recv_label.setStyleSheet("color: #888; font-size: 9px;")
+        self._bw_recv_label.setStyleSheet("font-size: 9px;")
         bw_row.addWidget(self._bw_recv_label)
         layout.addLayout(bw_row)
 
         self._latency_label = QLabel("Latency: -- ms")
-        self._latency_label.setStyleSheet("color: #888; font-size: 9px;")
+        self._latency_label.setStyleSheet("font-size: 9px;")
         layout.addWidget(self._latency_label)
 
         sep_assets = QFrame()
         sep_assets.setFrameShape(QFrame.Shape.HLine)
-        sep_assets.setStyleSheet("color: #333;")
         layout.addWidget(sep_assets)
 
         asset_title = QLabel("Asset Sync")
-        asset_title.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold;")
+        asset_title.setStyleSheet("font-size: 10px; font-weight: bold;")
         layout.addWidget(asset_title)
 
         self._asset_status = QLabel("Idle")
-        self._asset_status.setStyleSheet("color: #888; font-size: 9px;")
+        self._asset_status.setStyleSheet("font-size: 9px;")
         layout.addWidget(self._asset_status)
 
         self._asset_progress = QProgressBar()
         self._asset_progress.setRange(0, 100)
         self._asset_progress.setValue(0)
         self._asset_progress.setFixedHeight(12)
-        self._asset_progress.setStyleSheet(
-            "QProgressBar { background: #2a2a2a; border: 1px solid #444; text-align: center; font-size: 8px; color: #aaa; }"
-            "QProgressBar::chunk { background: #2d5a8e; }"
-        )
         self._asset_progress.setVisible(False)
         layout.addWidget(self._asset_progress)
 
         self._sync_btn = QPushButton("Sync Assets")
-        self._sync_btn.setStyleSheet("background: #3a4a6a; color: #ddd; border: 1px solid #5a7a9a; padding: 3px;")
         self._sync_btn.clicked.connect(self._on_sync_assets)
         layout.addWidget(self._sync_btn)
 
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.Shape.HLine)
-        sep3.setStyleSheet("color: #333;")
         layout.addWidget(sep3)
 
         peer_title = QLabel("Connected Peers")
-        peer_title.setStyleSheet("color: #aaa; font-size: 10px; font-weight: bold;")
+        peer_title.setStyleSheet("font-size: 10px; font-weight: bold;")
         layout.addWidget(peer_title)
 
         self._peer_list = QListWidget()
-        self._peer_list.setStyleSheet("background: #1a1a1a; color: #ccc; border: 1px solid #333;")
         layout.addWidget(self._peer_list)
 
         layout.addStretch()
@@ -229,10 +210,10 @@ class CollaborationPanel(QDockWidget):
         connected = self._collab and self._collab.connected
         if connected:
             self._status_label.setText("Connected")
-            self._status_label.setStyleSheet("color: #4c4; font-size: 10px;")
+            self._status_label.setStyleSheet("font-size: 10px;")
         else:
             self._status_label.setText("Disconnected")
-            self._status_label.setStyleSheet("color: #888; font-size: 10px;")
+            self._status_label.setStyleSheet("font-size: 10px;")
         self._host_btn.setEnabled(not connected)
         self._connect_btn.setEnabled(not connected)
         self._disconnect_btn.setEnabled(connected)
@@ -287,13 +268,13 @@ class CollaborationPanel(QDockWidget):
                 self._asset_progress.setValue(100)
             if failed:
                 self._asset_status.setText(f"Synced ({failed} failed)")
-                self._asset_status.setStyleSheet("color: #c44; font-size: 9px;")
+                self._asset_status.setStyleSheet("font-size: 9px;")
             elif total > 0 and not syncing:
                 self._asset_status.setText("Synced")
-                self._asset_status.setStyleSheet("color: #4c4; font-size: 9px;")
+                self._asset_status.setStyleSheet("font-size: 9px;")
             else:
                 self._asset_status.setText("Idle")
-                self._asset_status.setStyleSheet("color: #888; font-size: 9px;")
+                self._asset_status.setStyleSheet("font-size: 9px;")
             self._sync_btn.setEnabled(self._collab.connected)
 
     def _on_sync_assets(self):

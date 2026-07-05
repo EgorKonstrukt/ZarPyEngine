@@ -32,17 +32,15 @@ class PluginManagerPanel(QDockWidget):
 
         hdr = QHBoxLayout()
         title = QLabel("Installed Plugins")
-        title.setStyleSheet("font-weight: bold; color: #ccc;")
+        title.setStyleSheet("font-weight: bold;")
         hdr.addWidget(title)
         hdr.addStretch()
         self._count_label = QLabel("0 plugins")
-        self._count_label.setStyleSheet("color: #888;")
         hdr.addWidget(self._count_label)
         layout.addLayout(hdr)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: #333;")
         layout.addWidget(sep)
 
         self._table = QTableWidget()
@@ -59,9 +57,8 @@ class PluginManagerPanel(QDockWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._table.setStyleSheet("""
-            QTableWidget { background: #252525; color: #ccc; border: none; gridline-color: #333; }
             QTableWidget::item { padding: 4px; }
-            QHeaderView::section { background: #2d2d2d; color: #aaa; border: 1px solid #333; padding: 4px; }
+            QHeaderView::section { padding: 4px; }
         """)
         self._table.cellChanged.connect(self._on_cell_changed)
         layout.addWidget(self._table)
@@ -69,15 +66,15 @@ class PluginManagerPanel(QDockWidget):
         btn_row = QHBoxLayout()
         self._load_btn = QPushButton("Load Plugin...")
         self._load_btn.clicked.connect(self._load_plugin)
-        self._load_btn.setStyleSheet("background: #3a3a3a; color: #ccc; padding: 4px 12px; border: 1px solid #555;")
+        self._load_btn.setStyleSheet("padding: 4px 12px;")
         btn_row.addWidget(self._load_btn)
         self._build_btn = QPushButton("Build Plugin...")
         self._build_btn.clicked.connect(self._build_plugin)
-        self._build_btn.setStyleSheet("background: #3a3a3a; color: #ccc; padding: 4px 12px; border: 1px solid #555;")
+        self._build_btn.setStyleSheet("padding: 4px 12px;")
         btn_row.addWidget(self._build_btn)
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.clicked.connect(self._refresh)
-        self._refresh_btn.setStyleSheet("background: #3a3a3a; color: #ccc; padding: 4px 12px; border: 1px solid #555;")
+        self._refresh_btn.setStyleSheet("padding: 4px 12px;")
         btn_row.addWidget(self._refresh_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)

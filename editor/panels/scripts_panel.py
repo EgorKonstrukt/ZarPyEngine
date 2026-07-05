@@ -22,103 +22,7 @@ if TYPE_CHECKING:
 
 from core.editor_scale import scale
 
-_WIN10_BG = "#1e1e1e"
-_WIN10_PANEL = "#252526"
-_WIN10_TOOLBAR = "#2d2d2d"
-_WIN10_BORDER = "#3c3c3c"
-_WIN10_TEXT = "#cccccc"
-_WIN10_TEXT_DIM = "#888888"
-_WIN10_TEXT_BRIGHT = "#ffffff"
-_WIN10_ACCENT = "#4fc3f7"
-
-_DARK_STYLE = f"""
-QDockWidget {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT};
-    titlebar-close-icon: none;
-}}
-QDockWidget::title {{
-    background: {_WIN10_TOOLBAR};
-    padding: 4px 8px;
-    font-size: 11px;
-    border-bottom: 1px solid {_WIN10_BORDER};
-}}
-QTabWidget::pane {{
-    border: 1px solid {_WIN10_BORDER};
-    background: {_WIN10_BG};
-}}
-QTabBar::tab {{
-    background: {_WIN10_TOOLBAR};
-    color: {_WIN10_TEXT_DIM};
-    padding: 6px 16px;
-    border: 1px solid {_WIN10_BORDER};
-    border-bottom: none;
-    margin-right: 1px;
-    font-size: 11px;
-}}
-QTabBar::tab:selected {{
-    background: {_WIN10_BG};
-    color: {_WIN10_TEXT_BRIGHT};
-    border-bottom: 2px solid {_WIN10_ACCENT};
-}}
-QTabBar::tab:hover:!selected {{
-    background: #333333;
-}}
-QToolBar {{
-    background: {_WIN10_TOOLBAR};
-    border-bottom: 1px solid {_WIN10_BORDER};
-    spacing: 2px;
-    padding: 2px;
-}}
-QToolButton {{
-    background: transparent;
-    color: {_WIN10_TEXT};
-    border: 1px solid transparent;
-    border-radius: 3px;
-    padding: 4px 8px;
-    font-size: 11px;
-}}
-QToolButton:hover {{
-    background: #37373d;
-    border-color: {_WIN10_BORDER};
-}}
-QToolButton:pressed {{
-    background: #444444;
-}}
-QLineEdit {{
-    background: #3c3c3c;
-    color: {_WIN10_TEXT};
-    border: 1px solid {_WIN10_BORDER};
-    border-radius: 3px;
-    padding: 4px 8px;
-    font-size: 11px;
-}}
-QLineEdit:focus {{
-    border-color: {_WIN10_ACCENT};
-}}
-QComboBox {{
-    background: #3c3c3c;
-    color: {_WIN10_TEXT};
-    border: 1px solid {_WIN10_BORDER};
-    border-radius: 3px;
-    padding: 4px 8px;
-    font-size: 11px;
-}}
-QComboBox:hover {{
-    border-color: {_WIN10_ACCENT};
-}}
-QComboBox::drop-down {{
-    border: none;
-    width: 20px;
-}}
-QComboBox QAbstractItemView {{
-    background: #2d2d2d;
-    color: {_WIN10_TEXT};
-    selection-background-color: {_WIN10_ACCENT};
-    border: 1px solid {_WIN10_BORDER};
-}}
-"""
-
+_DARK_STYLE = ""
 
 class _PythonHighlighter(QSyntaxHighlighter):
     def __init__(self, parent=None):
@@ -167,7 +71,6 @@ class _PythonHighlighter(QSyntaxHighlighter):
                 match = match_it.next()
                 self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
 
-
 class _CodeEditor(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -180,7 +83,6 @@ class _CodeEditor(QPlainTextEdit):
             cursor.insertText("    ")
             return
         super().keyPressEvent(event)
-
 
 class _ShaderGraphWidget(QWidget):
     def __init__(self, parent=None):
@@ -198,9 +100,6 @@ class _ShaderGraphWidget(QWidget):
         toolbar = QToolBar()
         toolbar.setIconSize(QSize(16, 16))
         toolbar.setStyleSheet(f"""
-            QToolBar {{ background: {_WIN10_TOOLBAR}; border-bottom: 1px solid {_WIN10_BORDER}; spacing: 2px; padding: 2px; }}
-            QToolButton {{ background: transparent; color: {_WIN10_TEXT}; border: 1px solid transparent; border-radius: 3px; padding: 4px 8px; font-size: 11px; }}
-            QToolButton:hover {{ background: #37373d; border-color: {_WIN10_BORDER}; }}
         """)
 
         self._new_btn = QToolButton()
@@ -231,7 +130,6 @@ class _ShaderGraphWidget(QWidget):
         toolbar.addWidget(self._compile_btn)
 
         self._file_label = QLabel("  No file")
-        self._file_label.setStyleSheet(f"color: {_WIN10_TEXT_DIM}; font-size: 11px; padding: 0 8px;")
         toolbar.addWidget(self._file_label)
 
         layout.addWidget(toolbar)
@@ -246,10 +144,7 @@ class _ShaderGraphWidget(QWidget):
         palette = QWidget()
         palette.setMaximumHeight(120)
         palette.setStyleSheet(f"""
-            QWidget {{ background: {_WIN10_PANEL}; border-bottom: 1px solid {_WIN10_BORDER}; }}
-            QToolButton {{ background: #3c3c3c; color: {_WIN10_TEXT}; border: 1px solid {_WIN10_BORDER};
                            border-radius: 3px; padding: 4px 8px; font-size: 10px; }}
-            QToolButton:hover {{ background: #4a4a4a; border-color: {_WIN10_ACCENT}; }}
         """)
         layout = QVBoxLayout(palette)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -295,12 +190,10 @@ class _ShaderGraphWidget(QWidget):
         cat_layout.setSpacing(4)
         for cat_name, nodes in categories.items():
             cat_frame = QFrame()
-            cat_frame.setStyleSheet(f"QFrame {{ background: transparent; border: 1px solid {_WIN10_BORDER}; border-radius: 4px; padding: 2px; }}")
             cat_layout_f = QVBoxLayout(cat_frame)
             cat_layout_f.setContentsMargins(4, 2, 4, 2)
             cat_layout_f.setSpacing(2)
             cat_label = QLabel(cat_name)
-            cat_label.setStyleSheet(f"color: {_WIN10_ACCENT}; font-size: 10px; font-weight: bold; border: none; padding: 0;")
             cat_layout_f.addWidget(cat_label)
             btn_layout = QHBoxLayout()
             btn_layout.setSpacing(2)
@@ -407,7 +300,6 @@ class _ShaderGraphWidget(QWidget):
         """)
         preview.show()
 
-
 class _ScriptEditorWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -421,9 +313,6 @@ class _ScriptEditorWidget(QWidget):
 
         toolbar = QToolBar()
         toolbar.setStyleSheet(f"""
-            QToolBar {{ background: {_WIN10_TOOLBAR}; border-bottom: 1px solid {_WIN10_BORDER}; spacing: 2px; padding: 2px; }}
-            QToolButton {{ background: transparent; color: {_WIN10_TEXT}; border: 1px solid transparent; border-radius: 3px; padding: 4px 8px; font-size: 11px; }}
-            QToolButton:hover {{ background: #37373d; border-color: {_WIN10_BORDER}; }}
         """)
 
         new_btn = QToolButton()
@@ -449,7 +338,6 @@ class _ScriptEditorWidget(QWidget):
         toolbar.addSeparator()
 
         self._file_label = QLabel("  No file")
-        self._file_label.setStyleSheet(f"color: {_WIN10_TEXT_DIM}; font-size: 11px; padding: 0 8px;")
         toolbar.addWidget(self._file_label)
 
         layout.addWidget(toolbar)
@@ -508,7 +396,6 @@ class _ScriptEditorWidget(QWidget):
             self._file_label.setText(f"  {os.path.basename(path)}")
             self._save_script()
 
-
 class ScriptsPanel(QDockWidget):
     def __init__(self, engine: Engine, parent=None):
         super().__init__("Scripts", parent)
@@ -520,6 +407,7 @@ class ScriptsPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.setMinimumWidth(200)
 
         tabs = QTabWidget()
         tabs.setTabPosition(QTabWidget.TabPosition.North)
