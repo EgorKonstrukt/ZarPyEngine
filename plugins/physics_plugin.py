@@ -13,7 +13,7 @@ from core.logger import Logger
 from core.physics import PhysicsProcess, PhysicsScene
 from core.physics.shared_buffer import MAX_ENTITIES
 from core.physics.physics_solver import IPhysicsSolver
-from core.math3d import Vec2
+from core.math3d import Vec2, Vec3
 from core.physics.shape_utils import find_shape_info
 from core.config import get_project_config
 
