@@ -1984,6 +1984,21 @@ class NewScript(Component):
             f.write(template)
         self._refresh()
 
+    def open_resource(self, path: str):
+        if os.path.isdir(path):
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".zpes":
+            self._engine.load_scene(path)
+        elif ext == ".zpep":
+            self.file_double_clicked.emit(path)
+        elif ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
+            self.import_model_requested.emit(path)
+        elif ext in (".animclip", ".animcontroller"):
+            self.file_double_clicked.emit(path)
+        else:
+            self._open_path_with_default_app(path)
+
     def reveal_resource(self, path: str):
         norm = os.path.normpath(path)
         if not os.path.exists(norm):

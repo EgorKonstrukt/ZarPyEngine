@@ -38,6 +38,7 @@ def _navigate_resource(label: QLabel):
         mw = label.window()
         if hasattr(mw, '_project'):
             mw._project.reveal_resource(p)
+            mw._project.open_resource(p)
 
 def _flash_resource(label: QLabel):
     p = label.toolTip()
@@ -68,22 +69,33 @@ def _expanded_rect(rect: QRect, factor: float) -> QRect:
     return QRect(x, y, w, h)
 
 def _flash_overlay(viewport, item_rect: QRect, duration: int = 800):
-    overlay = QFrame(viewport)
+    main_window = viewport.window()
+    if not main_window:
+        return
+    global_tl = viewport.mapToGlobal(item_rect.topLeft())
+    item_global = QRect(global_tl, item_rect.size())
+    start_global = _expanded_rect(item_global, 3.0)
+
+    overlay = QFrame(main_window)
+    overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     overlay.setStyleSheet("background: rgba(255, 255, 0, 180); border-radius: 4px;")
-    start_rect = _expanded_rect(item_rect, 3.0)
-    overlay.setGeometry(start_rect)
+    overlay.setGeometry(QRect(main_window.mapFromGlobal(start_global.topLeft()), start_global.size()))
     overlay.show()
+    overlay.raise_()
+
     op = QGraphicsOpacityEffect(overlay)
     overlay.setGraphicsEffect(op)
     opacity_anim = QPropertyAnimation(op, b"opacity")
     opacity_anim.setStartValue(0.8)
     opacity_anim.setEndValue(0.0)
     opacity_anim.setDuration(duration)
+
     geo_anim = QPropertyAnimation(overlay, b"geometry")
-    geo_anim.setStartValue(start_rect)
-    geo_anim.setEndValue(item_rect)
+    geo_anim.setStartValue(QRect(main_window.mapFromGlobal(start_global.topLeft()), start_global.size()))
+    geo_anim.setEndValue(QRect(main_window.mapFromGlobal(item_global.topLeft()), item_global.size()))
     geo_anim.setDuration(duration)
     geo_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
     def _cleanup():
         overlay.deleteLater()
     opacity_anim.finished.connect(_cleanup)
