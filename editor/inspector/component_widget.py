@@ -440,7 +440,7 @@ class ComponentWidget(QWidget):
                 QSlider::groove:horizontal {{
                     border: none;
                     height: 4px;
-                    background: {self.palette().mid().name()};
+                    background: {self.palette().mid().color().name()};
                     border-radius: 2px;
                 }}
                 QSlider::handle:horizontal {{
@@ -463,16 +463,16 @@ class ComponentWidget(QWidget):
             comp_cls = type(c)
             sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
             _updating = [False]
-            scale = _slider_scale
+            _slider_scale_val = _slider_scale
             def _on_slider(v):
                 if _updating[0]: return
                 _updating[0] = True
-                sb.setValue(v / scale)
+                sb.setValue(v / _slider_scale_val)
                 _updating[0] = False
             def _on_spinbox(v):
                 if _updating[0]: return
                 _updating[0] = True
-                slider.setValue(int(v * scale))
+                slider.setValue(int(v * _slider_scale_val))
                 _updating[0] = False
             slider.valueChanged.connect(_on_slider)
             sb.valueChanged.connect(_on_spinbox)
@@ -600,11 +600,8 @@ class ComponentWidget(QWidget):
             pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter(prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "gameobject":
-            from core.ecs import Scene
-            scene = None
-            if self._entity:
-                try: scene = self._entity.scene
-                except: pass
+            from core.engine import Engine
+            scene = Engine.instance().scene
             gw = make_gameobject_picker(value, scene, self._undo_setter(prop_name))
             self._add_field(field.label, gw, prop_name, field.toggle_field)
         elif field.field_type.value == "resource_type":
@@ -629,11 +626,11 @@ class ComponentWidget(QWidget):
             ctrl = AnchorPresetSelector()
             if hasattr(c, prop_name):
                 current = getattr(c, prop_name)
-                if isinstance(current, (list, tuple)) and len(current) >= 4:
-                    ctrl.set_anchor(current[0], current[1], current[2], current[3])
+                if isinstance(current, int):
+                    ctrl.set_anchor(current)
             def _on_anchor_change(v):
-                setattr(c, prop_name, list(v))
-                get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, list(v)))
+                setattr(c, prop_name, v)
+                get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, v))
             ctrl.anchor_changed.connect(_on_anchor_change)
             self._add_field(field.label, ctrl, prop_name, field.toggle_field)
         elif field.field_type.value == "text":
@@ -710,7 +707,8 @@ class ComponentWidget(QWidget):
                 }}
             """)
             btn.setMinimumHeight(22)
-            cfg = get_project_config()
+            from core.engine import Engine
+            cfg = get_project_config(Engine.instance().project_root)
             layer_names = cfg.get("physics.layer_names", DEFAULT_LAYER_NAMES) if cfg else DEFAULT_LAYER_NAMES
             menu = QMenu(self)
 
@@ -863,6 +861,10 @@ class ComponentWidget(QWidget):
 
     def _build_list_field_standalone(self, field, prop_name):
         c = self._component
+        old = getattr(self, "_list_container", None)
+        if old is not None:
+            old.setParent(None)
+            old.deleteLater()
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         cl = QVBoxLayout(container)
@@ -926,6 +928,12 @@ class ComponentWidget(QWidget):
     def _build_list_element_widget_standalone(self, prop_name, index, ef, val):
         if ef.field_type.value == "float":
             sb = make_spinbox(val.get(ef.name, 0.0) if isinstance(val, dict) else 0.0)
+            sb.setStyleSheet(f"""
+                QDoubleSpinBox {{
+                    background: palette(base); color: palette(text);
+                    border: 1px solid palette(mid); border-radius: 2px; padding: 2px;
+                }}
+            """)
             def on_change(v, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
@@ -937,6 +945,12 @@ class ComponentWidget(QWidget):
             sb = QSpinBox()
             sb.setRange(-2147483648, 2147483647)
             sb.setValue(val.get(ef.name, 0) if isinstance(val, dict) else 0)
+            sb.setStyleSheet(f"""
+                QSpinBox {{
+                    background: palette(base); color: palette(text);
+                    border: 1px solid palette(mid); border-radius: 2px; padding: 2px;
+                }}
+            """)
             def on_change(v, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
@@ -947,6 +961,7 @@ class ComponentWidget(QWidget):
         elif ef.field_type.value == "bool":
             cb = QCheckBox()
             cb.setChecked(val.get(ef.name, False) if isinstance(val, dict) else False)
+            cb.setStyleSheet("background: transparent;")
             def on_toggle(v, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
@@ -955,11 +970,8 @@ class ComponentWidget(QWidget):
             cb.toggled.connect(on_toggle)
             return cb
         elif ef.field_type.value == "gameobject":
-            from core.ecs import Scene
-            scene = None
-            if self._entity:
-                try: scene = self._entity.scene
-                except: pass
+            from core.engine import Engine
+            scene = Engine.instance().scene
             eid = val.get(ef.name, "") if isinstance(val, dict) else ""
             def on_entity(eid, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
@@ -1000,14 +1012,13 @@ class ComponentWidget(QWidget):
                     items[idx][fn] = t
                     setattr(self._component, pn, items)
             return make_resource_type_picker(path, rt, on_change)
-        elif ef.field_type.value == "text":
+        elif ef.field_type.value == "string" or ef.field_type.value == "text":
             te = QLineEdit()
             te.setText(str(val.get(ef.name, "")) if isinstance(val, dict) else "")
             te.setStyleSheet(f"""
                 QLineEdit {{
-                    border-radius: {_FUSION_INPUT_RADIUS};
-                    padding: 2px 4px; font-size: 11px;
-                    selection-background-color: {_accent()};
+                    background: palette(base); color: palette(text);
+                    border: 1px solid palette(mid); border-radius: 2px; padding: 2px 4px; font-size: 11px;
                 }}
             """)
             def on_change(t, idx=index, pn=prop_name, fn=ef.name):
@@ -1029,20 +1040,18 @@ class ComponentWidget(QWidget):
                 sb.valueChanged.connect(on_change)
             return w
         elif ef.field_type.value == "color":
-            from PyQt6.QtWidgets import QColorDialog
-            color_btn = QPushButton()
-            color_btn.setFixedSize(*scale_xy(30, 20))
+            from editor.color_picker import ColorLineEdit
             rgb = val.get(ef.name, [1, 1, 1]) if isinstance(val, dict) else [1, 1, 1]
-            qcolor = QColor()
-            qcolor.setRgbF(*rgb[:3])
-            qss = f"background: rgba({int(qcolor.redF()*255)}, {int(qcolor.greenF()*255)}, {int(qcolor.blueF()*255)}, 255); border-radius: {_FUSION_INPUT_RADIUS};"
-            color_btn.setStyleSheet(qss)
-            def on_change(idx=index, pn=prop_name, fn=ef.name, boxes=sbs):
+            initial = QColor.fromRgbF(*rgb[:3])
+            color_edit = ColorLineEdit(initial)
+            color_edit.setFixedSize(*scale_xy(60, 20))
+            def on_change(col, idx=index, pn=prop_name, fn=ef.name):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
-                    items[idx][fn] = list(rgb)
+                    items[idx][fn] = [col.redF(), col.greenF(), col.blueF()]
                     setattr(self._component, pn, items)
-            return color_btn
+            color_edit.colorChanged.connect(on_change)
+            return color_edit
         return None
 
     def _list_add_item(self, component, prop_name):

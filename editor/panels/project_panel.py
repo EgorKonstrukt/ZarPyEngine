@@ -1983,6 +1983,44 @@ class NewScript(Component):
             f.write(template)
         self._refresh()
 
+    def reveal_resource(self, path: str):
+        norm = os.path.normpath(path)
+        if not os.path.exists(norm):
+            return
+        self._sync_tree_selection(os.path.dirname(norm))
+        pane = self._active_pane()
+        pane.populate_files(os.path.dirname(norm))
+        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtGui import QColor, QBrush
+        item = None
+        if self._view_mode == VIEW_DETAILS:
+            tree = pane._detail_tree
+            for i in range(tree.topLevelItemCount()):
+                it = tree.topLevelItem(i)
+                if it and it.data(0, Qt.ItemDataRole.UserRole) == norm:
+                    tree.setCurrentItem(it)
+                    tree.scrollToItem(it)
+                    item = it
+                    break
+        else:
+            lst = pane._file_list
+            for i in range(lst.count()):
+                it = lst.item(i)
+                if it and it.data(Qt.ItemDataRole.UserRole) == norm:
+                    lst.setCurrentItem(it)
+                    lst.scrollToItem(it)
+                    item = it
+                    break
+        if item:
+            flash = QColor(255, 255, 0, 120)
+            blank = QBrush()
+            if isinstance(item, QTreeWidgetItem):
+                item.setBackground(0, QBrush(flash))
+                QTimer.singleShot(600, lambda: item.setBackground(0, blank))
+            else:
+                item.setBackground(QBrush(flash))
+                QTimer.singleShot(600, lambda: item.setBackground(blank))
+
     def set_project_root(self, path: str):
         self._project_root = os.path.abspath(path)
         self._pane_a._current_dir = self._project_root

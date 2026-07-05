@@ -82,11 +82,18 @@ class _DragLabel(QLabel):
             event.accept()
 
 class _DropLabelMixin:
+    _BASE_STYLE = """
+        QLabel {
+            background: palette(base); color: palette(text);
+            border: 1px solid palette(mid); border-radius: 2px;
+            padding: 2px 4px; font-size: 11px;
+        }
+    """
     def _highlight(self, on=True):
         if on:
             if not hasattr(self, '_cached_style'):
                 self._cached_style = self.styleSheet()
-            self.setStyleSheet("border: 1px solid;")
+            self.setStyleSheet("border: 1px solid palette(highlight);")
         else:
             style = getattr(self, '_cached_style', "")
             self.setStyleSheet(style)
@@ -96,6 +103,7 @@ class _ResourceDropLabel(QLabel, _DropLabelMixin):
         super().__init__(*args, **kwargs)
         self._on_drop = on_drop
         self.setAcceptDrops(True)
+        self.setStyleSheet(self._BASE_STYLE)
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
@@ -128,6 +136,7 @@ class _EntityDropLabel(QLabel, _DropLabelMixin):
         super().__init__(*args, **kwargs)
         self._on_drop = on_drop
         self.setAcceptDrops(True)
+        self.setStyleSheet(self._BASE_STYLE)
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-zpe-entity"):
             event.setDropAction(Qt.DropAction.CopyAction)
@@ -154,6 +163,26 @@ class _EntityDropLabel(QLabel, _DropLabelMixin):
         event.acceptProposedAction()
 
 class EntityPickerDialog(QDialog):
+    _DIALOG_STYLE = """
+        QDialog { background: palette(window); }
+        QLineEdit {
+            background: palette(base); color: palette(text);
+            border: 1px solid palette(mid); border-radius: 2px; padding: 2px 4px;
+        }
+        QListWidget {
+            background: palette(base); color: palette(text);
+            border: 1px solid palette(mid); border-radius: 2px;
+        }
+        QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
+        QListWidget::item:hover { background: palette(light); }
+        QPushButton {
+            background: palette(button); color: palette(buttonText);
+            border: 1px solid palette(mid); border-radius: 2px; padding: 4px 16px;
+        }
+        QPushButton:hover { background: palette(light); }
+        QPushButton:pressed { background: palette(dark); }
+        QPushButton:disabled { color: palette(mid); }
+    """
     def __init__(self, scene, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Select Entity")
@@ -161,6 +190,7 @@ class EntityPickerDialog(QDialog):
         self.resize(320, 450)
         self._scene = scene
         self._selected_id: Optional[str] = None
+        self.setStyleSheet(self._DIALOG_STYLE)
         self._setup_ui()
         self._populate()
     def _setup_ui(self):

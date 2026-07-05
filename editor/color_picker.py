@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from PyQt6.QtWidgets import (
     QDialog, QLineEdit, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QSlider, QSpinBox, QDialogButtonBox
+    QPushButton, QLabel, QSlider, QSpinBox, QDialogButtonBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPixmap, QPainter, QLinearGradient, QConicalGradient, QBrush, QPen, QImage, QPalette
@@ -131,6 +131,7 @@ class _ColorWheelWidget(QWidget):
             self._render_triangle()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QApplication.palette().color(QPalette.ColorRole.Window))
         p.drawPixmap(0, 0, self._wheel_pixmap)
         p.drawImage(0, 0, self._tri_image)
         self._draw_tri_indicator(p)
@@ -153,7 +154,7 @@ class _ColorWheelWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(grad))
         p.drawEllipse(int(cx - R_out), int(cy - R_out), int(R_out * 2), int(R_out * 2))
-        p.setBrush(QBrush(self.palette().color(QPalette.ColorRole.Window).darker(130)))
+        p.setBrush(QBrush(QApplication.palette().color(QPalette.ColorRole.Window)))
         p.drawEllipse(int(cx - R_in), int(cy - R_in), int(R_in * 2), int(R_in * 2))
         p.end()
         self._wheel_pixmap = pm
@@ -368,6 +369,36 @@ class ColorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Select Color")
         self.setMinimumWidth(300)
+
+        self.setPalette(QApplication.palette())
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("""
+            QDialog { background: palette(window); }
+            QLabel { color: palette(text); background: transparent; }
+            QSpinBox {
+                background: palette(base); color: palette(text);
+                border: 1px solid palette(mid); border-radius: 2px; padding: 2px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                background: palette(button); border: 1px solid palette(mid);
+                border-radius: 2px; width: 16px;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: palette(light);
+            }
+            QLineEdit {
+                background: palette(base); color: palette(text);
+                border: 1px solid palette(mid); border-radius: 2px; padding: 2px;
+            }
+            QPushButton {
+                background: palette(button); color: palette(ButtonText);
+                border: 1px solid palette(mid); border-radius: 2px; padding: 4px 16px;
+            }
+            QPushButton:hover { background: palette(light); }
+            QPushButton:pressed { background: palette(dark); color: palette(text); }
+            QDialogButtonBox { background: transparent; }
+        """)
+
 
         self._color = initial.toRgb() if initial and initial.isValid() else QColor.fromRgbF(1, 1, 1)
         h, s, v, a = self._color.hueF(), self._color.saturationF(), self._color.valueF(), self._color.alphaF()
