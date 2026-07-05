@@ -74,7 +74,7 @@ def _flash_overlay(viewport, item_rect: QRect, duration: int = 800):
         return
     global_tl = viewport.mapToGlobal(item_rect.topLeft())
     item_global = QRect(global_tl, item_rect.size())
-    start_global = _expanded_rect(item_global, 3.0)
+    start_global = _expanded_rect(item_global, 1.5)
 
     overlay = QFrame(main_window)
     overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -93,7 +93,7 @@ def _flash_overlay(viewport, item_rect: QRect, duration: int = 800):
     geo_anim = QPropertyAnimation(overlay, b"geometry")
     geo_anim.setStartValue(QRect(main_window.mapFromGlobal(start_global.topLeft()), start_global.size()))
     geo_anim.setEndValue(QRect(main_window.mapFromGlobal(item_global.topLeft()), item_global.size()))
-    geo_anim.setDuration(duration)
+    geo_anim.setDuration(duration // 2)
     geo_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def _cleanup():

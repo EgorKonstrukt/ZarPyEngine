@@ -1123,11 +1123,19 @@ class HierarchyPanel(QDockWidget):
         self._refresh()
 
     def reveal_entity(self, eid: str):
+        entity = self._scene.get_entity(eid) if self._scene else None
+        if not entity:
+            return
+        self._tree.blockSignals(True)
+        self._selected_entity = entity
         item = self._find_item(eid, self._tree.invisibleRootItem())
         if item:
             self._tree.setCurrentItem(item)
+        self._tree.blockSignals(False)
+        if item:
             self._tree.scrollToItem(item)
             self._flash_item(item)
+        self.entity_selected.emit(entity)
 
     def flash_entity(self, eid: str):
         item = self._find_item(eid, self._tree.invisibleRootItem())
