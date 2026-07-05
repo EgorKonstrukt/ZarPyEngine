@@ -1038,36 +1038,18 @@ class HierarchyPanel(QDockWidget):
             pref = Prefab(entity.name)
             pref.capture([entity])
             pref.save(path)
-    def _get_prefab_roots(self, entity: Entity) -> list[Entity]:
-        roots = []
-        seen = set()
-        def walk(e):
-            if e.id in seen:
-                return
-            seen.add(e.id)
-            if e.is_prefab_instance and e._prefab_guid == entity._prefab_guid:
-                p = e._parent
-                while p and p.is_prefab_instance and p._prefab_guid == e._prefab_guid:
-                    p = p._parent
-                if p is None or not p.is_prefab_instance or p._prefab_guid != e._prefab_guid:
-                    roots.append(e)
-            for c in e.children:
-                walk(c)
-        walk(entity)
-        if not roots and entity.is_prefab_instance:
-            roots = [entity]
-        return roots
-
     def _apply_prefab(self, entity: Entity):
         from core.commands import ApplyPrefabOverridesCommand, get_history
-        roots = self._get_prefab_roots(entity)
+        from core.prefab import Prefab
+        roots = Prefab.get_prefab_roots([entity])
         get_history().execute(ApplyPrefabOverridesCommand(self._scene, roots))
         self._scene.mark_dirty()
         self._refresh()
 
     def _revert_prefab(self, entity: Entity):
         from core.commands import RevertPrefabInstanceCommand, get_history
-        roots = self._get_prefab_roots(entity)
+        from core.prefab import Prefab
+        roots = Prefab.get_prefab_roots([entity])
         cmd = RevertPrefabInstanceCommand(self._scene, roots)
         get_history().execute(cmd)
         self._scene.mark_dirty()
@@ -1075,7 +1057,8 @@ class HierarchyPanel(QDockWidget):
 
     def _unpack_prefab(self, entity: Entity):
         from core.commands import UnpackPrefabCommand, get_history
-        roots = self._get_prefab_roots(entity)
+        from core.prefab import Prefab
+        roots = Prefab.get_prefab_roots([entity])
         cmd = UnpackPrefabCommand(self._scene, roots)
         get_history().execute(cmd)
         self._scene.mark_dirty()

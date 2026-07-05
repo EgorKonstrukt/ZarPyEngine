@@ -1056,26 +1056,6 @@ class InspectorPanel(QDockWidget):
             self._rebuild()
         self._send_collab_component_add("ScriptComponent", cmd._added_key)
 
-    def _get_prefab_roots(self, entity) -> list:
-        roots = []
-        seen = set()
-        def walk(e):
-            if e.id in seen:
-                return
-            seen.add(e.id)
-            if e.is_prefab_instance and e._prefab_guid == entity._prefab_guid:
-                p = e._parent
-                while p and p.is_prefab_instance and p._prefab_guid == e._prefab_guid:
-                    p = p._parent
-                if p is None or not p.is_prefab_instance or p._prefab_guid != e._prefab_guid:
-                    roots.append(e)
-            for c in e.children:
-                walk(c)
-        walk(entity)
-        if not roots and entity.is_prefab_instance:
-            roots = [entity]
-        return roots
-
     def _on_apply_prefab(self):
         if not self._entity or not self._entity.is_prefab_instance:
             return
@@ -1085,7 +1065,7 @@ class InspectorPanel(QDockWidget):
         if not prefab_path:
             Logger.warning("Cannot find prefab asset for this instance.")
             return
-        roots = self._get_prefab_roots(self._entity)
+        roots = Prefab.get_prefab_roots([self._entity])
         all_entities = []
         def collect(e):
             all_entities.append(e)
@@ -1106,10 +1086,11 @@ class InspectorPanel(QDockWidget):
         if not self._entity or not self._entity.is_prefab_instance:
             return
         from core.commands import RevertPrefabInstanceCommand, get_history
+        from core.prefab import Prefab
         scene = self._engine.scene if hasattr(self._engine, 'scene') else None
         if not scene:
             return
-        roots = self._get_prefab_roots(self._entity)
+        roots = Prefab.get_prefab_roots([self._entity])
         cmd = RevertPrefabInstanceCommand(scene, roots)
         get_history().execute(cmd)
         self._rebuild()
