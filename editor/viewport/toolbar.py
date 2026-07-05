@@ -84,10 +84,24 @@ def setup_toolbar(vp):
     vp._cursor_z_label.setStyleSheet("color: #4488ff; font-size: 10px;")
     cam_row.addWidget(vp._cursor_z_label)
 
-    toolbar_layout.addLayout(cam_row)
-
     vp._depth_spin.valueChanged.connect(vp._on_depth_changed)
     vp._depth_spin.installEventFilter(vp)
+
+    prefab_row = QHBoxLayout()
+    prefab_row.setContentsMargins(0, 0, 0, 0)
+    prefab_row.setSpacing(4)
+    mw = vp.parent()
+    from editor.main_window.handlers import on_return_to_scene
+    vp._return_btn = QPushButton("To Scene")
+    vp._return_btn.setFixedHeight(scale(22))
+    vp._return_btn.clicked.connect(lambda: on_return_to_scene(mw))
+    prefab_row.addWidget(vp._return_btn)
+    prefab_row.addStretch()
+    vp._prefab_btns = QWidget()
+    vp._prefab_btns.setLayout(prefab_row)
+    vp._prefab_btns.hide()
+    toolbar_layout.addWidget(vp._prefab_btns)
+
     vp._toolbar.setFixedHeight(scale(30))
 
 

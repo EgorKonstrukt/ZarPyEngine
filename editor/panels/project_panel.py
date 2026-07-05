@@ -28,6 +28,8 @@ from editor.resource_picker import _get_thumbnail, _format_size
 
 from editor.constants import MIN_THUMB, MAX_THUMB, VIEW_ICON, VIEW_LIST, VIEW_DETAILS
 from editor.inspector.helpers import _flash_overlay
+
+_ENTITY_MIME = "application/x-zpe-entity"
 from core.editor_scale import scale, scale_xy
 
 _file_clipboard: list[str] = []
@@ -169,21 +171,23 @@ class FileListWidget(QListWidget):
         super().keyPressEvent(event)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME):
+            self._panel._on_entity_drop(event)
+        elif event.mimeData().hasUrls() or event.mimeData().hasText():
             self._panel._on_file_list_drop(event)
         else:
             super().dropEvent(event)
@@ -243,21 +247,23 @@ class FileDetailWidget(QTreeWidget):
         super().keyPressEvent(event)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME):
+            self._panel._on_entity_drop(event)
+        elif event.mimeData().hasUrls() or event.mimeData().hasText():
             self._panel._on_detail_tree_drop(event)
         else:
             super().dropEvent(event)
@@ -311,21 +317,23 @@ class FolderTreeWidget(QTreeWidget):
         """)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME) or event.mimeData().hasUrls() or event.mimeData().hasText():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls() or event.mimeData().hasText():
+        if event.mimeData().hasFormat(_ENTITY_MIME):
+            self._panel._on_entity_drop(event)
+        elif event.mimeData().hasUrls() or event.mimeData().hasText():
             self._panel._on_folder_tree_drop(event)
         else:
             super().dropEvent(event)
@@ -1699,6 +1707,31 @@ class ProjectPanel(QDockWidget):
             root = self._folder_tree.topLevelItem(0)
             target_path = root.data(0, Qt.ItemDataRole.UserRole)
         self._move_or_copy_files(paths, dest_dir=target_path)
+        event.acceptProposedAction()
+
+    def _on_entity_drop(self, event):
+        if not event.mimeData().hasFormat(_ENTITY_MIME):
+            return
+        raw = bytes(event.mimeData().data(_ENTITY_MIME)).decode("utf-8")
+        eids = [x.strip() for x in raw.split(",") if x.strip()]
+        if not eids or not self._engine.scene:
+            return
+        from core.prefab import Prefab
+        entity = self._engine.scene.get_entity(eids[0])
+        if not entity:
+            return
+        prefab = Prefab(entity.name)
+        prefab.capture([entity])
+        ext = ".zpep"
+        name = entity.name.replace(" ", "_").replace("/", "_")
+        dest_dir = self._active_pane()._current_dir
+        path = os.path.join(dest_dir, f"{name}{ext}")
+        counter = 1
+        while os.path.exists(path):
+            path = os.path.join(dest_dir, f"{name}_{counter}{ext}")
+            counter += 1
+        prefab.save(path)
+        self._refresh()
         event.acceptProposedAction()
 
     def _extract_drop_paths(self, event):

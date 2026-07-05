@@ -17,7 +17,7 @@ from editor.panels.console_panel import ConsolePanel
 from editor.panels.profiler_panel import ProfilerPanel
 from editor.panels.plugin_manager_panel import PluginManagerPanel
 from editor.panels.project_panel import ProjectPanel
-from editor.panels.prefab_editor_panel import PrefabEditorPanel
+
 from editor.panels.play_window import PlayDockPanel
 from editor.panels.terminal_panel import TerminalPanel
 from editor.panels.undo_history_panel import UndoHistoryPanel
@@ -144,9 +144,6 @@ def register_default_docks(mw):
         QDockWidget.DockWidgetFeature.DockWidgetFloatable |
         QDockWidget.DockWidgetFeature.DockWidgetClosable)
     register_dock(mw, mw._project, Qt.DockWidgetArea.LeftDockWidgetArea)
-    mw._prefab_editor = PrefabEditorPanel(mw._engine, mw)
-    mw._prefab_editor.load_config(get_global_config())
-    register_dock(mw, mw._prefab_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._play_dock = PlayDockPanel(mw._engine, mw)
     register_dock(mw, mw._play_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._terminal = TerminalPanel(mw)
@@ -249,7 +246,6 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._inspector)
     mw.addDockWidget(area, mw._play_dock)
     mw.addDockWidget(area, mw._gui_editor)
-    mw.addDockWidget(area, mw._prefab_editor)
     mw.addDockWidget(area, mw._console)
     mw.addDockWidget(area, mw._profiler)
     mw.addDockWidget(area, mw._project)
@@ -264,7 +260,7 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._tracemalloc)
     for dock in mw._docks:
         if dock not in (mw._hierarchy, mw._viewport_dock, mw._inspector,
-                        mw._play_dock, mw._gui_editor, mw._prefab_editor,
+                        mw._play_dock, mw._gui_editor,
                         mw._console, mw._profiler, mw._project,
                         mw._terminal, mw._undo_history, mw._plugin_mgr,
                         mw._collab_panel, mw._mesh_editor, mw._animation,
@@ -280,7 +276,6 @@ def build_dock_layout(mw):
     mw.splitDockWidget(mw._inspector, mw._console, Qt.Orientation.Vertical)
     mw.tabifyDockWidget(mw._viewport_dock, mw._play_dock)
     mw.tabifyDockWidget(mw._viewport_dock, mw._gui_editor)
-    mw.tabifyDockWidget(mw._viewport_dock, mw._prefab_editor)
     mw.tabifyDockWidget(mw._viewport_dock, mw._animation)
     mw.tabifyDockWidget(mw._viewport_dock, mw._animator)
     mw.tabifyDockWidget(mw._viewport_dock, mw._scripts)

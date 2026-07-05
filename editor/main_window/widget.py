@@ -43,6 +43,9 @@ class EditorMainWindow(QMainWindow):
         self._settings = QSettings("Zarin", "Editor")
         self._play_dock: Optional[QDockWidget] = None
         self._scene_snapshot: Optional[dict] = None
+        self._prefab_mode: bool = False
+        self._saved_scene = None
+        self._prefab_path: Optional[str] = None
         self._global_settings_dlg = None
         self._project_settings_dlg = None
         self.setWindowTitle("Zarin Engine Editor")

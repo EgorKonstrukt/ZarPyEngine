@@ -87,9 +87,92 @@ def on_project_file_double_clicked(mw, path: str):
 
 
 def on_open_prefab_editor(mw, path: str):
-    mw._prefab_editor.open_prefab(path)
-    mw._prefab_editor.show()
-    mw._prefab_editor.raise_()
+    from core.prefab import Prefab
+    from core.ecs import Scene
+    pref = Prefab.load(path)
+    if not pref:
+        Logger.warning(f"Cannot load prefab: {path}")
+        return
+    mw._saved_scene = mw._engine.scene
+    mw._prefab_path = path
+    edit_scene = Scene(f"Prefab: {pref.name}")
+    roots = pref.instantiate(edit_scene, mw._engine._component_registry)
+    for r in roots:
+        r._prefab_guid = pref.guid
+    edit_scene.mark_clean()
+    mw._engine._scene = edit_scene
+    mw._engine._plugin_manager.notify_scene_loaded(edit_scene)
+    mw._engine._emit_event("scene_loaded", edit_scene)
+    mw._prefab_mode = True
+    mw._viewport._prefab_btns.show()
+    from core.editor_scale import scale
+    mw._viewport._toolbar.setFixedHeight(scale(56))
+    _start_prefab_autosave(mw)
+
+
+def _start_prefab_autosave(mw):
+    from PyQt6.QtCore import QTimer
+    if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
+        mw._prefab_save_timer.stop()
+    mw._prefab_save_timer = QTimer()
+    mw._prefab_save_timer.setSingleShot(True)
+    mw._prefab_save_timer.timeout.connect(lambda: _do_auto_save(mw))
+    try:
+        mw._viewport.scene_modified.disconnect()
+    except TypeError:
+        pass
+    mw._viewport.scene_modified.connect(lambda: _on_prefab_modified(mw))
+
+
+def _on_prefab_modified(mw):
+    if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
+        mw._prefab_save_timer.start(2000)
+
+
+def _do_auto_save(mw):
+    if not mw._prefab_mode:
+        return
+    on_save_prefab(mw)
+
+
+def on_return_to_scene(mw):
+    if mw._prefab_mode:
+        on_save_prefab(mw)
+    if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
+        mw._prefab_save_timer.stop()
+        mw._prefab_save_timer = None
+    try:
+        mw._viewport.scene_modified.disconnect()
+    except TypeError:
+        pass
+    if mw._saved_scene:
+        mw._saved_scene.mark_clean()
+        mw._engine._scene = mw._saved_scene
+        mw._engine._plugin_manager.notify_scene_loaded(mw._saved_scene)
+        mw._engine._emit_event("scene_loaded", mw._saved_scene)
+    mw._saved_scene = None
+    mw._prefab_path = None
+    mw._prefab_mode = False
+    mw._viewport._prefab_btns.hide()
+    from core.editor_scale import scale
+    mw._viewport._toolbar.setFixedHeight(scale(30))
+    mw._hierarchy.refresh()
+
+
+def on_save_prefab(mw):
+    if not mw._prefab_path or not mw._engine.scene:
+        return
+    from core.prefab import Prefab, PrefabLibrary
+    pref = Prefab.load(mw._prefab_path)
+    if not pref:
+        return
+    roots = mw._engine.scene.get_root_entities()
+    prefab_roots = [e for e in roots if getattr(e, '_prefab_guid', None) == pref.guid]
+    if not prefab_roots:
+        return
+    pref.capture(prefab_roots)
+    pref.save(mw._prefab_path)
+    PrefabLibrary.invalidate(mw._prefab_path)
 
 
 def instantiate_prefab(mw, path: str, world_pos=None):
@@ -629,7 +712,6 @@ def on_global_config_changed(mw, key: str, value):
     mw._console.load_config(cfg)
     mw._profiler.load_config(cfg)
     mw._project.load_config(cfg)
-    mw._prefab_editor.load_config(cfg)
     if hasattr(mw, '_terminal'):
         mw._terminal.load_config(cfg)
 
