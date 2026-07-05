@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QScrollArea, QLabel, QLineEdit, QPushButton, QCheckBox, QDoubleSpinBox,
     QSpinBox, QComboBox, QGroupBox, QFrame, QMenu, QDialog, QTextEdit,
     QPlainTextEdit)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
 from core.editor_scale import scale, scale_xy
 from core.logger import Logger
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 class InspectorPanel(QDockWidget):
     _clipboard = None
+    open_prefab_editor = pyqtSignal(str)
 
     def __init__(self, engine: Engine, parent=None):
         super().__init__("Inspector", parent)
@@ -135,6 +136,22 @@ class InspectorPanel(QDockWidget):
         self._select_prefab_btn.setStyleSheet(_prefab_btn_style)
         self._select_prefab_btn.clicked.connect(self._on_select_prefab_asset)
         prefab_bar_layout.addWidget(self._select_prefab_btn)
+        self._open_prefab_btn = QPushButton("Open Prefab")
+        self._open_prefab_btn.setFixedHeight(scale(22))
+        self._open_prefab_btn.setStyleSheet(f"""
+            QPushButton {{
+                padding: 2px 10px; font-size: 10px; font-weight: 700;
+                color: {_accent()};
+                border: 1px solid {_accent()};
+                border-radius: 3px;
+            }}
+            QPushButton:hover {{
+                background: {_accent()};
+                color: #fff;
+            }}
+        """)
+        self._open_prefab_btn.clicked.connect(self._on_open_prefab_editor)
+        prefab_bar_layout.addWidget(self._open_prefab_btn)
         outer_layout.addWidget(self._prefab_bar_widget)
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -1104,3 +1121,11 @@ class InspectorPanel(QDockWidget):
         prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
         if prefab_path:
             self.show_import_settings(prefab_path)
+
+    def _on_open_prefab_editor(self):
+        if not self._entity or not self._entity.is_prefab_instance:
+            return
+        from core.prefab import PrefabLibrary
+        prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
+        if prefab_path:
+            self.open_prefab_editor.emit(prefab_path)

@@ -117,14 +117,18 @@ def _start_prefab_autosave(mw):
     mw._prefab_save_timer = QTimer()
     mw._prefab_save_timer.setSingleShot(True)
     mw._prefab_save_timer.timeout.connect(lambda: _do_auto_save(mw))
-    try:
-        mw._viewport.scene_modified.disconnect()
-    except TypeError:
-        pass
-    mw._viewport.scene_modified.connect(lambda: _on_prefab_modified(mw))
+    if hasattr(mw, '_prefab_modified_slot'):
+        try:
+            mw._viewport.scene_modified.disconnect(mw._prefab_modified_slot)
+        except TypeError:
+            pass
+    mw._prefab_modified_slot = lambda: _on_prefab_modified(mw)
+    mw._viewport.scene_modified.connect(mw._prefab_modified_slot)
 
 
 def _on_prefab_modified(mw):
+    if not mw._prefab_mode:
+        return
     if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
         mw._prefab_save_timer.start(2000)
 
@@ -136,16 +140,25 @@ def _do_auto_save(mw):
 
 
 def on_return_to_scene(mw):
-    if mw._prefab_mode:
-        on_save_prefab(mw)
+    prefab_guid = None
+    if hasattr(mw, '_prefab_modified_slot'):
+        try:
+            mw._viewport.scene_modified.disconnect(mw._prefab_modified_slot)
+        except TypeError:
+            pass
+        mw._prefab_modified_slot = None
     if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
         mw._prefab_save_timer.stop()
         mw._prefab_save_timer = None
-    try:
-        mw._viewport.scene_modified.disconnect()
-    except TypeError:
-        pass
+    if mw._prefab_mode:
+        from core.prefab import Prefab, PrefabLibrary
+        pref = PrefabLibrary.load(mw._prefab_path) if mw._prefab_path else None
+        if pref:
+            prefab_guid = pref.guid
+        on_save_prefab(mw)
     if mw._saved_scene:
+        if prefab_guid:
+            _refresh_prefab_instances(mw._saved_scene, prefab_guid, mw._engine._component_registry)
         mw._saved_scene.mark_clean()
         mw._engine._scene = mw._saved_scene
         mw._engine._plugin_manager.notify_scene_loaded(mw._saved_scene)
@@ -157,6 +170,49 @@ def on_return_to_scene(mw):
     from core.editor_scale import scale
     mw._viewport._toolbar.setFixedHeight(scale(30))
     mw._hierarchy.refresh()
+
+
+def _refresh_prefab_instances(scene, prefab_guid, registry):
+    """Replace all instances of a prefab in the scene with fresh ones from the updated prefab file."""
+    from core.prefab import Prefab, PrefabLibrary
+    prefab_path = PrefabLibrary.path_for_guid(prefab_guid)
+    if not prefab_path:
+        return
+    prefab = PrefabLibrary.load(prefab_path)
+    if not prefab:
+        return
+    all_entities = scene.get_all_entities()
+    instances = [e for e in all_entities if getattr(e, '_prefab_guid', None) == prefab_guid]
+    if not instances:
+        return
+    roots = Prefab.get_prefab_roots(instances)
+    saved = []
+    for root in roots:
+        t = root.get_component_by_name("Transform")
+        saved.append({
+            "parent_id": root._parent.id if root._parent else None,
+            "position": list(t.local_position) if t else None,
+            "rotation": list(t.local_euler_angles) if t else None,
+            "scale": list(t.local_scale) if t else None,
+        })
+        scene.remove_entity(root.id)
+    for data in saved:
+        spawned = prefab.instantiate(scene, registry)
+        for new_root in spawned:
+            if data["parent_id"]:
+                parent_ent = scene.get_entity(data["parent_id"])
+                if parent_ent:
+                    new_root.set_parent(parent_ent)
+            t = new_root.get_component_by_name("Transform")
+            if t and data["position"]:
+                from core.math3d import Vec3
+                t.local_position = Vec3(*data["position"])
+            if t and data["rotation"]:
+                from core.math3d import Vec3
+                t.local_euler_angles = Vec3(*data["rotation"])
+            if t and data["scale"]:
+                from core.math3d import Vec3
+                t.local_scale = Vec3(*data["scale"])
 
 
 def on_save_prefab(mw):
@@ -172,7 +228,8 @@ def on_save_prefab(mw):
         return
     pref.capture(prefab_roots)
     pref.save(mw._prefab_path)
-    PrefabLibrary.invalidate(mw._prefab_path)
+    PrefabLibrary._prefabs[mw._prefab_path] = pref
+    PrefabLibrary._guids[pref.guid] = mw._prefab_path
 
 
 def instantiate_prefab(mw, path: str, world_pos=None):

@@ -62,6 +62,7 @@ def connect_signals(mw):
     mw._project.file_double_clicked.connect(lambda p: on_project_file_double_clicked(mw, p))
     mw._hierarchy.select_prefab_asset.connect(lambda p: on_file_selected(mw, p))
     mw._hierarchy.open_prefab_editor.connect(lambda p: on_open_prefab_editor(mw, p))
+    mw._inspector.open_prefab_editor.connect(lambda p: on_open_prefab_editor(mw, p))
     mw._viewport.gizmo.snap_enabled = mw._scene_toolbar._snap_cb.isChecked()
     mw._viewport.gizmo.snap_translate = mw._scene_toolbar._snap_t_sb.value()
     mw._viewport.gizmo.snap_rotate = mw._scene_toolbar._snap_r_sb.value()
