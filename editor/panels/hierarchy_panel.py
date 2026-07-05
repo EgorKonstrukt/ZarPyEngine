@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QStyledItemDelegate, QStyle, QApplication, QHeaderView)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt6.QtGui import QKeySequence, QAction, QDrag, QColor, QKeyEvent, QBrush, QPixmap, QIcon
+from editor.inspector.helpers import _flash_overlay
 if TYPE_CHECKING:
     from core.ecs import Entity, Scene
     from core.engine import Engine
@@ -1120,3 +1121,26 @@ class HierarchyPanel(QDockWidget):
             self._selected_entity = entities[0]
     def refresh(self):
         self._refresh()
+
+    def reveal_entity(self, eid: str):
+        item = self._find_item(eid, self._tree.invisibleRootItem())
+        if item:
+            self._tree.setCurrentItem(item)
+            self._tree.scrollToItem(item)
+            self._flash_item(item)
+
+    def flash_entity(self, eid: str):
+        item = self._find_item(eid, self._tree.invisibleRootItem())
+        if item:
+            self._tree.scrollToItem(item)
+            self._flash_item(item)
+
+    @staticmethod
+    def _flash_item(item: QTreeWidgetItem):
+        try:
+            tree = item.treeWidget()
+            if not tree:
+                return
+            _flash_overlay(tree.viewport(), tree.visualItemRect(item))
+        except RuntimeError:
+            pass

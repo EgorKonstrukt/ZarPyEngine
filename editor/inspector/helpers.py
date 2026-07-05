@@ -7,8 +7,9 @@
 from __future__ import annotations
 import os
 from typing import Optional, Callable
-from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSpinBox, QSlider, QDialog, QFileDialog, QInputDialog, QMessageBox
-from PyQt6.QtCore import Qt, QObject, QEvent
+from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSpinBox, QSlider, QDialog, QFileDialog, \
+    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect
+from PyQt6.QtCore import Qt, QObject, QEvent, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as QF
 from core.editor_scale import scale, scale_xy
 from editor.inspector.constants import _XYZ_COLORS, _accent
@@ -18,12 +19,17 @@ from core.math3d import Vec2, Vec3, Vec4
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 class _NavFilter(QObject):
-    def __init__(self, callback, parent=None):
+    def __init__(self, single_cb, double_cb=None, parent=None):
         super().__init__(parent)
-        self._cb = callback
+        self._single = single_cb
+        self._double = double_cb
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-            self._cb()
+        t = event.type()
+        if t == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton and self._double:
+            self._double()
+            return True
+        if t == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and self._single:
+            self._single()
         return super().eventFilter(obj, event)
 
 def _navigate_resource(label: QLabel):
@@ -33,16 +39,58 @@ def _navigate_resource(label: QLabel):
         if hasattr(mw, '_project'):
             mw._project.reveal_resource(p)
 
+def _flash_resource(label: QLabel):
+    p = label.toolTip()
+    if p and "No " not in p:
+        mw = label.window()
+        if hasattr(mw, '_project'):
+            mw._project.flash_resource(p)
+
 def _navigate_entity(label: QLabel):
     eid = label.toolTip()
     if eid and "No " not in eid:
         mw = label.window()
         if hasattr(mw, '_hierarchy'):
-            from core.engine import Engine
-            scene = Engine.instance().scene
-            entity = scene.get_entity(eid) if scene else None
-            if entity:
-                mw._hierarchy.set_selected_entity(entity)
+            mw._hierarchy.reveal_entity(eid)
+
+def _flash_entity(label: QLabel):
+    eid = label.toolTip()
+    if eid and "No " not in eid:
+        mw = label.window()
+        if hasattr(mw, '_hierarchy'):
+            mw._hierarchy.flash_entity(eid)
+
+def _expanded_rect(rect: QRect, factor: float) -> QRect:
+    w = int(rect.width() * factor)
+    h = int(rect.height() * factor)
+    x = rect.center().x() - w // 2
+    y = rect.center().y() - h // 2
+    return QRect(x, y, w, h)
+
+def _flash_overlay(viewport, item_rect: QRect, duration: int = 800):
+    overlay = QFrame(viewport)
+    overlay.setStyleSheet("background: rgba(255, 255, 0, 180); border-radius: 4px;")
+    start_rect = _expanded_rect(item_rect, 3.0)
+    overlay.setGeometry(start_rect)
+    overlay.show()
+    op = QGraphicsOpacityEffect(overlay)
+    overlay.setGraphicsEffect(op)
+    opacity_anim = QPropertyAnimation(op, b"opacity")
+    opacity_anim.setStartValue(0.8)
+    opacity_anim.setEndValue(0.0)
+    opacity_anim.setDuration(duration)
+    geo_anim = QPropertyAnimation(overlay, b"geometry")
+    geo_anim.setStartValue(start_rect)
+    geo_anim.setEndValue(item_rect)
+    geo_anim.setDuration(duration)
+    geo_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    def _cleanup():
+        overlay.deleteLater()
+    opacity_anim.finished.connect(_cleanup)
+    opacity_anim.start()
+    geo_anim.start()
+    overlay._opacity_anim = opacity_anim
+    overlay._geo_anim = geo_anim
 
 _PICKER_BTN_STYLE = """
     QPushButton {
@@ -136,7 +184,7 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else "No resource selected")
     name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-    name_lbl.installEventFilter(_NavFilter(lambda: _navigate_resource(name_lbl), name_lbl))
+    name_lbl.installEventFilter(_NavFilter(lambda: _flash_resource(name_lbl), lambda: _navigate_resource(name_lbl), name_lbl))
     layout.addWidget(name_lbl, 1)
     def _update_display(p: str):
         nonlocal name
@@ -190,7 +238,7 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(entity_id if entity_id else "No entity selected")
     name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-    name_lbl.installEventFilter(_NavFilter(lambda: _navigate_entity(name_lbl), name_lbl))
+    name_lbl.installEventFilter(_NavFilter(lambda: _flash_entity(name_lbl), lambda: _navigate_entity(name_lbl), name_lbl))
     layout.addWidget(name_lbl, 1)
     def _update_entity_display(eid: str):
         nonlocal target_entity
@@ -249,7 +297,7 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else f"No {resource_type} selected")
     name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-    name_lbl.installEventFilter(_NavFilter(lambda: _navigate_resource(name_lbl), name_lbl))
+    name_lbl.installEventFilter(_NavFilter(lambda: _flash_resource(name_lbl), lambda: _navigate_resource(name_lbl), name_lbl))
     layout.addWidget(name_lbl, 1)
     def _update_display(p: str):
         new_name = os.path.basename(p) if p else ""
@@ -298,7 +346,7 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     name_lbl.setMinimumHeight(22)
     name_lbl.setToolTip(path if path else f"No {asset_type} selected")
     name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-    name_lbl.installEventFilter(_NavFilter(lambda: _navigate_resource(name_lbl), name_lbl))
+    name_lbl.installEventFilter(_NavFilter(lambda: _flash_resource(name_lbl), lambda: _navigate_resource(name_lbl), name_lbl))
     layout.addWidget(name_lbl, 1)
     def _update_display(p: str):
         new_name = os.path.basename(p) if p else ""

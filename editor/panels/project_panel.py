@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 from editor.resource_picker import _get_thumbnail, _format_size
 
 from editor.constants import MIN_THUMB, MAX_THUMB, VIEW_ICON, VIEW_LIST, VIEW_DETAILS
+from editor.inspector.helpers import _flash_overlay
 from core.editor_scale import scale, scale_xy
 
 _file_clipboard: list[str] = []
@@ -1990,36 +1991,55 @@ class NewScript(Component):
         self._sync_tree_selection(os.path.dirname(norm))
         pane = self._active_pane()
         pane.populate_files(os.path.dirname(norm))
-        from PyQt6.QtCore import Qt, QTimer
-        from PyQt6.QtGui import QColor, QBrush
-        item = None
+        item = self._find_item_by_path(norm)
+        if item:
+            pane.active_widget().setCurrentItem(item)
+            pane.active_widget().scrollToItem(item)
+            self._flash_item(item)
+
+    def flash_resource(self, path: str):
+        norm = os.path.normpath(path)
+        if not os.path.exists(norm):
+            return
+        self._sync_tree_selection(os.path.dirname(norm))
+        pane = self._active_pane()
+        pane.populate_files(os.path.dirname(norm))
+        item = self._find_item_by_path(norm)
+        if item:
+            pane.active_widget().scrollToItem(item)
+            self._flash_item(item)
+
+    def _find_item_by_path(self, norm):
+        pane = self._active_pane()
         if self._view_mode == VIEW_DETAILS:
             tree = pane._detail_tree
             for i in range(tree.topLevelItemCount()):
                 it = tree.topLevelItem(i)
                 if it and it.data(0, Qt.ItemDataRole.UserRole) == norm:
-                    tree.setCurrentItem(it)
-                    tree.scrollToItem(it)
-                    item = it
-                    break
+                    return it
         else:
             lst = pane._file_list
             for i in range(lst.count()):
                 it = lst.item(i)
                 if it and it.data(Qt.ItemDataRole.UserRole) == norm:
-                    lst.setCurrentItem(it)
-                    lst.scrollToItem(it)
-                    item = it
-                    break
-        if item:
-            flash = QColor(255, 255, 0, 120)
-            blank = QBrush()
+                    return it
+        return None
+
+    @staticmethod
+    def _flash_item(item):
+        try:
             if isinstance(item, QTreeWidgetItem):
-                item.setBackground(0, QBrush(flash))
-                QTimer.singleShot(600, lambda: item.setBackground(0, blank))
+                tree = item.treeWidget()
+                if not tree:
+                    return
+                _flash_overlay(tree.viewport(), tree.visualItemRect(item))
             else:
-                item.setBackground(QBrush(flash))
-                QTimer.singleShot(600, lambda: item.setBackground(blank))
+                lst = item.listWidget()
+                if not lst:
+                    return
+                _flash_overlay(lst.viewport(), lst.visualItemRect(item))
+        except RuntimeError:
+            pass
 
     def set_project_root(self, path: str):
         self._project_root = os.path.abspath(path)
