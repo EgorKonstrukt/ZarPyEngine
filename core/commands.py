@@ -168,7 +168,6 @@ class InstantiatePrefabCommand(Command):
         self._position = position
         self._spawned_ids: list[str] = []
     def execute(self):
-        from core.prefab import Prefab
         spawned = self._prefab.instantiate(self._scene, self._registry, self._parent)
         self._spawned_ids = [e.id for e in spawned]
     def undo(self):
@@ -193,34 +192,15 @@ class RevertPrefabInstanceCommand(Command):
             items.extend(self._collect(c))
         return items
     def execute(self):
+        from core.prefab import Prefab
         if self._registry is None:
             from core.engine import Engine
             self._registry = Engine.instance()._component_registry
         self._old_data.clear()
         for root in self._roots:
             self._old_data.extend(self._collect(root))
-            self._revert_entity(root)
-    def _revert_entity(self, entity):
-        if not entity._prefab_data:
-            return
-        snap = entity._prefab_data
-        entity._name = snap.get("name", entity._name)
-        entity._active = snap.get("active", entity._active)
-        entity._tags = set(snap.get("tags", []))
-        entity._layer = snap.get("layer", entity._layer)
-        comp_types_to_remove = list(entity._components.keys())
-        for ct in comp_types_to_remove:
-            comp = entity._components[ct]
-            comp.on_destroy()
-        entity._components.clear()
-        for cd in snap.get("components", []):
-            ctype = cd.get("type")
-            comp_cls = self._registry.get(ctype)
-            if comp_cls:
-                comp = comp_cls.deserialize(cd)
-                entity.add_component(comp)
-        for child in list(entity.children):
-            self._revert_entity(child)
+        for root in self._roots:
+            Prefab.revert_instance(root, self._registry)
     def undo(self):
         for eid, data in self._old_data:
             e = self._scene.get_entity(eid)
@@ -245,25 +225,39 @@ class UnpackPrefabCommand(Command):
     def __init__(self, scene, root_entities: list):
         self._scene = scene
         self._roots = root_entities
-        self._old_links: list[tuple[str, Optional[str], Optional[dict]]] = []
+        self._old_links: list[tuple[str, Optional[str], Optional[str]]] = []
     def execute(self):
+        from core.prefab import Prefab
         self._old_links.clear()
         def unpack(e):
-            self._old_links.append((e.id, e._prefab_guid, e._prefab_data))
-            e._prefab_guid = None
-            e._prefab_data = None
-            for c in e.children:
-                unpack(c)
+            self._old_links.append((e.id, e._prefab_guid, e._prefab_source_id))
+            Prefab.unpack(e)
         for root in self._roots:
             unpack(root)
     def undo(self):
-        for eid, guid, data in self._old_links:
+        for eid, guid, source_id in self._old_links:
             e = self._scene.get_entity(eid)
             if e:
                 e._prefab_guid = guid
-                e._prefab_data = data
+                e._prefab_source_id = source_id
     @property
     def description(self): return "Unpack Prefab"
+class ApplyPrefabOverridesCommand(Command):
+    def __init__(self, scene, root_entities: list, registry=None):
+        self._scene = scene
+        self._roots = root_entities
+        self._registry = registry
+    def execute(self):
+        from core.prefab import Prefab
+        if self._registry is None:
+            from core.engine import Engine
+            self._registry = Engine.instance()._component_registry
+        for root in self._roots:
+            Prefab.apply_overrides(root)
+    def undo(self):
+        pass
+    @property
+    def description(self): return "Apply Prefab Overrides"
 class PasteEntitiesCommand(Command):
     def __init__(self, scene, clipboard_data: list[dict], registry):
         self._scene = scene

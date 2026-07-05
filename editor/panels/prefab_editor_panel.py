@@ -194,8 +194,6 @@ class PrefabEditorPanel(QDockWidget):
         self._engine._plugin_manager.notify_scene_loaded(self._edit_scene)
         self._engine._emit_event("scene_loaded", self._edit_scene)
         roots = pref.instantiate(self._edit_scene, ComponentRegistry)
-        for r in roots:
-            r._prefab_guid = pref.guid
         prefab_file = path.replace("\\", "/").split("/")[-1]
         self._prefab_name_label.setText(f"Prefab: {pref.name} ({prefab_file})")
         self._save_btn.setEnabled(True)
@@ -208,11 +206,13 @@ class PrefabEditorPanel(QDockWidget):
         pref = Prefab.load(self._prefab_path)
         if not pref:
             return
-        roots = self._edit_scene.get_root_entities()
-        pref.roots_data = []
-        for e in roots:
-            if e.is_prefab_instance and e._prefab_guid == pref.guid:
-                pref.roots_data.append(e.serialize())
+        candidate_roots = self._edit_scene.get_root_entities()
+        prefab_roots = [e for e in candidate_roots
+                        if e.is_prefab_instance and e._prefab_guid == pref.guid]
+        if prefab_roots:
+            pref.capture(prefab_roots)
+        else:
+            pref.roots_data = []
         pref.save(self._prefab_path)
         PrefabLibrary.invalidate(self._prefab_path)
 

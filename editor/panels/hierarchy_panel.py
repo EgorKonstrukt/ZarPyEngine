@@ -1059,28 +1059,9 @@ class HierarchyPanel(QDockWidget):
         return roots
 
     def _apply_prefab(self, entity: Entity):
-        from core.prefab import Prefab, PrefabLibrary
-        from core.commands import get_history
-        prefab_path = PrefabLibrary.path_for_guid(entity._prefab_guid)
-        if not prefab_path:
-            from core.logger import Logger
-            Logger.warning("Cannot find prefab asset path for this instance.")
-            return
+        from core.commands import ApplyPrefabOverridesCommand, get_history
         roots = self._get_prefab_roots(entity)
-        all_entities = []
-        def collect(e):
-            all_entities.append(e)
-            for c in e.children:
-                collect(c)
-        for r in roots:
-            collect(r)
-        current_data = {}
-        for e in all_entities:
-            current_data[e.id] = e.serialize()
-        pref = Prefab(entity.name, entity._prefab_guid)
-        pref.roots_data = [current_data[r.id] for r in roots]
-        pref.save(prefab_path)
-        PrefabLibrary.invalidate(prefab_path)
+        get_history().execute(ApplyPrefabOverridesCommand(self._scene, roots))
         self._scene.mark_dirty()
         self._refresh()
 

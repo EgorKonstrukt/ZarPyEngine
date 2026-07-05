@@ -96,9 +96,7 @@ def on_open_prefab_editor(mw, path: str):
     mw._saved_scene = mw._engine.scene
     mw._prefab_path = path
     edit_scene = Scene(f"Prefab: {pref.name}")
-    roots = pref.instantiate(edit_scene, mw._engine._component_registry)
-    for r in roots:
-        r._prefab_guid = pref.guid
+    pref.instantiate(edit_scene, mw._engine._component_registry)
     edit_scene.mark_clean()
     mw._engine._scene = edit_scene
     mw._engine._plugin_manager.notify_scene_loaded(edit_scene)

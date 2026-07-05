@@ -199,7 +199,7 @@ class Entity:
         '_id', '_name', '_type_map', '_type_name_map', '_components',
         '_update_list', '_fixed_update_list',
         '_active', '_parent', '_children', '_tags', '_layer',
-        '_scene', '_prefab_guid', '_prefab_data',
+        '_scene', '_prefab_guid', '_prefab_source_id',
         '_transform_type',
     )
 
@@ -219,7 +219,7 @@ class Entity:
         self._layer: int = 0
         self._scene: Optional[Scene] = None
         self._prefab_guid: Optional[str] = prefab_guid
-        self._prefab_data: Optional[dict] = None
+        self._prefab_source_id: Optional[str] = None
         self._transform_type: Optional[type] = None
 
     def _get_transform_type(self):
@@ -288,10 +288,10 @@ class Entity:
     def prefab_guid(self, v: Optional[str]): self._prefab_guid = v
 
     @property
-    def prefab_data(self) -> Optional[dict]: return self._prefab_data
+    def prefab_source_id(self) -> Optional[str]: return self._prefab_source_id
 
-    @prefab_data.setter
-    def prefab_data(self, v: Optional[dict]): self._prefab_data = v
+    @prefab_source_id.setter
+    def prefab_source_id(self, v: Optional[str]): self._prefab_source_id = v
 
     @property
     def is_prefab_instance(self) -> bool:
@@ -531,8 +531,8 @@ class Entity:
         }
         if self._prefab_guid:
             d["prefab_guid"] = self._prefab_guid
-        if self._prefab_data:
-            d["prefab_data"] = self._prefab_data
+        if self._prefab_source_id:
+            d["prefab_source_id"] = self._prefab_source_id
         return d
 
     @classmethod
@@ -542,7 +542,7 @@ class Entity:
         e._active = data.get("active", True)
         e._tags = set(data.get("tags", []))
         e._layer = data.get("layer", 0)
-        e._prefab_data = data.get("prefab_data")
+        e._prefab_source_id = data.get("prefab_source_id")
         for cd in data.get("components", []):
             ctype = cd.get("type")
             comp_cls = registry.get(ctype)
