@@ -80,22 +80,38 @@ class DeleteEntityCommand(Command):
     def description(self): return f"Delete Entity #{self._entity_id}"
 class SetComponentCommand(Command):
     def __init__(self, entity, component_type, prop_name: str, old_value, new_value):
-        self._entity = entity
+        self._entity_id = entity.id
+        self._scene = getattr(entity, '_scene', None)
         self._component_type = component_type
         self._prop = prop_name
         self._old = old_value
         self._new = new_value
+    def _get_entity(self):
+        if self._scene:
+            e = self._scene.get_entity(self._entity_id)
+            if e:
+                return e
+        from core.engine import Engine
+        eng = Engine.instance()
+        if eng and eng.scene:
+            return eng.scene.get_entity(self._entity_id)
+        return None
     def execute(self):
-        comp = self._entity.get_component(self._component_type)
-        if comp and hasattr(comp, self._prop):
-            setattr(comp, self._prop, self._new)
+        e = self._get_entity()
+        if e:
+            comp = e.get_component(self._component_type)
+            if comp and hasattr(comp, self._prop):
+                setattr(comp, self._prop, self._new)
     def undo(self):
-        comp = self._entity.get_component(self._component_type)
-        if comp and hasattr(comp, self._prop):
-            setattr(comp, self._prop, self._old)
+        e = self._get_entity()
+        if e:
+            comp = e.get_component(self._component_type)
+            if comp and hasattr(comp, self._prop):
+                setattr(comp, self._prop, self._old)
     @property
     def description(self):
-        ename = getattr(self._entity, "name", "") or getattr(self._entity, "id", "?")
+        e = self._get_entity()
+        ename = getattr(e, "name", "") or getattr(e, "id", "?")
         return f"{ename}: {self._component_type.__name__}.{self._prop}"
 class AddComponentCommand(Command):
     def __init__(self, entity, component_cls, component_data: dict = None, key: str = None):
@@ -413,6 +429,9 @@ class CommandHistory:
         eid = getattr(cmd, "_entity_id", None)
         if eid is not None:
             scene = getattr(cmd, "_scene", None)
+            if scene is None:
+                from core.engine import Engine
+                scene = Engine.instance().scene
             if scene:
                 e = scene.get_entity(eid)
                 if e:

@@ -664,6 +664,25 @@ def sync_after_undo(mw):
     from core.commands import get_history
     h = get_history()
     sel = h.current_selection if isinstance(getattr(h, 'current_selection', None), list) else (h.last_affected_entity or h.current_selection)
+    scene = mw._engine.scene
+    if isinstance(sel, list):
+        if scene:
+            resolved = []
+            for e in sel:
+                if e:
+                    live = scene.get_entity(e.id)
+                    if live:
+                        resolved.append(live)
+            sel = resolved
+        else:
+            sel = []
+    elif sel and scene:
+        live = scene.get_entity(sel.id)
+        if live:
+            sel = live
+        else:
+            sel = None
+    mw._hierarchy.refresh()
     mw._hierarchy.blockSignals(True)
     if isinstance(sel, list):
         mw._hierarchy.set_selected_entities(sel)
@@ -678,15 +697,14 @@ def sync_after_undo(mw):
         if hasattr(mw, '_animation') and mw._animation:
             mw._animation.set_entity(sel)
     else:
-        mw._hierarchy.refresh()
         sel_ent = mw._hierarchy._selected_entity
         mw._inspector.set_entity(sel_ent if sel_ent else None)
         mw._viewport.set_selected_entity(sel_ent if sel_ent else None)
         if hasattr(mw, '_animation') and mw._animation:
             mw._animation.set_entity(sel_ent if sel_ent else None)
     mw._hierarchy.blockSignals(False)
-    if mw._engine.scene:
-        mw._engine.scene.mark_dirty()
+    if scene:
+        scene.mark_dirty()
 
 
 def undo(mw):

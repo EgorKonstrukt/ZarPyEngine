@@ -74,11 +74,12 @@ class _UndoFilter(QObject):
         if not self._ctrl_held:
             self._timer.stop()
             return
-        z_down = self._is_key_down(0x5A)  # VK_Z
-        y_down = self._is_key_down(0x59)  # VK_Y
+        z_down = self._is_key_down(0x5A)
+        y_down = self._is_key_down(0x59)
+        handled = False
         if z_down and not self._z_handled:
             self._z_handled = True
-            self._y_handled = True
+            handled = True
             from core.commands import get_history
             get_history().undo()
             from editor.main_window.handlers import sync_after_undo
@@ -86,9 +87,8 @@ class _UndoFilter(QObject):
                 sync_after_undo(self._mw)
         elif not z_down:
             self._z_handled = False
-        if y_down and not self._y_handled:
+        if not handled and y_down and not self._y_handled:
             self._y_handled = True
-            self._z_handled = True
             from core.commands import get_history
             get_history().redo()
             from editor.main_window.handlers import sync_after_undo

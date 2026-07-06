@@ -248,7 +248,7 @@ def _collab_on_undo(cmd):
     elif isinstance(cmd, DeleteEntityCommand) and cmd._entity_data:
         collab.send_entity_create(cmd._entity_data)
     elif isinstance(cmd, SetComponentCommand):
-        eid = cmd._entity.id if hasattr(cmd._entity, 'id') else None
+        eid = getattr(cmd, '_entity_id', None)
         if eid:
             collab.send_component_update(eid, cmd._component_type.__name__, cmd._prop, cmd._old)
     elif isinstance(cmd, AddComponentCommand):
@@ -286,7 +286,7 @@ def _collab_on_redo(cmd):
     elif isinstance(cmd, DeleteEntityCommand) and cmd._entity_id:
         collab.send_entity_delete(cmd._entity_id)
     elif isinstance(cmd, SetComponentCommand):
-        eid = cmd._entity.id if hasattr(cmd._entity, 'id') else None
+        eid = getattr(cmd, '_entity_id', None)
         if eid:
             collab.send_component_update(eid, cmd._component_type.__name__, cmd._prop, cmd._new)
     elif isinstance(cmd, AddComponentCommand):

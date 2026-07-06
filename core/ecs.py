@@ -775,6 +775,10 @@ class Scene:
                             self._active_update_components.add(comp)
                         if comp._fixed_updates:
                             self._active_fixed_components.add(comp)
+        from core.components.transform import Transform
+        t = e.get_component_by_name("Transform")
+        if t and t._dirty:
+            self._dirty_roots.add(t)
         self._invalidate_update_cache()
         self._dirty = True
         self._render_version += 1
