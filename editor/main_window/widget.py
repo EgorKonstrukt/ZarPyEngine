@@ -27,8 +27,6 @@ from editor.main_window.postinit import post_init, initial_dock_sizes
 from editor.main_window.project import switch_project, open_project_manager, open_project_browse
 from editor.main_window.handlers import (
     new_scene, open_scene, save_scene, save_scene_as,
-    toggle_play_stop, toggle_pause,
-    undo, redo,
     on_gizmo_vis_toggled, reset_camera,
     on_global_config_changed, open_global_settings, open_project_settings,
     show_build_dialog, show_about,

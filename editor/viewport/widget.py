@@ -19,7 +19,7 @@ import moderngl
 import numpy as np
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtWidgets import QApplication, QMenu, QSizePolicy
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEvent, QObject
 from PyQt6.QtGui import QMouseEvent, QWheelEvent, QKeyEvent, QSurfaceFormat
 
 from core.math3d import Vec3, Mat4, Quat
@@ -52,6 +52,86 @@ if TYPE_CHECKING:
     from core.renderer.renderer import Renderer
 
 
+class _UndoFilter(QObject):
+    def __init__(self, mw):
+        super().__init__()
+        self._mw = mw
+        self._ctrl_held = False
+        self._z_handled = False
+        self._y_handled = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(30)
+        self._timer.timeout.connect(self._poll)
+
+    def _is_key_down(self, vk):
+        try:
+            import ctypes
+            return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+        except Exception:
+            return False
+
+    def _poll(self):
+        if not self._ctrl_held:
+            self._timer.stop()
+            return
+        z_down = self._is_key_down(0x5A)  # VK_Z
+        y_down = self._is_key_down(0x59)  # VK_Y
+        if z_down and not self._z_handled:
+            self._z_handled = True
+            self._y_handled = True
+            from core.commands import get_history
+            get_history().undo()
+            from editor.main_window.handlers import sync_after_undo
+            if self._mw:
+                sync_after_undo(self._mw)
+        elif not z_down:
+            self._z_handled = False
+        if y_down and not self._y_handled:
+            self._y_handled = True
+            self._z_handled = True
+            from core.commands import get_history
+            get_history().redo()
+            from editor.main_window.handlers import sync_after_undo
+            if self._mw:
+                sync_after_undo(self._mw)
+        elif not y_down:
+            self._y_handled = False
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            ke = event
+            key = ke.key()
+            if key == Qt.Key.Key_Control:
+                self._ctrl_held = True
+                self._z_handled = False
+                self._y_handled = False
+                self._timer.start()
+                return False
+            if key == Qt.Key.Key_Z and self._ctrl_held:
+                self._z_handled = True
+                from core.commands import get_history
+                get_history().undo()
+                from editor.main_window.handlers import sync_after_undo
+                if self._mw:
+                    sync_after_undo(self._mw)
+                return True
+            if key == Qt.Key.Key_Y and self._ctrl_held:
+                self._y_handled = True
+                from core.commands import get_history
+                get_history().redo()
+                from editor.main_window.handlers import sync_after_undo
+                if self._mw:
+                    sync_after_undo(self._mw)
+                return True
+        elif event.type() == QEvent.Type.KeyRelease:
+            if event.key() == Qt.Key.Key_Control:
+                self._ctrl_held = False
+                self._z_handled = False
+                self._y_handled = False
+                self._timer.stop()
+        return False
+
+
 class SceneViewport(QOpenGLWidget):
     entity_selected = pyqtSignal(object)
     entities_selected = pyqtSignal(list)
@@ -60,6 +140,11 @@ class SceneViewport(QOpenGLWidget):
 
     def __init__(self, engine, parent=None):
         super().__init__(parent)
+        self._mw = parent
+        self._undo_filter = _UndoFilter(self._mw)
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self._undo_filter)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._engine = engine
@@ -942,18 +1027,6 @@ class SceneViewport(QOpenGLWidget):
                 return
             if event.key() == Qt.Key.Key_V:
                 self._paste_entities()
-                event.accept()
-                return
-            if event.key() == Qt.Key.Key_Z and not (mods & Qt.KeyboardModifier.ShiftModifier):
-                from core.commands import get_history
-                get_history().undo()
-                self.update()
-                event.accept()
-                return
-            if event.key() == Qt.Key.Key_Y:
-                from core.commands import get_history
-                get_history().redo()
-                self.update()
                 event.accept()
                 return
         if self._im:

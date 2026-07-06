@@ -57,12 +57,10 @@ def setup_menu(mw):
 
     edit_menu = mb.addMenu("Edit")
     mw._undo_act = QAction("Undo", mw)
-    mw._undo_act.setShortcut(QKeySequence("Ctrl+Z"))
     mw._undo_act.triggered.connect(lambda: undo(mw))
     mw._undo_act.setEnabled(False)
     edit_menu.addAction(mw._undo_act)
     mw._redo_act = QAction("Redo", mw)
-    mw._redo_act.setShortcut(QKeySequence("Ctrl+Y"))
     mw._redo_act.triggered.connect(lambda: redo(mw))
     mw._redo_act.setEnabled(False)
     edit_menu.addAction(mw._redo_act)
