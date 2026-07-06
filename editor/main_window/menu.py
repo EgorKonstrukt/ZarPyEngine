@@ -13,6 +13,7 @@ from PyQt6.QtGui import QAction, QKeySequence
 
 from editor.main_window.handlers import (
     new_scene, open_scene, save_scene, save_scene_as,
+    toggle_play_stop,
     undo, redo,
     open_global_settings, open_project_settings,
     show_build_dialog, show_about,
@@ -102,6 +103,12 @@ def setup_menu(mw):
     cam_act = QAction("Camera", mw)
     cam_act.triggered.connect(mw._hierarchy._create_camera)
     go_menu.addAction(cam_act)
+
+    game_menu = mb.addMenu("Game")
+    play_stop_act = QAction("Play/Stop", mw)
+    play_stop_act.setShortcut(QKeySequence("Shift+F10"))
+    play_stop_act.triggered.connect(lambda: toggle_play_stop(mw))
+    game_menu.addAction(play_stop_act)
 
     view_menu = mb.addMenu("View")
     for dock in mw._docks:

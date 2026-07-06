@@ -60,7 +60,7 @@ def _do_switch_project(mw, project_path: str):
         from editor.main_window.handlers import on_entity_selected
         on_entity_selected(mw, None)
     mw._engine._project_settings_path = settings_path
-    mw._scene_toolbar.load_state()
+    mw._render_toolbar.load_state()
     SplashScreen.hide_splash()
 
 

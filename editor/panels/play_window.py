@@ -10,7 +10,7 @@ import moderngl
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLabel, QPushButton, QDoubleSpinBox, QFrame)
+                             QPushButton, QFrame)
 from PyQt6.QtCore import Qt, QTimer, QEvent, QPoint
 from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QWheelEvent, QCursor, QGuiApplication
 from core.input_system import Input
@@ -262,15 +262,6 @@ class PlayDockPanel(QDockWidget):
         step_btn = QPushButton("Step")
         step_btn.clicked.connect(self._step)
         toolbar.addWidget(step_btn)
-        ts_label = QLabel("Time Scale:")
-        toolbar.addWidget(ts_label)
-        self._ts_sb = QDoubleSpinBox()
-        self._ts_sb.setRange(0.0, 10.0)
-        self._ts_sb.setSingleStep(0.1)
-        self._ts_sb.setDecimals(2)
-        self._ts_sb.setValue(1.0)
-        self._ts_sb.valueChanged.connect(lambda v: setattr(self._engine, "time_scale", v))
-        toolbar.addWidget(self._ts_sb)
         toolbar.addStretch()
         layout.addLayout(toolbar)
         sep = QFrame()
@@ -282,7 +273,9 @@ class PlayDockPanel(QDockWidget):
 
     def _toggle_pause(self):
         self._paused = not self._paused
-        self._engine.time_scale = 0.0 if self._paused else self._ts_sb.value()
+        mw = self.parent()
+        ts = mw._ts_sb.value() if hasattr(mw, '_ts_sb') else 1.0
+        self._engine.time_scale = 0.0 if self._paused else ts
 
     def _step(self):
         if self._paused:

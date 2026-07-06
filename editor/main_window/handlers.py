@@ -445,12 +445,12 @@ def on_gizmo_space_changed(mw, space):
 def on_grid_toggled(mw, enabled: bool):
     if mw._viewport.renderer:
         mw._viewport.renderer.show_grid = enabled
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_snap_toggled(mw, enabled: bool):
     mw._viewport.gizmo.snap_enabled = enabled
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_gizmo_vis_toggled(mw, checked: bool):
@@ -462,17 +462,17 @@ def on_gizmo_vis_toggled(mw, checked: bool):
 def on_snap_t_changed(mw, val: float):
     mw._viewport.gizmo.snap_translate = val
     mw._viewport.set_grid_step(val)
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_snap_r_changed(mw, val: float):
     mw._viewport.gizmo.snap_rotate = val
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_snap_s_changed(mw, val: float):
     mw._viewport.gizmo.snap_scale = val
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_render_mode_changed(mw, mode):
@@ -486,7 +486,7 @@ def on_skybox_toggled(mw, enabled: bool):
     play = getattr(mw, '_play_dock', None)
     if play and hasattr(play, '_viewport') and play._viewport._renderer:
         play._viewport._renderer.skybox_enabled = enabled
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_effects_toggled(mw, enabled: bool):
@@ -495,18 +495,18 @@ def on_effects_toggled(mw, enabled: bool):
     play = getattr(mw, '_play_dock', None)
     if play and hasattr(play, '_viewport') and play._viewport._renderer:
         play._viewport._renderer.set_effects_enabled(enabled)
-    mw._scene_toolbar.save_state()
+    mw._render_toolbar.save_state()
 
 
 def on_camera_projection_changed(mw):
     mw._viewport.camera.toggle_projection()
     is_ortho = mw._viewport.camera.is_orthographic
-    mw._scene_toolbar._cam_persp_btn.setChecked(not is_ortho)
+    mw._render_toolbar._cam_persp_btn.setChecked(not is_ortho)
 
 
 def on_camera_type_changed(mw):
     is_ortho = mw._viewport.camera.is_orthographic
-    mw._scene_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
+    mw._render_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
 
 
 def on_camera_2d_toggled(mw):
@@ -516,9 +516,9 @@ def on_camera_2d_toggled(mw):
 
 def on_camera_2d_changed(mw):
     is_2d = mw._viewport.camera.is_2d_mode
-    mw._scene_toolbar._cam_2d_btn.setChecked(is_2d)
+    mw._render_toolbar._cam_2d_btn.setChecked(is_2d)
     is_ortho = mw._viewport.camera.is_orthographic
-    mw._scene_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
+    mw._render_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
 
 
 def on_play_start(mw, _):

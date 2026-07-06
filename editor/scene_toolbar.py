@@ -7,32 +7,30 @@
 from __future__ import annotations
 from core.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QLabel, QPushButton, QCheckBox,
-                             QDoubleSpinBox, QComboBox, QFrame)
-from PyQt6.QtCore import pyqtSignal
+                             QDoubleSpinBox, QComboBox, QFrame, QWidget,
+                             QHBoxLayout, QSizePolicy)
+from PyQt6.QtCore import pyqtSignal, Qt
 from core.gizmo.gizmo import GizmoMode, GizmoSpace
 from core.renderer.types import RenderMode
+
+
+def _make_sep() -> QFrame:
+    f = QFrame()
+    f.setFrameShape(QFrame.Shape.VLine)
+    f.setFrameShadow(QFrame.Shadow.Sunken)
+    return f
+
+
 class SceneToolbar(QToolBar):
+    """Left section: Gizmo mode (Q/W/E/R) + Space (World/Local)."""
     gizmo_mode_changed = pyqtSignal(object)
     gizmo_space_changed = pyqtSignal(object)
-    grid_toggled = pyqtSignal(bool)
-    snap_toggled = pyqtSignal(bool)
-    snap_translate_changed = pyqtSignal(float)
-    snap_rotate_changed = pyqtSignal(float)
-    snap_scale_changed = pyqtSignal(float)
-    render_mode_changed = pyqtSignal(object)
-    skybox_toggled = pyqtSignal(bool)
-    effects_toggled = pyqtSignal(bool)
-    camera_projection_changed = pyqtSignal()
-    mode_2d_toggled = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__("Scene Tools", parent)
         self.setMovable(False)
         self._setup()
-    def _make_sep(self) -> QFrame:
-        f = QFrame()
-        f.setFrameShape(QFrame.Shape.VLine)
-        f.setFrameShadow(QFrame.Shadow.Sunken)
-        return f
+
     def _setup(self):
         gizmo_label = QLabel("Gizmo: ")
         self.addWidget(gizmo_label)
@@ -56,14 +54,38 @@ class SceneToolbar(QToolBar):
         self._btn_scale.setToolTip("Scale (R)")
         self._btn_scale.clicked.connect(lambda: self.gizmo_mode_changed.emit(GizmoMode.SCALE))
         self.addWidget(self._btn_scale)
-        self.addWidget(self._make_sep())
+        self.addWidget(_make_sep())
         space_label = QLabel("Space: ")
         self.addWidget(space_label)
         self._space_cb = QComboBox()
         self._space_cb.addItems(["World", "Local"])
         self._space_cb.currentTextChanged.connect(self._on_space_changed)
         self.addWidget(self._space_cb)
-        self.addWidget(self._make_sep())
+
+    def _on_space_changed(self, text: str):
+        space = GizmoSpace.WORLD if text == "World" else GizmoSpace.LOCAL
+        self.gizmo_space_changed.emit(space)
+
+
+class RenderToolbar(QToolBar):
+    """Right section: Render mode, Camera, Skybox, FX, Grid, Snap."""
+    render_mode_changed = pyqtSignal(object)
+    grid_toggled = pyqtSignal(bool)
+    snap_toggled = pyqtSignal(bool)
+    snap_translate_changed = pyqtSignal(float)
+    snap_rotate_changed = pyqtSignal(float)
+    snap_scale_changed = pyqtSignal(float)
+    skybox_toggled = pyqtSignal(bool)
+    effects_toggled = pyqtSignal(bool)
+    camera_projection_changed = pyqtSignal()
+    mode_2d_toggled = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__("Render Tools", parent)
+        self.setMovable(False)
+        self._setup()
+
+    def _setup(self):
         self.addWidget(QLabel("Render: "))
         self._shaded_btn = QPushButton("S")
         self._shaded_btn.setFixedWidth(scale(24))
@@ -80,6 +102,7 @@ class SceneToolbar(QToolBar):
         self._flat_btn.setToolTip("Flat (no lighting)")
         self._flat_btn.clicked.connect(lambda: self.render_mode_changed.emit(RenderMode.FLAT))
         self.addWidget(self._flat_btn)
+        self.addWidget(_make_sep())
         self._cam_persp_btn = QPushButton("Perspective")
         self._cam_persp_btn.setFixedWidth(scale(80))
         self._cam_persp_btn.setToolTip("Toggle Perspective/Orthographic Camera")
@@ -93,6 +116,7 @@ class SceneToolbar(QToolBar):
         self._cam_2d_btn.setCheckable(True)
         self._cam_2d_btn.clicked.connect(self.mode_2d_toggled)
         self.addWidget(self._cam_2d_btn)
+        self.addWidget(_make_sep())
         self._skybox_cb = QCheckBox("Skybox")
         self._skybox_cb.setChecked(True)
         self._skybox_cb.toggled.connect(self.skybox_toggled)
@@ -102,12 +126,12 @@ class SceneToolbar(QToolBar):
         self._effects_cb.setToolTip("Toggle post-processing effects")
         self._effects_cb.toggled.connect(self.effects_toggled)
         self.addWidget(self._effects_cb)
-        self.addWidget(self._make_sep())
+        self.addWidget(_make_sep())
         self._grid_cb = QCheckBox("Grid")
         self._grid_cb.setChecked(True)
         self._grid_cb.toggled.connect(self.grid_toggled)
         self.addWidget(self._grid_cb)
-        self.addWidget(self._make_sep())
+        self.addWidget(_make_sep())
         self._snap_cb = QCheckBox("Snap")
         self._snap_cb.setChecked(True)
         self._snap_cb.toggled.connect(self.snap_toggled)
@@ -145,14 +169,7 @@ class SceneToolbar(QToolBar):
         self._snap_s_sb.setToolTip("Scale snap")
         self._snap_s_sb.valueChanged.connect(self.snap_scale_changed)
         self.addWidget(self._snap_s_sb)
-    def _on_space_changed(self, text: str):
-        if text == "World":
-            space = GizmoSpace.WORLD
-        elif text == "Local":
-            space = GizmoSpace.LOCAL
-        else:
-            space = GizmoSpace.WORLD
-        self.gizmo_space_changed.emit(space)
+
     def _on_camera_projection_changed(self):
         self.camera_projection_changed.emit()
 
