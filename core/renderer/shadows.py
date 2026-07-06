@@ -33,13 +33,18 @@ def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
                                 mesh, instance_vbo: moderngl.Buffer) -> moderngl.VertexArray:
     vbo = getattr(mesh, '_vbo', None)
     ibo = getattr(mesh, '_ibo', None)
-    if vbo is None:
+    if vbo is not None:
+        fmt = '3f 3x4 2x4'
+        attrs = ('in_position',)
+    else:
         n_verts = len(mesh.vertices) // 3 if len(mesh.vertices) > 0 else 0
         data = np.zeros((n_verts, 3), dtype=np.float32)
         data[:, 0:3] = mesh.vertices.reshape(-1, 3)
         vbo = ctx.buffer(data.tobytes())
+        fmt = '3f'
+        attrs = ('in_position',)
     content = [
-        (vbo, '3f', 'in_position'),
+        (vbo, fmt, *attrs),
     ]
     if _shadow_supports_instancing(prog):
         content.append((instance_vbo, '4f 4f 4f 4f /i',
