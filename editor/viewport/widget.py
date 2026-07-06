@@ -60,8 +60,23 @@ class _UndoFilter(QObject):
         self._z_handled = False
         self._y_handled = False
         self._timer = QTimer(self)
-        self._timer.setInterval(30)
+        self._timer.setInterval(15)
         self._timer.timeout.connect(self._poll)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.setInterval(60)
+        self._sync_timer.timeout.connect(self._do_sync)
+        from core.commands import get_history
+        self._get_history = get_history
+        from editor.main_window.handlers import sync_after_undo
+        self._sync_fn = sync_after_undo
+
+    def _do_sync(self):
+        if self._mw:
+            self._sync_fn(self._mw)
+
+    def _schedule_sync(self):
+        self._sync_timer.start()
 
     def _is_key_down(self, vk):
         try:
@@ -80,20 +95,14 @@ class _UndoFilter(QObject):
         if z_down and not self._z_handled:
             self._z_handled = True
             handled = True
-            from core.commands import get_history
-            get_history().undo()
-            from editor.main_window.handlers import sync_after_undo
-            if self._mw:
-                sync_after_undo(self._mw)
+            self._get_history().undo()
+            self._schedule_sync()
         elif not z_down:
             self._z_handled = False
         if not handled and y_down and not self._y_handled:
             self._y_handled = True
-            from core.commands import get_history
-            get_history().redo()
-            from editor.main_window.handlers import sync_after_undo
-            if self._mw:
-                sync_after_undo(self._mw)
+            self._get_history().redo()
+            self._schedule_sync()
         elif not y_down:
             self._y_handled = False
 
@@ -109,19 +118,13 @@ class _UndoFilter(QObject):
                 return False
             if key == Qt.Key.Key_Z and self._ctrl_held:
                 self._z_handled = True
-                from core.commands import get_history
-                get_history().undo()
-                from editor.main_window.handlers import sync_after_undo
-                if self._mw:
-                    sync_after_undo(self._mw)
+                self._get_history().undo()
+                self._schedule_sync()
                 return True
             if key == Qt.Key.Key_Y and self._ctrl_held:
                 self._y_handled = True
-                from core.commands import get_history
-                get_history().redo()
-                from editor.main_window.handlers import sync_after_undo
-                if self._mw:
-                    sync_after_undo(self._mw)
+                self._get_history().redo()
+                self._schedule_sync()
                 return True
         elif event.type() == QEvent.Type.KeyRelease:
             if event.key() == Qt.Key.Key_Control:

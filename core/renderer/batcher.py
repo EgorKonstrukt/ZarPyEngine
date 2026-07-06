@@ -10,6 +10,7 @@ import numpy as np
 import moderngl
 from typing import Any, Optional
 from collections import defaultdict
+from core.math3d import Mat4
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 
@@ -132,12 +133,7 @@ class RenderBatcher:
 
     def _build_instance_vbo(self, key: tuple[int, int],
                             model_matrices: list) -> moderngl.Buffer:
-        n = len(model_matrices)
-        arr = np.zeros((n, 16), dtype=np.float32)
-        for i, m in enumerate(model_matrices):
-            flat = m.to_f32()
-            arr[i] = flat
-        data = arr.tobytes()
+        data = Mat4.batch_to_f32(model_matrices).tobytes()
         cached = self._inst_vbo.get(key)
         if cached is not None:
             if cached.size >= len(data):

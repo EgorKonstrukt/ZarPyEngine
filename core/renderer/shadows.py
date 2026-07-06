@@ -9,12 +9,44 @@ import math
 import numpy as np
 import moderngl
 from typing import Optional, Any
+from collections import defaultdict
 from core.math3d import Vec3, Mat4
 from core.components.lighting.light import Light, LightType, LightAreaType
 from core.components.transform import Transform
 from core.components.rendering.mesh_filter import MeshFilter
 from core.components.rendering.mesh_renderer import MeshRenderer
 from core.renderer.mesh_data import MeshData
+
+_INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
+
+def _shadow_supports_instancing(prog: moderngl.Program) -> bool:
+    try:
+        locs = prog._attribute_locations
+        for a in _INSTANCE_ATTRS:
+            if locs.get(a, -1) < 0:
+                return False
+        return True
+    except Exception:
+        return False
+
+def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
+                                mesh, instance_vbo: moderngl.Buffer) -> moderngl.VertexArray:
+    vbo = getattr(mesh, '_vbo', None)
+    ibo = getattr(mesh, '_ibo', None)
+    if vbo is None:
+        n_verts = len(mesh.vertices) // 3 if len(mesh.vertices) > 0 else 0
+        data = np.zeros((n_verts, 3), dtype=np.float32)
+        data[:, 0:3] = mesh.vertices.reshape(-1, 3)
+        vbo = ctx.buffer(data.tobytes())
+    content = [
+        (vbo, '3f', 'in_position'),
+    ]
+    if _shadow_supports_instancing(prog):
+        content.append((instance_vbo, '4f 4f 4f 4f /i',
+                        'in_model0', 'in_model1', 'in_model2', 'in_model3'))
+    if ibo is not None:
+        return ctx.vertex_array(prog, content, ibo)
+    return ctx.vertex_array(prog, content)
 
 
 class ShadowRenderer:
@@ -57,6 +89,8 @@ class ShadowRenderer:
         self._projector_shadow_fbos: list[Any] = []
         self._projector_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(2)]
         self._has_projector_shadow: list[bool] = [False, False]
+        self._shadow_vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
+        self._shadow_inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
         self._create_csm_resources()
 
     def _create_csm_resources(self):
@@ -135,13 +169,54 @@ class ShadowRenderer:
                 if mesh is None and not mf.mesh_path:
                     mesh = self._get_mesh(mf.mesh_name)
             if mesh:
-                result.append((mesh, Mat4(tr.world_matrix._d)))
+                result.append((mesh, tr.world_matrix))
         return result
 
     def _get_mesh(self, cache_key: str) -> Optional[MeshData]:
         return None
 
+    def _build_shadow_groups(self, renderable_shadow: list) -> dict:
+        groups = defaultdict(list)
+        for mesh, model_mat in renderable_shadow:
+            groups[id(mesh)].append((mesh, model_mat))
+        return groups
+
+    def _build_shadow_instance_vbo(self, key: tuple[int, int],
+                                   model_matrices: list) -> moderngl.Buffer:
+        data = Mat4.batch_to_f32(model_matrices).tobytes()
+        cached = self._shadow_inst_vbo.get(key)
+        if cached is not None:
+            if cached.size >= len(data):
+                try:
+                    cached.write(data)
+                    return cached
+                except Exception:
+                    pass
+            cached.release()
+            self._shadow_inst_vbo.pop(key, None)
+            vao_del = self._shadow_vao_cache.pop(key, None)
+            if vao_del is not None:
+                try: vao_del.release()
+                except Exception: pass
+        vbo = self._ctx.buffer(data)
+        self._shadow_inst_vbo[key] = vbo
+        return vbo
+
+    def _get_shadow_vao(self, prog: moderngl.Program, mesh,
+                        instance_vbo: moderngl.Buffer) -> moderngl.VertexArray:
+        key = (id(mesh), id(prog))
+        cached = self._shadow_vao_cache.get(key)
+        if cached is not None:
+            return cached
+        vao = _make_shadow_instanced_vao(self._ctx, prog, mesh, instance_vbo)
+        self._shadow_vao_cache[key] = vao
+        return vao
+
     def render_geometry(self, vp: np.ndarray, fbo, renderable_shadow: list, resolution: int = 1024):
+        groups = self._build_shadow_groups(renderable_shadow)
+        self._render_geometry_with_groups(vp, fbo, groups, resolution)
+
+    def _render_geometry_with_groups(self, vp: np.ndarray, fbo, groups: dict, resolution: int = 1024):
         fbo.clear(depth=1.0)
         fbo.use()
         self._ctx.viewport = (0, 0, resolution, resolution)
@@ -150,10 +225,25 @@ class ShadowRenderer:
         self._ctx.disable(moderngl.CULL_FACE)
         prog = self._prog
         vp_bytes = vp.astype(np.float32).tobytes()
-        for mesh, model_mat in renderable_shadow:
-            prog["u_model"].write(model_mat.to_f32().tobytes())
-            prog["u_light_vp"].write(vp_bytes)
-            mesh.render(prog)
+        prog["u_light_vp"].write(vp_bytes)
+        supports_instancing = _shadow_supports_instancing(prog)
+        for mesh_id, group in groups.items():
+            mesh, _ = group[0]
+            n = len(group)
+            if n > 1 and supports_instancing:
+                key = (mesh_id, id(prog))
+                model_mats = [m for _, m in group]
+                vbo = self._build_shadow_instance_vbo(key, model_mats)
+                vao = self._get_shadow_vao(prog, mesh, vbo)
+                if "u_use_instancing" in prog:
+                    prog["u_use_instancing"].value = 1
+                vao.render(instances=n)
+            else:
+                if "u_use_instancing" in prog:
+                    prog["u_use_instancing"].value = 0
+                for _, model_mat in group:
+                    prog["u_model"].write(model_mat.to_f32().tobytes())
+                    mesh.render(prog)
         self._ctx.enable(moderngl.CULL_FACE)
 
     def collect_shadow_data(self, scene, meshes: dict) -> list[tuple]:
@@ -163,61 +253,43 @@ class ShadowRenderer:
         return result
 
     def render_shadow_pass(self, renderable_shadow, lights, cam_near: float, cam_far: float, cam_fov: float,
-                           aspect: float, view_mat: Mat4, meshes: dict) -> None:
+                           aspect: float, view_mat: Mat4, meshes: object = None) -> dict:
         if not self._prog:
-            return
+            return {}
         if not renderable_shadow:
             self._cascade_splits = [0.0] * 3
             self._has_point_shadow = False
             self._has_spot_shadow = False
-            return
-        self._get_mesh = lambda k: meshes.get(k)
-        sun_light = None
-        sun_transform = None
+            self._has_area_shadow = False
+            return {}
+        shadow_groups = self._build_shadow_groups(renderable_shadow)
         for l, lt in lights:
-            if l.light_type == LightType.DIRECTIONAL and l.cast_shadows:
-                sun_light = l
-                sun_transform = lt
+            lt_type = l.light_type
+            if lt_type == LightType.DIRECTIONAL and l.cast_shadows:
+                self._render_directional_shadow(lt, shadow_groups,
+                                                cam_near, cam_far, cam_fov, aspect, view_mat)
                 break
-        if sun_light and renderable_shadow:
-            self._render_directional_shadow(sun_transform, renderable_shadow,
-                                            cam_near, cam_far, cam_fov, aspect, view_mat)
         else:
             self._cascade_splits = [0.0] * 3
-        point_light = None
-        point_transform = None
         for l, lt in lights:
             if l.light_type == LightType.POINT and l.cast_shadows:
-                point_light = l
-                point_transform = lt
+                self._render_point_shadow(l, lt, shadow_groups, lights)
                 break
-        if point_light:
-            self._render_point_shadow(point_light, point_transform, renderable_shadow, lights)
         else:
             self._has_point_shadow = False
-        spot_light = None
-        spot_transform = None
         for l, lt in lights:
             if l.light_type == LightType.SPOT and l.cast_shadows:
-                spot_light = l
-                spot_transform = lt
+                self._render_spot_shadow(l, lt, shadow_groups, lights)
                 break
-        if spot_light:
-            self._render_spot_shadow(spot_light, spot_transform, renderable_shadow, lights)
         else:
             self._has_spot_shadow = False
-        area_light = None
-        area_transform = None
         for l, lt in lights:
             if l.light_type == LightType.AREA and l.cast_shadows:
-                area_light = l
-                area_transform = lt
+                self._render_area_shadow(l, lt, shadow_groups, lights)
                 break
-        if area_light:
-            self._render_area_shadow(area_light, area_transform, renderable_shadow, lights)
         else:
             self._has_area_shadow = False
-        self._get_mesh = None
+        return shadow_groups
 
     def _get_frustum_corners(self, near_z: float, far_z: float, cam_fov: float, aspect: float, inv_view: np.ndarray) -> list[np.ndarray]:
         tan_half_fov = math.tan(math.radians(cam_fov) * 0.5)
@@ -241,7 +313,7 @@ class ShadowRenderer:
         second = near_z + span * 0.38
         return [first, max(first + 0.1, second), far_z]
 
-    def _render_directional_shadow(self, sun_transform, renderable_shadow,
+    def _render_directional_shadow(self, sun_transform, shadow_groups,
                                    cam_near, cam_far, cam_fov, aspect, view_mat):
         light_dir = sun_transform.forward.normalized()
         inv_view = np.linalg.inv(view_mat._d)
@@ -252,7 +324,7 @@ class ShadowRenderer:
             corners = self._get_frustum_corners(near_z, split_far, cam_fov, aspect, inv_view)
             vp = self._build_directional_cascade(light_dir, corners, split_far - near_z)
             self._light_space_matrices[cascade_idx] = vp
-            self.render_geometry(vp, self._shadow_fbos[cascade_idx], renderable_shadow, resolution=self._shadow_resolution)
+            self._render_geometry_with_groups(vp, self._shadow_fbos[cascade_idx], shadow_groups, resolution=self._shadow_resolution)
             near_z = split_far
 
     def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray], depth_span: float) -> np.ndarray:
@@ -289,7 +361,7 @@ class ShadowRenderer:
         proj = Mat4.orthographic(left, right, bottom, top, n_val, f_val)
         return view._d @ proj._d
 
-    def _render_point_shadow(self, point_light, point_transform, renderable_shadow, lights):
+    def _render_point_shadow(self, point_light, point_transform, shadow_groups, lights):
         if not self._point_shadow_maps:
             self._create_point_shadow_resources()
         light_pos = point_transform.position
@@ -317,9 +389,9 @@ class ShadowRenderer:
             view_np = view._d
             vp = (view_np @ proj_np).astype(np.float32)
             self._point_light_vps[face_idx] = vp
-            self.render_geometry(vp, self._point_shadow_fbos[face_idx], renderable_shadow, resolution=self._point_shadow_resolution)
+            self._render_geometry_with_groups(vp, self._point_shadow_fbos[face_idx], shadow_groups, resolution=self._point_shadow_resolution)
 
-    def _render_spot_shadow(self, spot_light, spot_transform, renderable_shadow, lights):
+    def _render_spot_shadow(self, spot_light, spot_transform, shadow_groups, lights):
         if not self._spot_shadow_map:
             self._create_spot_shadow_resources()
         light_pos = spot_transform.position
@@ -336,9 +408,9 @@ class ShadowRenderer:
         self._spot_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is spot_light and lt is spot_transform), -1
         )
-        self.render_geometry(vp, self._spot_shadow_fbo, renderable_shadow, resolution=self._shadow_resolution)
+        self._render_geometry_with_groups(vp, self._spot_shadow_fbo, shadow_groups, resolution=self._shadow_resolution)
 
-    def _render_area_shadow(self, area_light, area_transform, renderable_shadow, lights):
+    def _render_area_shadow(self, area_light, area_transform, shadow_groups, lights):
         if not self._area_shadow_map:
             self._create_area_shadow_resources()
         light_pos = area_transform.position
@@ -367,10 +439,12 @@ class ShadowRenderer:
         self._area_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is area_light and lt is area_transform), -1
         )
-        self.render_geometry(vp, self._area_shadow_fbo, renderable_shadow, resolution=self._shadow_resolution)
+        self._render_geometry_with_groups(vp, self._area_shadow_fbo, shadow_groups, resolution=self._shadow_resolution)
 
-    def render_projector_shadows(self, projectors, renderable_shadow):
-        if not renderable_shadow:
+    def render_projector_shadows(self, projectors, renderable_shadow, shadow_groups: dict = None):
+        if shadow_groups is None:
+            shadow_groups = self._build_shadow_groups(renderable_shadow)
+        if not shadow_groups:
             for i in range(2):
                 self._has_projector_shadow[i] = False
             return
@@ -392,7 +466,7 @@ class ShadowRenderer:
             vp = (view._d @ proj._d).astype(np.float32)
             self._projector_light_vps[i] = vp
             self._has_projector_shadow[i] = True
-            self.render_geometry(vp, self._projector_shadow_fbos[i], renderable_shadow, resolution=self._shadow_resolution)
+            self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], shadow_groups, resolution=self._shadow_resolution)
 
     def set_uniforms(self, prog):
         has_csm = self._cascade_splits[2] > 0.0
@@ -534,3 +608,10 @@ class ShadowRenderer:
                 fbo.release()
             except Exception:
                 pass
+        for vbo in self._shadow_inst_vbo.values():
+            try:
+                vbo.release()
+            except Exception:
+                pass
+        self._shadow_inst_vbo.clear()
+        self._shadow_vao_cache.clear()

@@ -49,7 +49,7 @@ from core.renderer.materials import MaterialManager
 from core.renderer.shaders import ShaderManager
 from core.renderer.mesh_loader import MeshLoader
 from core.renderer.batcher import RenderBatcher
-from core.renderer.culling import GpuFrustumCuller
+from core.renderer.culling import cpu_frustum_cull
 
 
 class _SpriteItem:
@@ -112,7 +112,7 @@ class _RenderSnapshot:
     __slots__ = (
         'lights', 'dir_light', 'sky_component', 'sky_entity', 'cloud_components',
         'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
-        'svg_items', 'text_items', 'particle_systems', 'force_fields', 'culling_cache',
+        'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors',
     )
     def __init__(self):
@@ -129,7 +129,6 @@ class _RenderSnapshot:
         self.text_items: list = []
         self.particle_systems: list = []
         self.force_fields: list = []
-        self.culling_cache: dict = {}
         self.projectors: list = []
 
 
@@ -220,7 +219,6 @@ class Renderer:
         self._videos: Optional[VideoRendererGL] = None
         self._text: Optional[TextRendererGL] = None
         self._svgs: Optional[SvgRendererGL] = None
-        self._culler: Optional[Any] = None
         self._icons: Optional[IconRenderer] = None
         self._materials: Optional[MaterialManager] = None
         self._shaders: Optional[ShaderManager] = None
@@ -348,10 +346,6 @@ void main() {
             self._mesh_loader.register_primitives()
             self._batcher = RenderBatcher(self._ctx, self._default_prog)
             self._default_prog = self._batcher._default_prog
-            try:
-                self._culler = GpuFrustumCuller(self._ctx)
-            except Exception:
-                self._culler = None
             self._grid = GridRenderer(self._ctx, self._grid_prog)
             self._load_grid_config()
             self._gizmo = GizmoRenderer(self._ctx, self._gizmo_prog, self._gizmo_fatline_prog, self._gizmo_solid_prog)
@@ -469,16 +463,18 @@ void main() {
             prog["u_proj"].write(proj_f32.tobytes())
         if "u_camera_pos" in prog:
             prog["u_camera_pos"].write(np.array(cam_pos.to_array(), dtype=np.float32).tobytes())
+        n_lights = min(len(lights), self._max_lights)
         if self._render_mode == RenderMode.FLAT:
             if "u_ambient" in prog:
                 prog["u_ambient"].write(np.array([1.0, 1.0, 1.0], dtype=np.float32).tobytes())
             if "u_light_count" in prog:
                 prog["u_light_count"].value = 0
+            n_lights = 0
         else:
             if "u_ambient" in prog:
                 prog["u_ambient"].write(np.array(self._ambient, dtype=np.float32).tobytes())
             if "u_light_count" in prog:
-                prog["u_light_count"].value = min(len(lights), self._max_lights)
+                prog["u_light_count"].value = n_lights
         if disable_shadows:
             shadow_light_idx = -1
         else:
@@ -489,7 +485,8 @@ void main() {
                     break
         if "u_shadow_light_index" in prog:
             prog["u_shadow_light_index"].value = shadow_light_idx if shadow_light_idx >= 0 else -1
-        for i, (l, lt) in enumerate(lights[:self._max_lights]):
+        for i in range(n_lights):
+            l, lt = lights[i]
             unames = self._light_uniforms[i]
             if l.light_type == LightType.DIRECTIONAL:
                 ltype_int = 0
@@ -566,6 +563,7 @@ void main() {
                 if cloud and cloud.enabled:
                     snap.cloud_components.append(cloud)
         self._sync_probuilder_meshes(scene)
+        needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         for ent in scene.get_entities_with_component(MeshFilter):
             if not ent.active:
                 continue
@@ -589,9 +587,10 @@ void main() {
                 mesh_name = os.path.splitext(os.path.basename(mesh_path))[0]
             mesh = self.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)
             if mesh:
-                wm_copy = Mat4(tr.world_matrix._d)
-                snap.renderable.append((ent, tr, mesh, mr, wm_copy))
-        snap.shadow_renderables = self._shadows.collect_shadow_data(scene, self._mesh_loader._meshes)
+                wm = tr.world_matrix
+                snap.renderable.append((ent, tr, mesh, mr, wm))
+                if needs_shadow and mr.cast_shadows:
+                    snap.shadow_renderables.append((mesh, wm))
         for ent in scene.get_entities_with_component(SpriteRenderer):
             if not ent.active:
                 continue
@@ -649,8 +648,6 @@ void main() {
                 pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane,
                 vp, pos, fwd, flip_y=pj.flip_y, flip_x=pj.flip_x,
                 cast_shadows=pj.cast_shadows))
-        cam_right = Vec3(float(view_mat._d[0, 0]), float(view_mat._d[1, 0]), float(view_mat._d[2, 0]))
-        cam_up = Vec3(float(view_mat._d[0, 1]), float(view_mat._d[1, 1]), float(view_mat._d[2, 1]))
         for ent in scene.get_entities_with_component(ParticleSystem):
             if not ent.active:
                 continue
@@ -727,9 +724,9 @@ void main() {
         aspect = viewport_w / max(1, viewport_h)
         if prof:
             prof.start("render_shadow_pass")
-        self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, self._mesh_loader._meshes)
+        shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {})
         if snap.projectors:
-            self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables)
+            self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
         if prof:
             prof.stop("render_shadow_pass")
         self._scene_fbo.use()
@@ -754,35 +751,26 @@ void main() {
         if prof:
             prof.stop("mesh_async_load")
 
-        if self._culler and renderable:
-            if prof:
-                prof.start("gpu_cull")
+        self._culled_total = len(renderable) if renderable else 0
+        self._culled_visible = self._culled_total
+        if renderable:
             try:
                 n = len(renderable)
-                centers = np.zeros((n, 3), dtype=np.float32)
-                radii = np.zeros(n, dtype=np.float32)
-                for i, entry in enumerate(renderable):
-                    ent, tr, mesh, mr = entry[:4]
-                    wm = entry[4] if len(entry) > 4 else tr.world_matrix
-                    model = wm
-                    centers[i] = [model._d[3, 0], model._d[3, 1], model._d[3, 2]]
-                    sx = float(np.linalg.norm(model._d[:3, 0]))
-                    sy = float(np.linalg.norm(model._d[:3, 1]))
-                    sz = float(np.linalg.norm(model._d[:3, 2]))
-                    radii[i] = mesh.bounding_radius * max(sx, sy, sz)
+                wm_stack = np.array([entry[4]._d for entry in renderable])  # (n, 4, 4) float64
+                centers = wm_stack[:, 3, :3].astype(np.float32)
+                cols = wm_stack[:, :3, :3]
+                sx = np.linalg.norm(cols[:, :, 0], axis=1)
+                sy = np.linalg.norm(cols[:, :, 1], axis=1)
+                sz = np.linalg.norm(cols[:, :, 2], axis=1)
+                max_scale = np.maximum(np.maximum(sx, sy), sz)
+                radii = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float32) * max_scale
                 vp = proj_mat._d.T @ view_mat._d.T
-                visible = self._culler.cull(centers, radii, vp)
-                self._culled_total = n
+                visible = cpu_frustum_cull(centers, radii, vp)
                 self._culled_visible = len(visible)
                 if len(visible) < n:
                     renderable = [renderable[idx] for idx in visible]
             except Exception:
                 pass
-            if prof:
-                prof.stop("gpu_cull")
-        else:
-            self._culled_total = len(renderable) if renderable else 0
-            self._culled_visible = self._culled_total
 
         if prof:
             prof.start("render_meshes")
@@ -798,7 +786,7 @@ void main() {
         else:
             for entry in renderable:
                 ent, tr, mesh, mr = entry[:4]
-                wm = entry[4] if len(entry) > 4 else tr.world_matrix
+                wm = entry[4]
                 try:
                     mat = self._materials.load_material(mr.material_path)
                     shader_path = mat.shader_path if mat else ""
@@ -1431,8 +1419,6 @@ void main() {
         self._release_pp_fbo()
         if self._batcher:
             self._batcher.release()
-        if self._culler:
-            self._culler.release()
         if self._mesh_loader:
             self._mesh_loader.release()
         if self._grid:

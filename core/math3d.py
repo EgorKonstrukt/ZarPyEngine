@@ -427,6 +427,14 @@ class Mat4:
     def to_array(self): return self._d.copy()
     def to_f32(self):
         return self._d.T.astype(np.float32).flatten(order='F')
+
+    @staticmethod
+    def batch_to_f32(matrices: list[Mat4]) -> np.ndarray:
+        n = len(matrices)
+        if n == 0:
+            return np.zeros((0, 16), dtype=np.float32)
+        stacked = np.array([m._d for m in matrices])
+        return stacked.reshape(n, 16).astype(np.float32)
     def to_list(self): return self._d.tolist()
     def get_translation(self): return Vec3(float(self._d[3,0]), float(self._d[3,1]), float(self._d[3,2]))
     def decompose(self) -> tuple[Vec3, Quat, Vec3]:
