@@ -1,0 +1,44 @@
+#version 460 core
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer WorldMatrices {
+    mat4 models[];
+};
+
+layout(std430, binding = 1) readonly buffer BoundingData {
+    vec4 spheres[];
+};
+
+layout(std430, binding = 2) writeonly buffer InstanceVBO {
+    mat4 instances[];
+};
+
+layout(std430, binding = 3) buffer CounterBuf {
+    uint count;
+};
+
+uniform vec4 u_frustum_planes[6];
+uniform int u_total;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= uint(u_total)) return;
+
+    vec3 center = spheres[idx].xyz;
+    float radius = spheres[idx].w;
+
+    bool visible = true;
+    for (int i = 0; i < 6; i++) {
+        vec4 p = u_frustum_planes[i];
+        float d = dot(p.xyz, center) + p.w;
+        if (d < -radius) {
+            visible = false;
+            break;
+        }
+    }
+
+    if (visible) {
+        uint vi = atomicAdd(count, 1u);
+        instances[vi] = models[idx];
+    }
+}
