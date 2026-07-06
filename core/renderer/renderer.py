@@ -50,6 +50,7 @@ from core.renderer.shaders import ShaderManager
 from core.renderer.mesh_loader import MeshLoader
 from core.renderer.batcher import RenderBatcher
 from core.renderer.culling import cpu_frustum_cull
+from core.renderer.gpu_culling import GpuStorage, GpuCulling
 
 
 class _SpriteItem:
@@ -226,6 +227,9 @@ class Renderer:
         self._cloud_quad: Optional[MeshData] = None
         self._cloud_plane: Optional[MeshData] = None
         self._batcher: Optional[RenderBatcher] = None
+        self._gpu_storage: Optional[GpuStorage] = None
+        self._gpu_culling: Optional[GpuCulling] = None
+        self._render_count: int = 0
 
     def load_config(self, config) -> None:
         self._ambient = [
@@ -346,6 +350,8 @@ void main() {
             self._mesh_loader.register_primitives()
             self._batcher = RenderBatcher(self._ctx, self._default_prog)
             self._default_prog = self._batcher._default_prog
+            self._gpu_storage = GpuStorage(self._ctx)
+            self._gpu_culling = self._gpu_storage.get_or_create_culling()
             self._grid = GridRenderer(self._ctx, self._grid_prog)
             self._load_grid_config()
             self._gizmo = GizmoRenderer(self._ctx, self._gizmo_prog, self._gizmo_fatline_prog, self._gizmo_solid_prog)
@@ -751,12 +757,14 @@ void main() {
         if prof:
             prof.stop("mesh_async_load")
 
+        renderable = [(ent, tr, mesh, mr, wm, i)
+                       for i, (ent, tr, mesh, mr, wm) in enumerate(renderable)]
         self._culled_total = len(renderable) if renderable else 0
         self._culled_visible = self._culled_total
         if renderable:
             try:
                 n = len(renderable)
-                wm_stack = np.array([entry[4]._d for entry in renderable])  # (n, 4, 4) float64
+                wm_stack = np.array([entry[4]._d for entry in renderable])
                 centers = wm_stack[:, 3, :3].astype(np.float32)
                 cols = wm_stack[:, :3, :3]
                 sx = np.linalg.norm(cols[:, :, 0], axis=1)
@@ -765,6 +773,10 @@ void main() {
                 max_scale = np.maximum(np.maximum(sx, sy), sz)
                 radii = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float32) * max_scale
                 vp = proj_mat._d.T @ view_mat._d.T
+                if self._gpu_storage:
+                    self._gpu_storage.upload_world_matrices(
+                        [entry[4] for entry in renderable], radii, self._render_count)
+                    self._render_count += 1
                 visible = cpu_frustum_cull(centers, radii, vp)
                 self._culled_visible = len(visible)
                 if len(visible) < n:
@@ -782,7 +794,8 @@ void main() {
                 groups, view_f32, proj_f32, cam_pos, lights, False,
                 self._set_scene_uniforms, self._materials.apply_material,
                 self._normal_cache,
-                selected_entities or set(), outline_queue)
+                selected_entities or set(), outline_queue,
+                gpu_storage=self._gpu_storage)
         else:
             for entry in renderable:
                 ent, tr, mesh, mr = entry[:4]
@@ -1464,6 +1477,8 @@ void main() {
                 self._projector_vao.release()
             except Exception:
                 pass
+        if self._gpu_storage:
+            self._gpu_storage.release()
         for prog in [self._default_prog, self._grid_prog, self._gizmo_prog,
                      self._wireframe_prog, self._outline_prog,
                      self._gizmo_fatline_prog, self._gizmo_solid_prog,

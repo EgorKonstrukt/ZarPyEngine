@@ -6,8 +6,8 @@ from core.math3d import Mat4
 from core.renderer.culling import extract_frustum_planes
 
 
-_WORLD_MATRIX_BINDING = 4
-_INDEX_BINDING = 5
+WORLD_MATRIX_BINDING = 4
+INDEX_BINDING = 5
 
 
 def _supports_compute(ctx: moderngl.Context) -> bool:
@@ -48,21 +48,22 @@ class GpuStorage:
         mat_size = n * 64
         self._world_mat_ssbo = self._ctx.buffer(reserve=mat_size)
 
-    def upload_world_matrices(self, matrices: list[Mat4], version: int):
+    def upload_world_matrices(self, matrices: list[Mat4],
+                              bounding_radii: np.ndarray, version: int):
         if version == self._last_upload_version or len(matrices) == 0:
             return
         self._last_upload_version = version
         self.ensure_capacity(len(matrices))
         self._world_mat_ssbo.write(Mat4.batch_to_f32(matrices).tobytes())
-        if self._culling:
-            self._culling.upload_raw(matrices)
+        if self._culling and len(bounding_radii) == len(matrices):
+            self._culling.upload_bounding(matrices, bounding_radii)
 
     def get_world_matrix_ssbo(self) -> Optional[moderngl.Buffer]:
         return self._world_mat_ssbo
 
     def bind_world_matrices(self):
         if self._world_mat_ssbo:
-            self._world_mat_ssbo.bind_to_storage_buffer(_WORLD_MATRIX_BINDING)
+            self._world_mat_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
 
     def get_or_create_culling(self) -> Optional[GpuCulling]:
         if self._culling is None and _supports_compute(self._ctx):
@@ -131,15 +132,17 @@ class GpuCulling:
             except Exception:
                 self._compute_shader = None
 
-    def upload_raw(self, matrices: list[Mat4]):
-        """Upload bounding spheres for all matrices (called by GpuStorage)."""
+    def upload_bounding(self, matrices: list[Mat4], bounding_radii: np.ndarray):
         n = len(matrices)
         self._count = n
         self.ensure_resources(n)
         if n == 0:
             return
         centers = np.array([m._d[3, 0:3] for m in matrices], dtype=np.float32)
-        self._bounding_ssbo.write(centers.tobytes())
+        spheres = np.zeros((n, 4), dtype=np.float32)
+        spheres[:, :3] = centers
+        spheres[:, 3] = bounding_radii.astype(np.float32)
+        self._bounding_ssbo.write(spheres.tobytes())
 
     def upload_world_matrices(self, matrices: list[Mat4],
                               bounding_radii: np.ndarray):

@@ -109,15 +109,18 @@ class ShaderManager:
 layout(location = 4) in vec4 in_model1;
 layout(location = 5) in vec4 in_model2;
 layout(location = 6) in vec4 in_model3;
+layout(std430, binding = 4) readonly buffer InstanceModels { mat4 _ssbo_models[]; };
+layout(std430, binding = 5) readonly buffer InstanceIndices { int _ssbo_indices[]; };
 uniform int u_use_instancing;
 uniform mat4 u_model;
 uniform mat3 u_normal_matrix;
 mat4 _resolve_model() {
     if (u_use_instancing == 1) return mat4(in_model0, in_model1, in_model2, in_model3);
+    if (u_use_instancing == 2) return _ssbo_models[_ssbo_indices[gl_InstanceID]];
     return u_model;
 }
 mat3 _resolve_normal_matrix() {
-    if (u_use_instancing == 1) return transpose(inverse(mat3(_resolve_model())));
+    if (u_use_instancing >= 1) return transpose(inverse(mat3(_resolve_model())));
     return u_normal_matrix;
 }
 

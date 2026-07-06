@@ -52,6 +52,8 @@ Shader "Zarin/PBR"
             layout(location = 5) in vec4 in_model2;
             layout(location = 6) in vec4 in_model3;
             layout(location = 7) in vec4 in_color;
+            layout(std430, binding = 4) readonly buffer InstanceModels { mat4 _ssbo_models[]; };
+            layout(std430, binding = 5) readonly buffer InstanceIndices { int _ssbo_indices[]; };
             uniform int u_use_instancing;
             uniform mat4 u_model;
             uniform mat4 u_view;
@@ -64,8 +66,8 @@ Shader "Zarin/PBR"
             out vec4 v_color;
             void main() {
                 mat4 inst_model = mat4(in_model0, in_model1, in_model2, in_model3);
-                mat4 _model = (u_use_instancing == 1) ? inst_model : u_model;
-                mat3 _normal_matrix = (u_use_instancing == 1) ? transpose(inverse(mat3(_model))) : u_normal_matrix;
+                mat4 _model = (u_use_instancing == 1) ? inst_model : ((u_use_instancing == 2) ? _ssbo_models[_ssbo_indices[gl_InstanceID]] : u_model);
+                mat3 _normal_matrix = (u_use_instancing >= 1) ? transpose(inverse(mat3(_model))) : u_normal_matrix;
                 vec4 world_pos = _model * vec4(in_position, 1.0);
                 v_world_pos = world_pos.xyz;
                 v_normal = normalize(_normal_matrix * in_normal);

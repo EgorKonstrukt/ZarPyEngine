@@ -1,9 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
-# Copyright (c) 2026 Zarrakun
-
 from __future__ import annotations
 import os
 import numpy as np
@@ -13,6 +7,10 @@ from collections import defaultdict
 from core.math3d import Mat4
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
+
+from core.renderer.gpu_culling import WORLD_MATRIX_BINDING, INDEX_BINDING
+
+_MAX_SHARED_INSTANCES = 16384
 
 
 def _supports_instancing(prog: moderngl.Program) -> bool:
@@ -57,10 +55,13 @@ class RenderBatcher:
         self._ctx = ctx
         self._default_prog = self._ensure_instancing_prog(default_prog)
         self._vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
-        self._inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
+        self._shared_inst_vbo = ctx.buffer(reserve=_MAX_SHARED_INSTANCES * 64)
+        self._index_buf: Optional[moderngl.Buffer] = None
+        self._index_buf_capacity: int = 0
         self._stats_batches: int = 0
         self._stats_draw_calls: int = 0
         self._stats_instanced: int = 0
+        self._total_instances: int = 0
 
     @staticmethod
     def _ensure_instancing_prog(prog: moderngl.Program) -> moderngl.Program:
@@ -93,21 +94,55 @@ class RenderBatcher:
         for entry in renderables:
             ent, tr, mesh, mr = entry[:4]
             wm = entry[4] if len(entry) > 4 else tr.world_matrix
+            orig_idx = entry[5] if len(entry) > 5 else -1
             mat = materials.load_material(mr.material_path)
             shader_path = mat.shader_path if mat else ""
             prog = shaders.get_or_compile(shader_path) or self._default_prog
             mat_key = id(mat) if mat else id(self._MAT_NONE)
             key = (id(prog), mat_key, id(mesh), mr.receive_shadows)
-            groups[key].append((ent, tr, mesh, mr, mat, prog, wm))
+            groups[key].append((ent, tr, mesh, mr, mat, prog, wm, orig_idx))
         return groups
+
+    def _ensure_index_buffer(self, n: int) -> moderngl.Buffer:
+        needed = n * 4
+        if self._index_buf is not None and self._index_buf_capacity >= needed:
+            return self._index_buf
+        if self._index_buf:
+            try:
+                self._index_buf.release()
+            except Exception:
+                pass
+        self._index_buf = self._ctx.buffer(reserve=needed + 64)
+        self._index_buf_capacity = needed + 64
+        return self._index_buf
+
+    def _write_shared_vbo(self, matrices: list[Mat4]):
+        data = Mat4.batch_to_f32(matrices).tobytes()
+        buf = self._shared_inst_vbo
+        if buf.size < len(data):
+            buf.release()
+            self._shared_inst_vbo = self._ctx.buffer(reserve=len(data) + 64)
+            buf = self._shared_inst_vbo
+        buf.write(data)
+        return buf
+
+    def _get_vao(self, prog: moderngl.Program, mesh) -> moderngl.VertexArray:
+        key = (id(mesh), id(prog))
+        cached = self._vao_cache.get(key)
+        if cached is not None:
+            return cached
+        vao = _make_instanced_vao(self._ctx, prog, mesh, self._shared_inst_vbo)
+        self._vao_cache[key] = vao
+        return vao
 
     def render_groups(self, groups: dict, view_f32, proj_f32, cam_pos, lights,
                       disable_shadows: bool, set_scene_uniforms_fn,
                       apply_material_fn, normal_cache: dict,
-                      selected_entities: set, outline_queue: list):
+                      selected_entities: set, outline_queue: list,
+                      gpu_storage=None):
         self.reset_stats()
         for (prog_id, mat_path, mesh_id, receive_shadows), group in groups.items():
-            _, _, mesh, _, mat, prog, _ = group[0]
+            _, _, mesh, _, mat, prog, _, _ = group[0]
             self._stats_batches += 1
             n = len(group)
             group_disable_shadows = disable_shadows or not receive_shadows
@@ -122,7 +157,8 @@ class RenderBatcher:
                                        view_f32, proj_f32, cam_pos, lights,
                                        group_disable_shadows, set_scene_uniforms_fn,
                                        apply_material_fn,
-                                       selected_entities, outline_queue)
+                                       selected_entities, outline_queue,
+                                       gpu_storage=gpu_storage)
             else:
                 for item in group:
                     self._render_single(item, prog, mesh, mat,
@@ -131,64 +167,41 @@ class RenderBatcher:
                                         apply_material_fn, normal_cache,
                                         selected_entities, outline_queue)
 
-    def _build_instance_vbo(self, key: tuple[int, int],
-                            model_matrices: list) -> moderngl.Buffer:
-        data = Mat4.batch_to_f32(model_matrices).tobytes()
-        cached = self._inst_vbo.get(key)
-        if cached is not None:
-            if cached.size >= len(data):
-                try:
-                    cached.write(data)
-                    return cached
-                except Exception:
-                    pass
-            cached.release()
-            self._inst_vbo.pop(key, None)
-            vao_del = self._vao_cache.pop(key, None)
-            if vao_del is not None:
-                try: vao_del.release()
-                except Exception: pass
-        vbo = self._ctx.buffer(data)
-        self._inst_vbo[key] = vbo
-        return vbo
-
-    def _get_vao(self, prog: moderngl.Program, mesh,
-                 instance_vbo: moderngl.Buffer) -> moderngl.VertexArray:
-        key = (id(mesh), id(prog))
-        cached = self._vao_cache.get(key)
-        if cached is not None:
-            return cached
-        vao = _make_instanced_vao(self._ctx, prog, mesh, instance_vbo)
-        self._vao_cache[key] = vao
-        return vao
-
     def _render_instanced(self, group, prog, mesh, mat,
                           view_f32, proj_f32, cam_pos, lights,
                           disable_shadows, set_scene_uniforms_fn,
                           apply_material_fn,
-                          selected_entities, outline_queue):
-        model_mats = []
-        for item in group:
-            ent, tr, _, _, _, _, wm = item
-            model_mats.append(wm)
+                          selected_entities, outline_queue,
+                          gpu_storage=None):
+        world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
 
-        key = (id(mesh), id(prog))
-        vbo = self._build_instance_vbo(key, model_mats)
-        vao = self._get_vao(prog, mesh, vbo)
+        if world_ssbo is not None:
+            indices = np.array([item[-1] for item in group], dtype=np.uint32)
+            idx_buf = self._ensure_index_buffer(len(indices))
+            idx_buf.write(indices.tobytes())
+            world_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
+            idx_buf.bind_to_storage_buffer(INDEX_BINDING)
+            if "u_use_instancing" in prog:
+                prog["u_use_instancing"].value = 2
+        else:
+            model_mats = [item[6] for item in group]
+            self._write_shared_vbo(model_mats)
+            if "u_use_instancing" in prog:
+                prog["u_use_instancing"].value = 1
 
-        if "u_use_instancing" in prog:
-            prog["u_use_instancing"].value = 1
+        vao = self._get_vao(prog, mesh)
+
         set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
                               disable_shadows=disable_shadows)
         apply_material_fn(mat, prog)
 
-        vao.render(instances=len(model_mats))
+        vao.render(instances=len(group))
         self._stats_draw_calls += 1
-        self._stats_instanced += len(model_mats)
+        self._stats_instanced += len(group)
 
         if selected_entities:
             for item in group:
-                ent, tr, _, _, _, _, wm = item
+                ent, tr, _, _, _, _, wm, _ = item
                 if ent in selected_entities:
                     outline_queue.append((mesh, wm))
 
@@ -198,7 +211,7 @@ class RenderBatcher:
                        apply_material_fn, normal_cache,
                        selected_entities, outline_queue):
         self._stats_draw_calls += 1
-        ent, tr, _, _, _, _, wm = item
+        ent, tr, _, _, _, _, wm, _ = item
         if "u_use_instancing" in prog:
             prog["u_use_instancing"].value = 0
         set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
@@ -238,10 +251,16 @@ class RenderBatcher:
         return self._stats_instanced
 
     def release(self):
-        for vbo in self._inst_vbo.values():
+        self._vao_cache.clear()
+        if self._shared_inst_vbo:
             try:
-                vbo.release()
+                self._shared_inst_vbo.release()
             except Exception:
                 pass
-        self._inst_vbo.clear()
-        self._vao_cache.clear()
+            self._shared_inst_vbo = None
+        if self._index_buf:
+            try:
+                self._index_buf.release()
+            except Exception:
+                pass
+            self._index_buf = None
