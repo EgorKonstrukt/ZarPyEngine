@@ -277,6 +277,7 @@ class HierarchyPanel(QDockWidget):
         add_btn = QPushButton("+")
         add_btn.setFixedSize(*scale_xy(24, 24))
         add_btn.setToolTip("Create Entity")
+        add_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
         add_btn.clicked.connect(self._show_create_menu)
         toolbar.addWidget(add_btn)
         self._search = QLineEdit()

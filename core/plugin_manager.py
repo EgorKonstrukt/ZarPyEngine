@@ -247,9 +247,11 @@ class PluginManager:
 
     def load_package(self, dirpath: str):
         try:
-            rel = os.path.relpath(dirpath)
-            mod_name = rel.replace(os.sep, ".").replace("/", ".")
-            mod = importlib.import_module(mod_name)
+            init_path = os.path.join(dirpath, "__init__.py")
+            pkg_name = "_plugin_" + os.path.basename(dirpath)
+            spec = importlib.util.spec_from_file_location(pkg_name, init_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
             for attr in dir(mod):
                 obj = getattr(mod, attr)
                 if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:

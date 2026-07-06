@@ -85,6 +85,7 @@ class EditorMainWindow(QMainWindow):
             render_fps = vp._fps if vp and hasattr(vp, '_fps') else 0.0
             tps = self._engine.tps
             self._status_fps_lbl.setText(f"FPS: {render_fps:.0f} | TPS: {tps:.0f}")
+        self._update_hw_monitors()
         if self._engine.scene and self._engine.scene.dirty:
             name = self._engine.scene.name
             self.setWindowTitle(f"Zarin Engine Editor - {name}*")
@@ -94,6 +95,59 @@ class EditorMainWindow(QMainWindow):
         self._undo_act.setText(f"Undo ({h.undo_text.split()[-1] if h.can_undo else ''})" if h.can_undo else "Undo")
         self._redo_act.setEnabled(h.can_redo)
         self._redo_act.setText(f"Redo ({h.redo_text.split()[-1] if h.can_redo else ''})" if h.can_redo else "Redo")
+
+    def _update_hw_monitors(self):
+        try:
+            import psutil
+            if self._status_cpu_lbl:
+                self._status_cpu_lbl.setText(f"CPU: {psutil.cpu_percent(interval=None):.0f}%")
+            if self._status_ram_lbl:
+                mem = psutil.virtual_memory()
+                self._status_ram_lbl.setText(f"RAM: {mem.used / (1024*1024):.0f} / {mem.total / (1024*1024):.0f} MB")
+        except Exception:
+            pass
+        if self._status_gpu_lbl or self._status_vram_lbl:
+            self._update_gpu_stats()
+
+    _NVML_HANDLE = None
+
+    def _update_gpu_stats(self):
+        gpu_used = None
+        vram_used = None
+        vram_total = None
+        try:
+            if EditorMainWindow._NVML_HANDLE is None:
+                import pynvml
+                pynvml.nvmlInit()
+                EditorMainWindow._NVML_HANDLE = pynvml.nvmlDeviceGetHandleByIndex(0)
+            import pynvml
+            util = pynvml.nvmlDeviceGetUtilizationRates(EditorMainWindow._NVML_HANDLE)
+            gpu_used = util.gpu
+            info = pynvml.nvmlDeviceGetMemoryInfo(EditorMainWindow._NVML_HANDLE)
+            vram_used = info.used // (1024*1024)
+            vram_total = info.total // (1024*1024)
+        except Exception:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=2
+                )
+                if result.returncode == 0:
+                    parts = result.stdout.strip().split(", ")
+                    if len(parts) >= 3:
+                        gpu_used = float(parts[0])
+                        vram_used = int(parts[1])
+                        vram_total = int(parts[2])
+            except Exception:
+                pass
+        if self._status_gpu_lbl:
+            self._status_gpu_lbl.setText(f"GPU: {gpu_used:.0f}%" if gpu_used is not None else "GPU: N/A")
+        if self._status_vram_lbl:
+            self._status_vram_lbl.setText(
+                f"VRAM: {vram_used} / {vram_total} MB" if vram_used is not None else "VRAM: N/A"
+            )
 
     def closeEvent(self, event: QCloseEvent):
         if self._engine.play_mode:

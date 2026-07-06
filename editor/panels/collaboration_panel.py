@@ -92,6 +92,7 @@ class CollaborationPanel(QDockWidget):
         layout.addLayout(host_row)
 
         self._host_btn = QPushButton("Host Session")
+        self._host_btn.setStyleSheet("QPushButton { background: #2471a3; color: #fff; }")
         self._host_btn.clicked.connect(self._on_host)
         layout.addWidget(self._host_btn)
 
@@ -108,10 +109,12 @@ class CollaborationPanel(QDockWidget):
         layout.addLayout(connect_row)
 
         self._connect_btn = QPushButton("Connect")
+        self._connect_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
         self._connect_btn.clicked.connect(self._on_connect)
         layout.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("Disconnect")
+        self._disconnect_btn.setStyleSheet("QPushButton { background: #c0392b; color: #fff; }")
         self._disconnect_btn.clicked.connect(self._on_disconnect)
         self._disconnect_btn.setEnabled(False)
         layout.addWidget(self._disconnect_btn)

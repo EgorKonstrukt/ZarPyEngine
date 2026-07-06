@@ -171,16 +171,7 @@ class InspectorPanel(QDockWidget):
         bottom_layout.setContentsMargins(6, 4, 6, 6)
         self._add_comp_btn = QPushButton("+ Add Component")
         self._add_comp_btn.setFixedHeight(scale(24))
-        self._add_comp_btn.setStyleSheet(f"""
-            QPushButton {{
-                font-size: 11px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                border-color: {_accent()};
-                color: {_accent()};
-            }}
-        """)
+        self._add_comp_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
         self._add_comp_btn.clicked.connect(self._show_add_component_menu)
         bottom_layout.addWidget(self._add_comp_btn)
         outer_layout.addWidget(bottom)

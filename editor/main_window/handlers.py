@@ -522,7 +522,8 @@ def on_camera_2d_changed(mw):
 
 
 def on_play_start(mw, _):
-    mw._play_btn.setText("Stop")
+    from editor.main_window.toolbar import _set_play_btn_style
+    _set_play_btn_style(mw._play_btn, "Stop")
     mw._pause_btn.setEnabled(True)
     mw._status_mode_lbl.setText("Play Mode")
     if hasattr(mw, '_gui_editor_widget') and mw._gui_editor_widget.canvas:
@@ -537,7 +538,8 @@ def on_play_start(mw, _):
 
 
 def on_play_stop(mw, _):
-    mw._play_btn.setText("Play")
+    from editor.main_window.toolbar import _set_play_btn_style
+    _set_play_btn_style(mw._play_btn, "Play")
     mw._pause_btn.setEnabled(False)
     mw._status_mode_lbl.setText("Edit Mode")
     if hasattr(mw, '_viewport'):

@@ -8,24 +8,36 @@ from __future__ import annotations
 
 from core.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import QToolBar, QPushButton
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction, QIcon
 
 from editor.scene_toolbar import SceneToolbar
 from editor.main_window.handlers import toggle_play_stop, reset_camera, on_gizmo_vis_toggled
 
 
+def _set_play_btn_style(btn, text):
+    if text == "Play":
+        btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
+    elif text == "Stop":
+        btn.setStyleSheet("QPushButton { background: #c0392b; color: #fff; }")
+    btn.setText(text)
+
+
 def setup_toolbar(mw):
     mw._main_toolbar = QToolBar("Main", mw)
     mw._main_toolbar.setObjectName("MainToolbar")
     mw._main_toolbar.setMovable(False)
+    s = scale_xy(20, 20)
+    mw._main_toolbar.setIconSize(QSize(*s))
     mw.addToolBar(Qt.ToolBarArea.TopToolBarArea, mw._main_toolbar)
     mw._play_btn = QPushButton("Play")
-    mw._play_btn.setFixedWidth(scale(60))
+    _set_play_btn_style(mw._play_btn, "Play")
+    mw._play_btn.setFixedWidth(scale(90))
     mw._play_btn.clicked.connect(lambda: toggle_play_stop(mw))
     mw._main_toolbar.addWidget(mw._play_btn)
     mw._pause_btn = QPushButton("Pause")
-    mw._pause_btn.setFixedWidth(scale(60))
+    mw._pause_btn.setStyleSheet("QPushButton { background: #b7950b; color: #fff; }")
+    mw._pause_btn.setFixedWidth(scale(90))
     mw._pause_btn.setEnabled(False)
     mw._main_toolbar.addWidget(mw._pause_btn)
     mw._gizmo_vis_act = QAction(QIcon.fromTheme("transform-both", QIcon("")), "Gizmo", mw)

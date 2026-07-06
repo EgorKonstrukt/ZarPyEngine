@@ -259,9 +259,6 @@ class PlayDockPanel(QDockWidget):
         layout.setSpacing(0)
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(4, 2, 4, 2)
-        self._pause_btn = QPushButton("Pause")
-        self._pause_btn.clicked.connect(self._toggle_pause)
-        toolbar.addWidget(self._pause_btn)
         step_btn = QPushButton("Step")
         step_btn.clicked.connect(self._step)
         toolbar.addWidget(step_btn)
@@ -286,7 +283,6 @@ class PlayDockPanel(QDockWidget):
     def _toggle_pause(self):
         self._paused = not self._paused
         self._engine.time_scale = 0.0 if self._paused else self._ts_sb.value()
-        self._pause_btn.setText("Resume" if self._paused else "Pause")
 
     def _step(self):
         if self._paused:

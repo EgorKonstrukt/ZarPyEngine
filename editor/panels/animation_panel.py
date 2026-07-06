@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF, QPointF, QLineF
 from PyQt6.QtGui import (
     QPainter, QPen, QColor, QBrush, QFont, QMouseEvent, QWheelEvent,
-    QKeyEvent, QAction, QPainterPath, QFontMetrics,
+    QKeyEvent, QAction, QPainterPath, QFontMetrics, QPalette,
 )
 from core.curve import Curve, CurveKey, TangentMode
 from core.components.animation.animation_clip import AnimationClip, AnimationEvent
@@ -82,7 +82,7 @@ class TimelineRuler(QWidget):
             if is_major:
                 p.setPen(QPen(self.palette().mid(), 1))
                 p.drawLine(QPointF(x, 8), QPointF(x, h))
-                p.setPen(QPen(self.palette().placeholderText(), 1))
+                p.setPen(QPen(self.palette().placeholderText().color(), 1))
                 font = p.font()
                 font.setPointSize(8)
                 p.setFont(font)
@@ -192,7 +192,7 @@ class Dopesheet(QWidget):
         p.setPen(QPen(self.palette().color(QPalette.ColorRole.Highlight), 1))
         p.drawLine(QPointF(cursor_x, 0), QPointF(cursor_x, h))
         if not self._clip:
-            p.setPen(self.palette().placeholderText())
+            p.setPen(self.palette().placeholderText().color())
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No clip selected")
             p.end()
             return
@@ -205,7 +205,7 @@ class Dopesheet(QWidget):
         is_sel = path == self._selected_property
         if is_sel:
             p.fillRect(0, y, _LABEL_WIDTH, _ROW_HEIGHT, self.palette().highlight().color())
-        p.setPen(QPen(self.palette().text() if is_sel else self.palette().placeholderText(), 1))
+        p.setPen(QPen(self.palette().text() if is_sel else self.palette().placeholderText().color(), 1))
         fm = QFontMetrics(p.font())
         elided = fm.elidedText(path, Qt.TextElideMode.ElideRight, _LABEL_WIDTH - 8)
         p.drawText(QRectF(4, y, _LABEL_WIDTH - 8, _ROW_HEIGHT), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
@@ -344,7 +344,7 @@ class CurveEditorWidget(QWidget):
         zero_y = self._map_from_curve(QPointF(0, 0)).y()
         p.drawLine(QPointF(self._margin, zero_y), QPointF(w - self._margin, zero_y))
         if not self._curve or len(self._curve.keys) < 1:
-            p.setPen(self.palette().placeholderText())
+            p.setPen(self.palette().placeholderText().color())
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"No keys for {self._path}" if self._path else "Select a property")
             p.end()
             return
