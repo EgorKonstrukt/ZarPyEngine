@@ -36,7 +36,7 @@ def setup_toolbar(mw):
     mw._play_btn.clicked.connect(lambda: toggle_play_stop(mw))
     mw._main_toolbar.addWidget(mw._play_btn)
     mw._pause_btn = QPushButton("Pause")
-    mw._pause_btn.setStyleSheet("QPushButton { background: #b7950b; color: #fff; }")
+    mw._pause_btn.setStyleSheet("QPushButton { background: #b7950b; color: #fff; } QPushButton:disabled { background: #5a5a5a; color: #888; }")
     mw._pause_btn.setFixedWidth(scale(90))
     mw._pause_btn.setEnabled(False)
     mw._main_toolbar.addWidget(mw._pause_btn)
