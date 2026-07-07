@@ -58,7 +58,7 @@ class ScaleToConstraint(Component):
         entity = scene.get_entity(src_data["entity_id"])
         if not entity:
             return None
-        return entity.get_component_by_name("Transform")
+        return entity.transform
 
     def _compute_target_scale(self) -> Vec3 | None:
         valid = [s for s in self.sources if s.get("weight", 0.0) > 1e-6]

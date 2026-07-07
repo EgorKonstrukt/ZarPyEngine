@@ -87,7 +87,7 @@ class PrefabViewport(QOpenGLWidget):
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return
             cam = cam_entity.get_component(Camera)
-            tr = cam_entity.get_component(Transform)
+            tr = cam_entity.transform
             if not cam or not tr:
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return
@@ -189,7 +189,7 @@ class PrefabEditorPanel(QDockWidget):
         cam_entity = self._edit_scene.create_entity("Prefab Camera")
         cam_entity.add_component(Transform())
         from core.math3d import Vec3
-        cam_entity.get_component(Transform).local_position = Vec3(0, 2, 5)
+        cam_entity.transform.local_position = Vec3(0, 2, 5)
         cam_entity.add_component(Camera())
         self._engine._plugin_manager.notify_scene_loaded(self._edit_scene)
         self._engine._emit_event("scene_loaded", self._edit_scene)

@@ -10,7 +10,7 @@ import moderngl
 from typing import Optional, Any
 from core.math3d import Mat4
 from core.components.rendering.text_renderer import TextRenderer, TextAlign, TextFilter
-from core.components.transform import Transform
+
 from core.font_atlas import FontAtlas
 
 
@@ -479,7 +479,7 @@ class TextRendererGL:
                     continue
                 if not world_space_only and tr.font_world_space:
                     continue
-            t = ent.get_component(Transform)
+            t = ent.transform
             if not t:
                 continue
             atlas = self._get_atlas(tr.font_path, tr.atlas_resolution)

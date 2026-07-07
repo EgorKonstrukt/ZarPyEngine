@@ -105,7 +105,7 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
     for entity in entities:
         if entity is None:
             continue
-        t = entity.get_component(Transform)
+        t = entity.transform
         if not t:
             continue
         wp = t.position

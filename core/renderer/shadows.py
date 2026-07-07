@@ -12,7 +12,7 @@ from typing import Optional, Any
 from collections import defaultdict
 from core.math3d import Vec3, Mat4
 from core.components.lighting.light import Light, LightType, LightAreaType
-from core.components.transform import Transform
+
 from core.components.rendering.mesh_filter import MeshFilter
 from core.components.rendering.mesh_renderer import MeshRenderer
 from core.renderer.mesh_data import MeshData
@@ -162,7 +162,7 @@ class ShadowRenderer:
                 continue
             mf = ent.get_component(MeshFilter)
             mr = ent.get_component(MeshRenderer)
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr or not mr or not mr.enabled:
                 continue
             if not mr.cast_shadows:

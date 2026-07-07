@@ -243,7 +243,7 @@ class Gizmo:
             self._wpp_cache = (2.0 * half_size) / max(1, vh)
         else:
             pos = self._visual_center if self._visual_center is not None else (
-                self._entity.get_component_by_name("Transform").position + self._pivot_offset
+                self._entity.transform.position + self._pivot_offset
                 if self._entity else Vec3.zero())
             view_dist = max((pos - cam.position).dot(cam.forward), 0.1)
             fov_rad = math.radians(cam.fov)
@@ -406,7 +406,7 @@ class Gizmo:
     def get_gizmo_lines(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600) -> list:
         if not self._entity or self._mode == GizmoMode.NONE:
             return []
-        t = self._entity.get_component_by_name("Transform")
+        t = self._entity.transform
         if not t:
             return []
         self._update_cache(cam, viewport_w, viewport_h)
@@ -431,7 +431,7 @@ class Gizmo:
     def get_gizmo_arrays(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600):
         if not self._entity or self._mode == GizmoMode.NONE:
             return None
-        t = self._entity.get_component_by_name("Transform")
+        t = self._entity.transform
         if not t:
             return None
         self._update_cache(cam, viewport_w, viewport_h)
@@ -448,7 +448,7 @@ class Gizmo:
     def get_gizmo_flat_verts(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600) -> Optional[np.ndarray]:
         if not self._entity or self._mode == GizmoMode.NONE:
             return None
-        t = self._entity.get_component_by_name("Transform")
+        t = self._entity.transform
         if not t:
             return None
         self._update_cache(cam, viewport_w, viewport_h)
@@ -814,7 +814,7 @@ class Gizmo:
     def on_mouse_press(self, mx: int, my: int, cam: SceneCamera, viewport_w: int, viewport_h: int) -> bool:
         if not self._entity or self._mode == GizmoMode.NONE:
             return False
-        t = self._entity.get_component_by_name("Transform")
+        t = self._entity.transform
         if not t:
             return False
         axis = self._pick_axis(mx, my, t, cam, viewport_w, viewport_h)
@@ -879,7 +879,7 @@ class Gizmo:
     def on_mouse_release(self):
         self._visual_center = None
         if self._dragging and self._entity:
-            t = self._entity.get_component_by_name("Transform")
+            t = self._entity.transform
             if t:
                 from core.commands import SetComponentCommand, get_history
                 from core.components import Transform as TransformComponent
@@ -911,7 +911,7 @@ class Gizmo:
 
     def on_mouse_move(self, mx: int, my: int, cam: SceneCamera, viewport_w: int, viewport_h: int):
         if self._dragging and self._entity:
-            t = self._entity.get_component_by_name("Transform")
+            t = self._entity.transform
             if t:
                 if self._mode == GizmoMode.TRANSLATE:
                     self._apply_translate(t, cam, mx, my, viewport_w, viewport_h)
@@ -920,7 +920,7 @@ class Gizmo:
                 elif self._mode == GizmoMode.SCALE:
                     self._apply_scale(t, cam, mx, my, viewport_w, viewport_h)
         elif self._entity:
-            t = self._entity.get_component_by_name("Transform")
+            t = self._entity.transform
             if t:
                 new_hover = self._pick_axis(mx, my, t, cam, viewport_w, viewport_h)
                 if new_hover != self._hover_axis:
@@ -996,7 +996,7 @@ class Gizmo:
             return
         entity = self._entity
         if entity and entity.parent:
-            pt = entity.parent.get_component_by_name("Transform")
+            pt = entity.parent.transform
             if pt:
                 from core.math_helpers import mat4_inv_fast
                 from core.math3d import FLOAT_TYPE

@@ -235,6 +235,15 @@ class Entity:
         return Transform
 
     @property
+    def transform(self):
+        tt = self._transform_type
+        if tt is not None:
+            clist = self._type_map.get(tt)
+            if clist:
+                return clist[0]
+        return None
+
+    @property
     def id(self) -> str: return self._id
 
     @property
@@ -298,7 +307,7 @@ class Entity:
         return self._prefab_guid is not None
 
     def set_parent(self, parent: Optional[Entity], preserve_world: bool = True):
-        t = self.get_component_by_name("Transform")
+        t = self.transform
         if t and preserve_world:
             world = t.world_matrix
         else:
@@ -731,7 +740,7 @@ class Scene:
             t = q.popleft()
             collected.append(t)
             for child in t._entity.children:
-                ct = child.get_component_by_name("Transform")
+                ct = child.transform
                 if ct and ct._dirty and id(ct) not in visited:
                     visited.add(id(ct))
                     q.append(ct)
@@ -775,8 +784,7 @@ class Scene:
                             self._active_update_components.add(comp)
                         if comp._fixed_updates:
                             self._active_fixed_components.add(comp)
-        from core.components.transform import Transform
-        t = e.get_component_by_name("Transform")
+        t = e.transform
         if t and t._dirty:
             self._dirty_roots.add(t)
         self._invalidate_update_cache()
@@ -854,7 +862,7 @@ class Scene:
         for e in self._ensure_entities_cache():
             if not e.active:
                 continue
-            tr = e.get_component(Transform)
+            tr = e.transform
             if not tr:
                 continue
             mf = e.get_component(MeshFilter)

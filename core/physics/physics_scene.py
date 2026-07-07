@@ -83,11 +83,11 @@ class PhysicsScene:
             self._create_entity_joints(entity)
 
     def _create_entity_bodies(self, entity: Entity):
-        from core.components import Rigidbody, Rigidbody2D, Transform
+        from core.components import Rigidbody, Rigidbody2D
 
         rb = entity.get_component(Rigidbody)
         rb2d = entity.get_component(Rigidbody2D)
-        tr = entity.get_component(Transform)
+        tr = entity.transform
         if (not rb and not rb2d) or not tr:
             return
 
@@ -294,7 +294,7 @@ class PhysicsScene:
             entity = self._get_entity(entity_id)
             if not entity:
                 continue
-            shape_info = self._find_shape(entity, entity.get_component_by_name("Transform"))
+            shape_info = self._find_shape(entity, entity.transform)
             if shape_info is None:
                 continue
             current_key = self._make_shape_key(entity, shape_info)

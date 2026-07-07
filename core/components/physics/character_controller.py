@@ -178,7 +178,7 @@ class CharacterController(Component):
             from core.components.physics.box_collider import BoxCollider
             bc = ent.get_component(BoxCollider)
             if bc and bc.enabled:
-                tr = ent.get_component_by_name("Transform")
+                tr = ent.transform
                 if tr:
                     aabb_min, aabb_max = self._box_aabb(tr, bc)
                     entry = self._ray_aabb(origin, Vec3(0, -1, 0), aabb_min, aabb_max)
@@ -375,7 +375,7 @@ class CharacterController(Component):
         if not cam_ent or not cam_ent.active:
             self._camera_entity_id = None
             return
-        cam_tr = cam_ent.get_component_by_name("Transform")
+        cam_tr = cam_ent.transform
         player_tr = self.transform
         if not cam_tr or not player_tr:
             return

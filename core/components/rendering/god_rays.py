@@ -182,12 +182,12 @@ class GodRays(GraphicsEffect):
         if self.entity._scene:
             for ent in self.entity._scene.get_entities_with_component(Light):
                 li = ent.get_component(Light)
-                tr = ent.get_component_by_name("Transform")
+                tr = ent.transform
                 if li and tr:
                     return li, tr
             for ent in self.entity._scene.get_entities_with_component(Projector):
                 pj = ent.get_component(Projector)
-                tr = ent.get_component_by_name("Transform")
+                tr = ent.transform
                 if pj and tr:
                     return pj, tr
         return None, None

@@ -163,7 +163,7 @@ class NavAgent(Component):
             if scene:
                 target_ent = scene.get_entity(self.target_entity_id)
                 if target_ent:
-                    target_tr = target_ent.get_component_by_name("Transform")
+                    target_tr = target_ent.transform
                     if target_tr:
                         return target_tr.position
         return Vec3(self.target_x, self.target_y, self.target_z)
@@ -224,7 +224,7 @@ class NavAgent(Component):
     def set_target_entity(self, entity) -> bool:
         if entity is None:
             return False
-        tr = entity.get_component_by_name("Transform")
+        tr = entity.transform
         if tr is None:
             return False
         self.target_entity_id = entity.id

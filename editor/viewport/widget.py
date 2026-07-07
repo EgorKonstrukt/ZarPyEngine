@@ -302,7 +302,7 @@ class SceneViewport(QOpenGLWidget):
         if starts is None:
             return
         from core.components.transform import Transform
-        tr = sel.get_component(Transform)
+        tr = sel.transform
         if not tr:
             return
         wm = tr.world_matrix._d
@@ -405,13 +405,13 @@ class SceneViewport(QOpenGLWidget):
             center = Vec3.zero()
             count = 0
             for ent in self._selected_entities:
-                t = ent.get_component_by_name("Transform")
+                t = ent.transform
                 if t:
                     center += t.position
                     count += 1
             if count > 0:
                 center /= count
-            pt = self._gizmo.entity.get_component_by_name("Transform") if self._gizmo.entity else None
+            pt = self._gizmo.entity.transform if self._gizmo.entity else None
             self._gizmo._pivot_offset = center - (pt.position if pt else Vec3.zero())
             self._gizmo._visual_center = None
         else:
@@ -583,7 +583,7 @@ class SceneViewport(QOpenGLWidget):
                     send_collab_gizmo_state(self)
                 elif self._im and self._im.key_just_pressed(KEY_F):
                     if self._selected_entities:
-                        t = self._selected_entities[0].get_component_by_name("Transform")
+                        t = self._selected_entities[0].transform
                         if t:
                             self._cam.frame_bounds(t.position)
                 elif self._im and self._im.key_just_pressed(KEY_DELETE):
@@ -775,7 +775,7 @@ class SceneViewport(QOpenGLWidget):
             if self._gizmo.on_mouse_press(x, y, self._cam, *self._get_physical_dims()):
                 self._multi_entity_initial_transforms = {}
                 for ent in self._selected_entities:
-                    et = ent.get_component_by_name("Transform")
+                    et = ent.transform
                     if et:
                         self._multi_entity_initial_transforms[ent.id] = {
                             "position": Vec3(et.position.x, et.position.y, et.position.z),
@@ -860,7 +860,7 @@ class SceneViewport(QOpenGLWidget):
             pre_rot = None
             pre_scale = None
             if multi:
-                pt = primary.get_component_by_name("Transform")
+                pt = primary.transform
                 if pt:
                     pre_pos = Vec3(pt.position.x, pt.position.y, pt.position.z)
                     pre_rot = Quat(pt.local_rotation.x, pt.local_rotation.y, pt.local_rotation.z, pt.local_rotation.w)
@@ -871,7 +871,7 @@ class SceneViewport(QOpenGLWidget):
             if self._gizmo._dragging:
                 send_collab_transforms(self)
             if multi and pre_pos is not None:
-                pt = primary.get_component_by_name("Transform")
+                pt = primary.transform
                 if pt:
                     center = Vec3.zero()
                     count = 0
@@ -888,7 +888,7 @@ class SceneViewport(QOpenGLWidget):
                                 ent = self._engine.scene.get_entity(eid)
                                 if not ent:
                                     continue
-                                et = ent.get_component_by_name("Transform")
+                                et = ent.transform
                                 if et:
                                     offset = init["position"] - center
                                     rotated = world_rot_rel.rotate_vec3(offset)
@@ -909,7 +909,7 @@ class SceneViewport(QOpenGLWidget):
                             ent = self._engine.scene.get_entity(eid)
                             if not ent:
                                 continue
-                            et = ent.get_component_by_name("Transform")
+                            et = ent.transform
                             if et:
                                 offset = init["position"] - center
                                 et.position = center + Vec3(
@@ -930,14 +930,14 @@ class SceneViewport(QOpenGLWidget):
                         for ent in self._selected_entities:
                             if ent is primary:
                                 continue
-                            et = ent.get_component_by_name("Transform")
+                            et = ent.transform
                             if et:
                                 et.position = et.position + pos_delta
                                 et.local_rotation = (world_rot_rel * et.local_rotation).normalized()
                     new_center = Vec3.zero()
                     cnt = 0
                     for ent in self._selected_entities:
-                        et = ent.get_component_by_name("Transform")
+                        et = ent.transform
                         if et:
                             new_center += et.position
                             cnt += 1
@@ -987,7 +987,7 @@ class SceneViewport(QOpenGLWidget):
                 init = self._multi_entity_initial_transforms.get(ent.id)
                 if not init:
                     continue
-                et = ent.get_component_by_name("Transform")
+                et = ent.transform
                 if not et:
                     continue
                 if self._gizmo._mode == GizmoMode.TRANSLATE:
@@ -1249,7 +1249,7 @@ class SceneViewport(QOpenGLWidget):
             data = copy.deepcopy(e.serialize())
             if is_top:
                 data["parent"] = None
-            t = e.get_component_by_name("Transform")
+            t = e.transform
             if t:
                 world_pos, world_rot, world_scale = t.world_matrix.decompose()
                 for comp_data in data.get("components", []):

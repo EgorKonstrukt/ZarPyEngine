@@ -973,7 +973,7 @@ class HierarchyPanel(QDockWidget):
             data = copy.deepcopy(e.serialize())
             if is_top:
                 data["parent"] = None
-            t = e.get_component_by_name("Transform")
+            t = e.transform
             if t:
                 world_pos, world_rot, world_scale = t.world_matrix.decompose()
                 for comp_data in data.get("components", []):

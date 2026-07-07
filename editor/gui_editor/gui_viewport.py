@@ -246,7 +246,7 @@ class GuiEditorViewport(QWidget):
             if comp_cls:
                 comp = comp_cls.deserialize(cd)
                 entity.add_component(comp)
-        t = entity.get_component(Transform)
+        t = entity.transform
         if t:
             t.local_position = (t.local_position.x + 25, t.local_position.y + 25, t.local_position.z)
         from core.gui.system import _find_gui_comp

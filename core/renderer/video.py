@@ -18,7 +18,7 @@ from typing import Optional, Any
 from core.engine import Engine
 from core.math3d import Mat4
 from core.components.rendering.video_renderer import VideoRenderer
-from core.components.transform import Transform
+
 
 
 class VideoPlayer:
@@ -498,7 +498,7 @@ class VideoRendererGL:
             vr = ent.get_component(VideoRenderer)
             if not vr or not vr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             player_key = self._player_key(ent._id, vr.video_path)

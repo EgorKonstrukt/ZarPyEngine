@@ -222,7 +222,7 @@ def snap_camera_to_axis(vp, axis_idx):
     cam = vp._cam
     target = Vec3.zero()
     if vp._selected_entities:
-        t = vp._selected_entities[0].get_component_by_name("Transform")
+        t = vp._selected_entities[0].transform
         if t:
             target = t.position
     dist = max((cam._position - target).length(), 5.0)

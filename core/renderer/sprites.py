@@ -10,7 +10,7 @@ import moderngl
 from typing import Optional, Any
 from core.math3d import Mat4
 from core.components.rendering.sprite_renderer import SpriteRenderer
-from core.components.transform import Transform
+
 
 
 class SpriteRendererGL:
@@ -102,7 +102,7 @@ class SpriteRendererGL:
             sr = ent.get_component(SpriteRenderer)
             if not sr or not sr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             tex = self._texture_loader(sr.texture_path) if sr.texture_path and self._texture_loader else None

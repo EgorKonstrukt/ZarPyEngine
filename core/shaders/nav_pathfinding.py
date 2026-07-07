@@ -339,11 +339,10 @@ class NavWorld:
         self._last_grid_version += 1
 
     def _get_collider_world_aabb(self, comp) -> Optional[AABB]:
-        from core.components import Transform
         entity = comp._entity
         if not entity:
             return None
-        tr = entity.get_component(Transform)
+        tr = entity.transform
         if not tr:
             return None
         pos = tr.local_position

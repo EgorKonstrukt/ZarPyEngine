@@ -68,7 +68,7 @@ def on_entity_double_clicked(mw, eid: str):
     entity = mw._engine.scene.get_entity(eid)
     if not entity:
         return
-    t = entity.get_component_by_name("Transform")
+    t = entity.transform
     if t:
         mw._viewport.camera.frame_bounds(t.position)
 
@@ -186,7 +186,7 @@ def _refresh_prefab_instances(scene, prefab_guid, registry):
     roots = Prefab.get_prefab_roots(instances)
     saved = []
     for root in roots:
-        t = root.get_component_by_name("Transform")
+        t = root.transform
         saved.append({
             "parent_id": root._parent.id if root._parent else None,
             "position": list(t.local_position) if t else None,
@@ -201,7 +201,7 @@ def _refresh_prefab_instances(scene, prefab_guid, registry):
                 parent_ent = scene.get_entity(data["parent_id"])
                 if parent_ent:
                     new_root.set_parent(parent_ent)
-            t = new_root.get_component_by_name("Transform")
+            t = new_root.transform
             if t and data["position"]:
                 from core.math3d import Vec3
                 t.local_position = Vec3(*data["position"])
@@ -243,7 +243,7 @@ def instantiate_prefab(mw, path: str, world_pos=None):
     spawned = [mw._engine.scene.get_entity(eid) for eid in cmd._spawned_ids]
     spawned = [e for e in spawned if e]
     if spawned and world_pos is not None:
-        t = spawned[0].get_component_by_name("Transform")
+        t = spawned[0].transform
         if t:
             t.local_position = world_pos
     if spawned:

@@ -90,7 +90,7 @@ class PlayViewport(QOpenGLWidget):
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return
             cam = cam_entity.get_component(Camera)
-            tr = cam_entity.get_component(Transform)
+            tr = cam_entity.transform
             if not cam or not tr:
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return

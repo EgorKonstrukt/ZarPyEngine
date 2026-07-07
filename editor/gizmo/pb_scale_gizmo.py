@@ -58,7 +58,7 @@ class PbScaleGizmo:
         corners = pb.get_aabb_corners()
         if corners.size == 0:
             return None, None
-        tr = ent.get_component_by_name("Transform")
+        tr = ent.transform
         if not tr:
             return None, None
         wm = tr.world_matrix._d

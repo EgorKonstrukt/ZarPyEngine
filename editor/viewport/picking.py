@@ -64,7 +64,7 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
     from core.components.rendering.text_renderer import TextRenderer
     from core.components.physics.box_collider import BoxCollider
     from core.components.physics.sphere_collider import SphereCollider
-    t = entity.get_component(Transform)
+    t = entity.transform
     if not t:
         return None
     wp = t.position
@@ -257,7 +257,7 @@ def _test_entity_pick(entity, ro, rd, ray_origin, ray_dir):
     from core.components.rendering.mesh_filter import MeshFilter
     from core.components.rendering.mesh_renderer import MeshRenderer
     from core.components.physics.mesh_collider import MeshCollider
-    t = entity.get_component(Transform)
+    t = entity.transform
     if not t:
         return -1.0
     mf = entity.get_component(MeshFilter)
@@ -330,7 +330,7 @@ def pick_entity(vp, sx: int, sy: int):
         if entity.id in candidate_ids or not entity.active:
             continue
         from core.components.transform import Transform
-        t = entity.get_component(Transform)
+        t = entity.transform
         if not t:
             continue
         from core.components.rendering.mesh_filter import MeshFilter
@@ -432,7 +432,7 @@ def pick_entities_in_rect(vp, rx: int, ry: int, rw: int, rh: int) -> list:
     for entity in scene.get_all_entities():
         if not entity.active:
             continue
-        t = entity.get_component(Transform)
+        t = entity.transform
         if not t:
             continue
         saabb = _screen_aabb_of(vp, entity)

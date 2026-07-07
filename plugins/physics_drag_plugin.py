@@ -98,7 +98,7 @@ class _DragFilter(QObject):
         return True
 
     def _get_body_world_pos(self, entity) -> Vec3:
-        tr = entity.get_component_by_name("Transform")
+        tr = entity.transform
         if tr is not None:
             return tr.position
         return Vec3.zero()

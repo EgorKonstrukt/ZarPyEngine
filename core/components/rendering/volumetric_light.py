@@ -239,7 +239,7 @@ class VolumetricLight(GraphicsEffect):
             if not ent.active:
                 continue
             lc = ent.get_component(Light)
-            tr = ent.get_component_by_name("Transform")
+            tr = ent.transform
             if lc and lc.enabled and tr:
                 result.append((lc, tr))
         return result
@@ -253,7 +253,7 @@ class VolumetricLight(GraphicsEffect):
             if not ent.active:
                 continue
             pc = ent.get_component(Projector)
-            tr = ent.get_component_by_name("Transform")
+            tr = ent.transform
             if pc and pc.enabled and tr:
                 result.append((pc, tr))
         return result

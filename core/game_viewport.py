@@ -106,7 +106,7 @@ class GameViewport(QOpenGLWidget):
             if not scene:
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return
-            from core.components import Camera, Transform
+            from core.components import Camera
             cam_entity = None
             for e in scene.get_entities_with_component(Camera):
                 if e.active:
@@ -116,7 +116,7 @@ class GameViewport(QOpenGLWidget):
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return
             cam = cam_entity.get_component(Camera)
-            tr = cam_entity.get_component(Transform)
+            tr = cam_entity.transform
             if not cam or not tr:
                 self._ctx.clear(0.1, 0.1, 0.1, 1.0)
                 return

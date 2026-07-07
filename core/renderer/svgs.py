@@ -11,7 +11,7 @@ import moderngl
 from typing import Optional, Any
 from core.math3d import Mat4
 from core.components.rendering.svg_renderer import SvgRenderer
-from core.components.transform import Transform
+
 from core.texture_import_settings import TextureImportSettings
 
 
@@ -198,7 +198,7 @@ class SvgRendererGL:
             sr = ent.get_component(SvgRenderer)
             if not sr or not sr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             abs_path = self._resolve_path(sr.svg_path)

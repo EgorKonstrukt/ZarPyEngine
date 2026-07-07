@@ -19,7 +19,7 @@ from core.components import LightType, LightAreaType
 from core.components.lighting import Light, Projector
 from core.engine import Engine
 from core.logger import Logger
-from core.components.transform import Transform
+
 from core.components.rendering.mesh_filter import MeshFilter
 from core.components.rendering.mesh_renderer import MeshRenderer
 from core.components.rendering.sprite_renderer import SpriteRenderer
@@ -554,7 +554,7 @@ void main() {
             if not ent.active:
                 continue
             l = ent.get_component(Light)
-            t = ent.get_component(Transform)
+            t = ent.transform
             if l and l.enabled and t:
                 snap.lights.append((l, t))
                 if snap.dir_light is None and l.light_type == LightType.DIRECTIONAL:
@@ -582,7 +582,7 @@ void main() {
             if not ent.active:
                 continue
             mr = ent.get_component(MeshRenderer)
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr or not mr or not mr.enabled:
                 continue
             mf = ent.get_component(MeshFilter)
@@ -611,7 +611,7 @@ void main() {
             sr = ent.get_component(SpriteRenderer)
             if not sr or not sr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             snap.sprite_items.append(_SpriteItem(
@@ -622,7 +622,7 @@ void main() {
             vr = ent.get_component(VideoRenderer)
             if not vr or not vr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             snap.video_items.append(_VideoItem(
@@ -635,7 +635,7 @@ void main() {
             sr = ent.get_component(SvgRenderer)
             if not sr or not sr.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             abs_path = self._svgs.resolve_path(sr.svg_path)
@@ -648,7 +648,7 @@ void main() {
             pj = ent.get_component(Projector)
             if not pj or not pj.enabled:
                 continue
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr:
                 continue
             pos = tr.position
@@ -1400,7 +1400,7 @@ void main() {
             pb = ent.get_component(ProBuilderMesh)
             if not pb or not pb.enabled or pb.vertex_count == 0:
                 continue
-            tr = ent.get_component_by_name("Transform")
+            tr = ent.transform
             if tr:
                 s = tr.local_scale
                 scale_key = (s.x, s.y, s.z)

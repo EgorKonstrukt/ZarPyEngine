@@ -14,7 +14,7 @@ from core.components.inspector_meta import FieldType, InspectorField
 from core.components.rendering.mesh_filter import MeshFilter
 from core.components.rendering.mesh_renderer import MeshRenderer
 from core.components.lighting.light import Light, LightType
-from core.components.transform import Transform
+
 from core.math3d import Mat4, Vec3
 from core.logger import Logger
 import math
@@ -241,7 +241,7 @@ class RaytracingRenderer(Component):
         mf_list = scene.get_entities_with_component(MeshFilter)
         for ent in mf_list:
             mr = ent.get_component(MeshRenderer)
-            tr = ent.get_component(Transform)
+            tr = ent.transform
             if not tr or not mr or not mr.enabled:
                 continue
             mf = ent.get_component(MeshFilter)
@@ -414,7 +414,7 @@ class RaytracingRenderer(Component):
             if not ent.active:
                 continue
             l = ent.get_component(Light)
-            t = ent.get_component(Transform)
+            t = ent.transform
             if not l or not l.enabled or not t:
                 continue
             lt = 0
@@ -505,7 +505,7 @@ class RaytracingRenderer(Component):
         sky_color, sky_intensity = [1.0, 0.95, 0.85], 1.0
         for ent in scene.get_entities_with_component(Light):
             l = ent.get_component(Light)
-            t = ent.get_component(Transform)
+            t = ent.transform
             if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
                 sun_dir = -t.forward
                 if l.procedural_sky_lighting:

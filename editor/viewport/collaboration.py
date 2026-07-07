@@ -43,7 +43,7 @@ def render_remote_collaborator_gizmos(vp, vp_mat, cam_pos, fw, fh):
                 e = scene.get_entity(eid)
                 if not e:
                     continue
-                t = e.get_component_by_name("Transform")
+                t = e.transform
                 if not t:
                     continue
                 pos = t.position
@@ -81,7 +81,7 @@ def render_remote_collaborator_gizmos(vp, vp_mat, cam_pos, fw, fh):
             if not e:
                 stale_deltas.append(eid)
                 continue
-            t = e.get_component_by_name("Transform")
+            t = e.transform
             if not t:
                 continue
             pos = t.position
@@ -217,7 +217,7 @@ def send_collab_transforms(vp):
         return
     vp._collab_throttle_transform = now
     for ent in vp._selected_entities:
-        t = ent.get_component_by_name("Transform")
+        t = ent.transform
         if not t:
             continue
         collab.send_transform(

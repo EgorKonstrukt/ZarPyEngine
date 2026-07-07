@@ -826,7 +826,7 @@ class CollaborationManager:
         e = scene.get_entity(entity_id)
         if not e:
             return
-        t = e.get_component_by_name("Transform")
+        t = e.transform
         if not t:
             return
         p = data.get("p")

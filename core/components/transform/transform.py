@@ -40,7 +40,7 @@ class Transform(Component):
             if scene:
                 scene._dirty_roots.add(self)
             for child in self._entity.children:
-                ct = child.get_component(Transform)
+                ct = child.transform
                 if ct:
                     ct._mark_dirty()
     def _update_world_matrix(self):
@@ -51,7 +51,7 @@ class Transform(Component):
         local = self._build_local_matrix()
         parent_entity = self._entity.parent if self._entity else None
         if parent_entity:
-            pt = parent_entity.get_component(Transform)
+            pt = parent_entity.transform
             if pt:
                 pt._update_world_matrix()
                 self._world_matrix = local * pt._world_matrix
@@ -64,7 +64,7 @@ class Transform(Component):
     def _resolve_world_target(self):
         parent_entity = self._entity.parent if self._entity else None
         if parent_entity:
-            pt = parent_entity.get_component(Transform)
+            pt = parent_entity.transform
             if pt:
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
@@ -126,7 +126,7 @@ class Transform(Component):
             world_pos = Vec3(*world_pos)
         parent_entity = self._entity.parent if self._entity else None
         if parent_entity:
-            pt = parent_entity.get_component_by_name("Transform")
+            pt = parent_entity.transform
             if pt:
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
@@ -229,7 +229,7 @@ class Transform(Component):
                     has_parent[i] = 1
                     parent_idx[i] = pi
                 else:
-                    pt = t._entity.parent.get_component(Transform)
+                    pt = t._entity.parent.transform
                     if pt is not None:
                         has_parent[i] = 1
                         parent_idx[i] = -1
