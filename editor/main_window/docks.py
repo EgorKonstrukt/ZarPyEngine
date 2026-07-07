@@ -27,6 +27,7 @@ from editor.panels.animation_panel import AnimationPanel
 from editor.panels.animator_panel import AnimatorPanel
 from editor.panels.scripts_panel import ScriptsPanel
 from editor.panels.tracemalloc_panel import TracemallocPanel
+from editor.panels.time_travel_panel import TimeTravelPanel
 from editor.gui_editor.gui_viewport import GuiEditorViewport
 
 _AREA_MAP = {
@@ -218,6 +219,14 @@ def register_default_docks(mw):
         QDockWidget.DockWidgetFeature.DockWidgetFloatable |
         QDockWidget.DockWidgetFeature.DockWidgetClosable)
     register_dock(mw, mw._tracemalloc, Qt.DockWidgetArea.LeftDockWidgetArea)
+    mw._time_travel = TimeTravelPanel(mw._engine, mw)
+    mw._time_travel.setObjectName("TimeTravelDock")
+    mw._time_travel.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+    mw._time_travel.setFeatures(
+        QDockWidget.DockWidgetFeature.DockWidgetMovable |
+        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+        QDockWidget.DockWidgetFeature.DockWidgetClosable)
+    register_dock(mw, mw._time_travel, Qt.DockWidgetArea.LeftDockWidgetArea)
 
 
 def register_plugin_docks(mw):
@@ -258,13 +267,15 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._animator)
     mw.addDockWidget(area, mw._scripts)
     mw.addDockWidget(area, mw._tracemalloc)
+    mw.addDockWidget(area, mw._time_travel)
     for dock in mw._docks:
         if dock not in (mw._hierarchy, mw._viewport_dock, mw._inspector,
                         mw._play_dock, mw._gui_editor,
                         mw._console, mw._profiler, mw._project,
                         mw._terminal, mw._undo_history, mw._plugin_mgr,
                         mw._collab_panel, mw._mesh_editor, mw._animation,
-                        mw._animator, mw._scripts, mw._tracemalloc):
+                        mw._animator, mw._scripts, mw._tracemalloc,
+                        mw._time_travel):
             mw.addDockWidget(area, dock)
 
 
@@ -284,6 +295,7 @@ def build_dock_layout(mw):
     mw.tabifyDockWidget(mw._project, mw._plugin_mgr)
     mw.tabifyDockWidget(mw._project, mw._mesh_editor)
     mw.tabifyDockWidget(mw._project, mw._tracemalloc)
+    mw.tabifyDockWidget(mw._project, mw._time_travel)
     mw.tabifyDockWidget(mw._console, mw._terminal)
     mw._viewport_dock.raise_()
     mw._hierarchy.raise_()

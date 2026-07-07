@@ -43,6 +43,7 @@ class Engine:
         self._tps_frames: int = 0
         self._scene_lock = threading.RLock()
         self._profiler = _Profiler()
+        self._time_travel_recorder: Optional[Any] = None
         self._event_listeners: dict[str, list] = {}
         self._component_registry = ComponentRegistry
         self._collab_manager: Optional[Any] = None
@@ -342,6 +343,8 @@ class Engine:
             self._tps_accum = 0.0
             self._tps_frames = 0
         self._profiler.stop("tick")
+        if self._time_travel_recorder and self._time_travel_recorder.is_recording:
+            self._time_travel_recorder.capture(self._scene)
     def set_profiler_data(self, key: str, value_ms: float):
         self._profiler.set_value(key, value_ms)
     def capture_profiler_frame(self):
