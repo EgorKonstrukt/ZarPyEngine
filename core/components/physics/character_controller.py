@@ -181,10 +181,9 @@ class CharacterController(Component):
                 tr = ent.get_component_by_name("Transform")
                 if tr:
                     aabb_min, aabb_max = self._box_aabb(tr, bc)
-                    if self._ray_aabb_intersect(origin, Vec3(0, -1, 0), dist, aabb_min, aabb_max):
-                        entry = self._ray_aabb_entry(origin, Vec3(0, -1, 0), aabb_min, aabb_max)
-                        if entry is not None and 0 <= entry < dist:
-                            return True, aabb_max.y
+                    entry = self._ray_aabb(origin, Vec3(0, -1, 0), aabb_min, aabb_max)
+                    if entry is not None and 0 <= entry < dist:
+                        return True, aabb_max.y
         return False, 0.0
 
     def _box_aabb(self, tr, bc):
@@ -194,54 +193,13 @@ class CharacterController(Component):
         h = Vec3(sz.x * 0.5, sz.y * 0.5, sz.z * 0.5)
         return (world_pos - h, world_pos + h)
 
-    # РџРР—Р”Р•Р¦: _ray_aabb_intersect Рё _ray_aabb_entry вЂ” Р­РўРћ РћР”РќРћ Р РўРћ Р–Р•.
-    # РЎРµСЂСЊС‘Р·РЅРѕ, РѕС‚РєСЂРѕР№ РіР»Р°Р·Р°: 95% РєРѕРґР° РёРґРµРЅС‚РёС‡РЅРѕ. РћРґРЅР° РІРѕР·РІСЂР°С‰Р°РµС‚ bool, РґСЂСѓРіР°СЏ float.
-    # РњРѕР¶РЅРѕ Р±С‹Р»Рѕ СЃРґРµР»Р°С‚СЊ _ray_aabb_test(..., need_entry=True) вЂ” РЅРѕ РЅРµС‚, Р›Р•РќР¬.
-    def _ray_aabb_intersect(self, origin: Vec3, dir: Vec3, max_dist: float,
-                             aabb_min: Vec3, aabb_max: Vec3) -> bool:
-        tmin = -1e9
-        tmax = 1e9
-        for i in range(3):
-            o = [origin.x, origin.y, origin.z][i]
-            d = [dir.x, dir.y, dir.z][i]
-            mn = [aabb_min.x, aabb_min.y, aabb_min.z][i]
-            mx = [aabb_max.x, aabb_max.y, aabb_max.z][i]
-            if abs(d) < 1e-10:
-                if o < mn or o > mx:
-                    return False
-            else:
-                t1 = (mn - o) / d
-                t2 = (mx - o) / d
-                if t1 > t2:
-                    t1, t2 = t2, t1
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
-                if tmin > tmax:
-                    return False
-        return tmin < max_dist and tmax >= 0
-
-    # Р‘Р›РЇР”Р¬, РљРћРџРРџРђРЎРўРђ _ray_aabb_intersect РЎ Р”Р РЈР“РРњ RETURN. РҐР’РђРўРР›Рћ РЈРњРђ РџР•Р Р•РРњР•РќРћР’РђРўР¬ min(tmin, max_dist) Р’ entry.
-    def _ray_aabb_entry(self, origin: Vec3, dir: Vec3, aabb_min: Vec3, aabb_max: Vec3) -> float | None:
-        tmin = -1e9
-        tmax = 1e9
-        for i in range(3):
-            o = [origin.x, origin.y, origin.z][i]
-            d = [dir.x, dir.y, dir.z][i]
-            mn = [aabb_min.x, aabb_min.y, aabb_min.z][i]
-            mx = [aabb_max.x, aabb_max.y, aabb_max.z][i]
-            if abs(d) < 1e-10:
-                if o < mn or o > mx:
-                    return None
-            else:
-                t1 = (mn - o) / d
-                t2 = (mx - o) / d
-                if t1 > t2:
-                    t1, t2 = t2, t1
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
-                if tmin > tmax:
-                    return None
-        return max(0.0, tmin) if tmax >= 0 else None
+    def _ray_aabb(self, origin: Vec3, dir: Vec3, aabb_min: Vec3, aabb_max: Vec3) -> float | None:
+        from core._physics_utils import ray_aabb_intersect
+        t = ray_aabb_intersect(origin.x, origin.y, origin.z,
+                               dir.x, dir.y, dir.z,
+                               aabb_min.x, aabb_min.y, aabb_min.z,
+                               aabb_max.x, aabb_max.y, aabb_max.z)
+        return t if t >= 0 else None
 
     def _accelerate(self, wish_dir: Vec3, wish_speed: float, accel: float, dt: float):
         vel = self.velocity

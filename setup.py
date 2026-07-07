@@ -50,7 +50,13 @@ ext_render_utils = Extension(
     include_dirs=[numpy.get_include()],
 )
 
+ext_physics_utils = Extension(
+    "core._physics_utils",
+    sources=["core/_physics_utils.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
 setup(
     name="ZarinEngine-cython-extensions",
-    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch, ext_render_utils], language_level="3"),
+    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch, ext_render_utils, ext_physics_utils], language_level="3"),
 )

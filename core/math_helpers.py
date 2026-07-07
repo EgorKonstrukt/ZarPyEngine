@@ -144,6 +144,27 @@ def quat_to_euler(x: float, y: float, z: float, w: float):
     return rx,ry,rz
 
 
+def quat_from_euler_rad(x_rad: float, y_rad: float, z_rad: float):
+    hx=x_rad*0.5; hy=y_rad*0.5; hz=z_rad*0.5
+    sx,cx=math.sin(hx),math.cos(hx)
+    sy,cy=math.sin(hy),math.cos(hy)
+    sz,cz=math.sin(hz),math.cos(hz)
+    return (sx*cy*cz-cx*sy*sz,
+            cx*sy*cz+sx*cy*sz,
+            cx*cy*sz-sx*sy*cz,
+            cx*cy*cz+sx*sy*sz)
+
+
+def quat_to_euler_rad(x: float, y: float, z: float, w: float):
+    sinx_cosp=2*(w*x+y*z); cosx_cosp=1-2*(x*x+y*y)
+    rx=math.atan2(sinx_cosp,cosx_cosp)
+    siny_cosp=2*(w*y-z*x)
+    ry=math.asin(max(-1.0,min(1.0,siny_cosp)))
+    sinz_cosp=2*(w*z+x*y); cosz_cosp=1-2*(y*y+z*z)
+    rz=math.atan2(sinz_cosp,cosz_cosp)
+    return rx,ry,rz
+
+
 def quat_normalize(x: float, y: float, z: float, w: float):
     n=(x*x+y*y+z*z+w*w)**0.5
     if n > 1e-10:

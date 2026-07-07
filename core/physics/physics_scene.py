@@ -215,12 +215,18 @@ class PhysicsScene:
     def _constrain_2d_bodies(self):
         for body_id in list(self._2d_bodies):
             pos, rot = self._solver.get_body_transform(body_id)
-            self._solver.set_body_transform(body_id, (pos[0], pos[1], 0.0), (0.0, 0.0, rot[2]))
+            clamped = False
+            if pos[2] != 0.0:
+                clamped = True
+            if rot[0] != 0.0 or rot[1] != 0.0:
+                clamped = True
+            if clamped:
+                self._solver.set_body_transform(body_id, (pos[0], pos[1], 0.0), (0.0, 0.0, rot[2]))
             vel = self._solver.get_velocity(body_id)
-            if vel[0] != 0.0 or vel[1] != 0.0 or vel[2] != 0.0:
+            if vel[2] != 0.0:
                 self._solver.set_velocity(body_id, (vel[0], vel[1], 0.0))
             ang_vel = self._solver.get_angular_velocity(body_id)
-            if ang_vel[0] != 0.0 or ang_vel[1] != 0.0 or ang_vel[2] != 0.0:
+            if ang_vel[0] != 0.0 or ang_vel[1] != 0.0:
                 self._solver.set_angular_velocity(body_id, (0.0, 0.0, ang_vel[2]))
 
     def _has_collision_listeners(self) -> bool:
@@ -259,57 +265,27 @@ class PhysicsScene:
         exited = self._prev_frame_contacts - current
         stayed = current & self._prev_frame_contacts
 
-        eid = ""
-        for pair in entered:
-            bodies = list(pair)
-            e0 = self._body_to_entity.get(bodies[0], "")
-            e1 = self._body_to_entity.get(bodies[1], "")
-            if not e0 or not e1:
-                continue
-            for sc in self._get_entity(e0).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_enter'):
-                    try: getattr(inst, 'on_collision_enter')(e1)
-                    except Exception as ex: Logger.error(f"Script on_collision_enter error: {ex}")
-            for sc in self._get_entity(e1).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_enter'):
-                    try: getattr(inst, 'on_collision_enter')(e0)
-                    except Exception as ex: Logger.error(f"Script on_collision_enter error: {ex}")
+        def _dispatch(pairs, callback_name):
+            for pair in pairs:
+                bodies = list(pair)
+                e0 = self._body_to_entity.get(bodies[0], "")
+                e1 = self._body_to_entity.get(bodies[1], "")
+                if not e0 or not e1:
+                    continue
+                for sc in self._get_entity(e0).get_components(ScriptComponent):
+                    inst = sc._py_instance
+                    if inst and hasattr(inst, callback_name):
+                        try: getattr(inst, callback_name)(e1)
+                        except Exception as ex: Logger.error(f"Script {callback_name} error: {ex}")
+                for sc in self._get_entity(e1).get_components(ScriptComponent):
+                    inst = sc._py_instance
+                    if inst and hasattr(inst, callback_name):
+                        try: getattr(inst, callback_name)(e0)
+                        except Exception as ex: Logger.error(f"Script {callback_name} error: {ex}")
 
-        for pair in exited:
-            bodies = list(pair)
-            e0 = self._body_to_entity.get(bodies[0], "")
-            e1 = self._body_to_entity.get(bodies[1], "")
-            if not e0 or not e1:
-                continue
-            for sc in self._get_entity(e0).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_exit'):
-                    try: getattr(inst, 'on_collision_exit')(e1)
-                    except Exception as ex: Logger.error(f"Script on_collision_exit error: {ex}")
-            for sc in self._get_entity(e1).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_exit'):
-                    try: getattr(inst, 'on_collision_exit')(e0)
-                    except Exception as ex: Logger.error(f"Script on_collision_exit error: {ex}")
-
-        for pair in stayed:
-            bodies = list(pair)
-            e0 = self._body_to_entity.get(bodies[0], "")
-            e1 = self._body_to_entity.get(bodies[1], "")
-            if not e0 or not e1:
-                continue
-            for sc in self._get_entity(e0).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_stay'):
-                    try: getattr(inst, 'on_collision_stay')(e1)
-                    except Exception as ex: Logger.error(f"Script on_collision_stay error: {ex}")
-            for sc in self._get_entity(e1).get_components(ScriptComponent):
-                inst = sc._py_instance
-                if inst and hasattr(inst, 'on_collision_stay'):
-                    try: getattr(inst, 'on_collision_stay')(e0)
-                    except Exception as ex: Logger.error(f"Script on_collision_stay error: {ex}")
+        _dispatch(entered, 'on_collision_enter')
+        _dispatch(exited, 'on_collision_exit')
+        _dispatch(stayed, 'on_collision_stay')
 
         self._prev_frame_contacts = current
 
@@ -336,6 +312,7 @@ class PhysicsScene:
         return self._body_items
 
     def _sync_ecs_to_physics(self):
+        from core.math_helpers import quat_to_euler_rad
         cache = self._entity_body_cache
         for entity_id, body_id in self._entity_to_body.items():
             cached = cache.get(entity_id)
@@ -344,29 +321,25 @@ class PhysicsScene:
             entity, rb, tr, is_2d = cached
             if not entity._active:
                 continue
-            if is_2d:
-                if rb.is_kinematic:
-                    p = tr._local_pos
-                    q = tr._local_rot
-                    qz2 = q._z + q._z
+            if rb.is_kinematic:
+                p = tr._local_pos
+                if is_2d:
                     self._solver.set_body_transform(body_id,
                         (p._x, p._y, 0.0),
-                        (0.0, 0.0, math.atan2(qz2 * q._w + q._x * q._y * 2.0, 1.0 - (q._y * q._y + q._z * q._z) * 2.0)))
-                if rb._force_accum._x != 0.0 or rb._force_accum._y != 0.0:
-                    self._solver.apply_force(body_id, (rb._force_accum._x, rb._force_accum._y, 0.0))
+                        (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
+                                                      tr._local_rot._z, tr._local_rot._w)[2]))
+                else:
+                    e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
+                                          tr._local_rot._z, tr._local_rot._w)
+                    self._solver.set_body_transform(body_id,
+                        (p._x, p._y, p._z), e)
+            fa = rb._force_accum
+            if is_2d:
+                if fa._x != 0.0 or fa._y != 0.0:
+                    self._solver.apply_force(body_id, (fa._x, fa._y, 0.0))
                 if abs(rb._torque_accum) > 1e-10:
                     self._solver.apply_torque(body_id, (0.0, 0.0, rb._torque_accum))
             else:
-                if rb.is_kinematic:
-                    p = tr._local_pos
-                    q = tr._local_rot
-                    qx, qy, qz, qw = q._x, q._y, q._z, q._w
-                    self._solver.set_body_transform(body_id,
-                        (p._x, p._y, p._z),
-                        (math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)),
-                         math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))),
-                         math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))))
-                fa = rb._force_accum
                 if fa._x * fa._x + fa._y * fa._y + fa._z * fa._z > 1e-10:
                     self._solver.apply_force(body_id, (fa._x, fa._y, fa._z))
                 ta = rb._torque_accum
@@ -374,65 +347,48 @@ class PhysicsScene:
                     self._solver.apply_torque(body_id, (ta._x, ta._y, ta._z))
 
     def _sync_physics_to_ecs(self):
+        from core.math_helpers import quat_from_euler_rad
         cache = self._entity_body_cache
         for entity_id, body_id in self._entity_to_body.items():
             cached = cache.get(entity_id)
             if not cached:
                 continue
             entity, rb, tr, is_2d = cached
-            if not entity._active:
+            if not entity._active or rb.is_kinematic:
                 continue
+            pos, rot = self._solver.get_body_transform(body_id)
+            vel = self._solver.get_velocity(body_id)
+            ang_vel = self._solver.get_angular_velocity(body_id)
+            tr._local_pos._x = pos[0]
+            tr._local_pos._y = pos[1]
+            tr._local_pos._z = 0.0 if is_2d else pos[2]
             if is_2d:
-                if rb.is_kinematic:
-                    continue
-                pos, rot = self._solver.get_body_transform(body_id)
-                vel = self._solver.get_velocity(body_id)
-                ang_vel = self._solver.get_angular_velocity(body_id)
-                tr._local_pos._x = pos[0]
-                tr._local_pos._y = pos[1]
-                tr._local_pos._z = 0.0
-                qz2 = rot[2] * 0.5
-                sx, cx = math.sin(qz2), math.cos(qz2)
-                tr._local_rot._x = 0.0
-                tr._local_rot._y = 0.0
-                tr._local_rot._z = sx
-                tr._local_rot._w = cx
-                tr._dirty = True
-                rb._velocity._x = vel[0]
-                rb._velocity._y = vel[1]
-                rb._angular_velocity = ang_vel[2]
-                rb._force_accum._x = 0.0
-                rb._force_accum._y = 0.0
-                rb._torque_accum = 0.0
+                q = quat_from_euler_rad(0.0, 0.0, rot[2])
             else:
-                if rb.is_kinematic:
-                    continue
-                pos, rot = self._solver.get_body_transform(body_id)
-                vel = self._solver.get_velocity(body_id)
-                ang_vel = self._solver.get_angular_velocity(body_id)
-                tr._local_pos._x = pos[0]
-                tr._local_pos._y = pos[1]
-                tr._local_pos._z = pos[2]
-                sr, cr = math.sin(rot[0] * 0.5), math.cos(rot[0] * 0.5)
-                sp, cp = math.sin(rot[1] * 0.5), math.cos(rot[1] * 0.5)
-                sy, cy = math.sin(rot[2] * 0.5), math.cos(rot[2] * 0.5)
-                tr._local_rot._x = sr * cp * cy - cr * sp * sy
-                tr._local_rot._y = cr * sp * cy + sr * cp * sy
-                tr._local_rot._z = cr * cp * sy - sr * sp * cy
-                tr._local_rot._w = cr * cp * cy + sr * sp * sy
-                tr._dirty = True
-                rb._velocity._x = vel[0]
-                rb._velocity._y = vel[1]
+                q = quat_from_euler_rad(rot[0], rot[1], rot[2])
+            tr._local_rot._x = q[0]
+            tr._local_rot._y = q[1]
+            tr._local_rot._z = q[2]
+            tr._local_rot._w = q[3]
+            tr._dirty = True
+            rb._velocity._x = vel[0]
+            rb._velocity._y = vel[1]
+            if not is_2d:
                 rb._velocity._z = vel[2]
                 rb._angular_velocity._x = ang_vel[0]
                 rb._angular_velocity._y = ang_vel[1]
                 rb._angular_velocity._z = ang_vel[2]
-                rb._force_accum._x = 0.0
-                rb._force_accum._y = 0.0
+            else:
+                rb._angular_velocity = ang_vel[2]
+            rb._force_accum._x = 0.0
+            rb._force_accum._y = 0.0
+            if not is_2d:
                 rb._force_accum._z = 0.0
                 rb._torque_accum._x = 0.0
                 rb._torque_accum._y = 0.0
                 rb._torque_accum._z = 0.0
+            else:
+                rb._torque_accum = 0.0
 
     def _create_entity_joints(self, entity: Entity):
         from core.components import Joint

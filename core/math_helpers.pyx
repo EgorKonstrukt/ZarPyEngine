@@ -322,6 +322,34 @@ def quat_to_euler(float x, float y, float z, float w):
     return rx, ry, rz
 
 
+def quat_from_euler_rad(float x_rad, float y_rad, float z_rad):
+    cdef DTYPE_t hx = x_rad * 0.5
+    cdef DTYPE_t hy = y_rad * 0.5
+    cdef DTYPE_t hz = z_rad * 0.5
+    cdef DTYPE_t sx = sin(hx)
+    cdef DTYPE_t cx = cos(hx)
+    cdef DTYPE_t sy = sin(hy)
+    cdef DTYPE_t cy = cos(hy)
+    cdef DTYPE_t sz = sin(hz)
+    cdef DTYPE_t cz = cos(hz)
+    return (sx*cy*cz - cx*sy*sz,
+            cx*sy*cz + sx*cy*sz,
+            cx*cy*sz - sx*sy*cz,
+            cx*cy*cz + sx*sy*sz)
+
+
+def quat_to_euler_rad(float x, float y, float z, float w):
+    cdef DTYPE_t sinx_cosp = 2*(w*x + y*z)
+    cdef DTYPE_t cosx_cosp = 1 - 2*(x*x + y*y)
+    cdef DTYPE_t rx = atan2(sinx_cosp, cosx_cosp)
+    cdef DTYPE_t siny_cosp = 2*(w*y - z*x)
+    cdef DTYPE_t ry = asin(max(-1.0, min(1.0, siny_cosp)))
+    cdef DTYPE_t sinz_cosp = 2*(w*z + x*y)
+    cdef DTYPE_t cosz_cosp = 1 - 2*(y*y + z*z)
+    cdef DTYPE_t rz = atan2(sinz_cosp, cosz_cosp)
+    return rx, ry, rz
+
+
 # ── Vec3 helpers ──────────────────────────────────────────────────────
 
 cdef inline void _vec3_normalize(DTYPE_t x, DTYPE_t y, DTYPE_t z,
