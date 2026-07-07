@@ -19,7 +19,7 @@ def extract_frustum_planes(view_proj: np.ndarray) -> np.ndarray:
     planes[5] = vp[3] - vp[2]
     norms = np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
     norms[norms < 1e-10] = 1.0
-    planes[:, :3] /= norms
+    planes /= norms
     return planes
 
 

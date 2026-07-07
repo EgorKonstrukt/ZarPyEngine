@@ -772,17 +772,17 @@ void main() {
                 sz = np.linalg.norm(cols[:, :, 2], axis=1)
                 max_scale = np.maximum(np.maximum(sx, sy), sz)
                 radii = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float32) * max_scale
-                vp = proj_mat._d.T @ view_mat._d.T
                 if self._gpu_storage:
                     self._gpu_storage.upload_world_matrices(
                         [entry[4] for entry in renderable], radii, self._render_count)
                     self._render_count += 1
+                vp = proj_mat._d.T @ view_mat._d.T
                 visible = cpu_frustum_cull(centers, radii, vp)
                 self._culled_visible = len(visible)
                 if len(visible) < n:
                     renderable = [renderable[idx] for idx in visible]
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
         if prof:
             prof.start("render_meshes")
