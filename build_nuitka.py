@@ -195,7 +195,7 @@ def build():
     # Nuitka's --exclude-module doesn't work when packages are installed
     # because --include-package follows transitive imports
     PACKAGES_TO_REMOVE = [
-        "numba", "llvmlite", "llvmlite-bindings", "llvmlite-environment",
+
 
         "pygments", "pydantic", "pydantic-core", "pydantic-settings",
         "mcp", "httpx", "starlette", "cryptography",
@@ -222,18 +222,6 @@ def build():
         print(f"Uninstalled {len(removed)} packages for clean build\n")
     else:
         print("No optional packages to remove\n")
-
-    # Verify numba is actually gone вЂ” abort if not
-    try:
-        import importlib
-        importlib.import_module("numba")
-        print("\nFATAL: numba is STILL installed after pip uninstall!")
-        print("It will be compiled by Nuitka and bloat the build.")
-        print("Try running: pip uninstall numba llvmlite -y")
-        print("Then run this script again.\n")
-        sys.exit(1)
-    except ImportError:
-        print("OK: numba not found (good)\n")
 
     # Load build settings
     bs = _load_build_settings()

@@ -195,7 +195,7 @@ class Transform(Component):
 
     @staticmethod
     def batch_update_world_matrices(transforms: list):
-        from core.math_helpers import mat4_mul_fast, mat4_from_quaternion, mat4_translation, mat4_scale_mat
+        from core._transform_batch import batch_update_world_matrices as _batch_cy
         n = len(transforms)
         if n == 0: return
         id_to_idx = {}
@@ -215,7 +215,7 @@ class Transform(Component):
         sc_z = np.zeros(n, dtype=FLOAT_TYPE)
         has_parent = np.zeros(n, dtype=np.int32)
         parent_idx = np.zeros(n, dtype=np.int32)
-        parent_outside = [None] * n
+        parent_outside = np.zeros((n, 4, 4), dtype=FLOAT_TYPE)
         for i, t in enumerate(transforms):
             p = t._local_pos
             q = t._local_rot
@@ -234,21 +234,12 @@ class Transform(Component):
                         has_parent[i] = 1
                         parent_idx[i] = -1
                         parent_outside[i] = pt._world_matrix._d
-        local_mats = np.zeros((n, 4, 4), dtype=FLOAT_TYPE)
-        for i in range(n):
-            tm = mat4_translation(pos_x[i], pos_y[i], pos_z[i])
-            rm = mat4_from_quaternion(rot_x[i], rot_y[i], rot_z[i], rot_w[i])
-            sm = mat4_scale_mat(sc_x[i], sc_y[i], sc_z[i])
-            local_mats[i] = mat4_mul_fast(mat4_mul_fast(sm, rm), tm)
-        world_mats = np.zeros((n, 4, 4), dtype=FLOAT_TYPE)
-        for i in range(n):
-            if not has_parent[i]:
-                world_mats[i] = local_mats[i].copy()
-            elif parent_idx[i] >= 0:
-                pi = int(parent_idx[i])
-                world_mats[i] = mat4_mul_fast(local_mats[i], world_mats[pi])
-            else:
-                world_mats[i] = mat4_mul_fast(local_mats[i], parent_outside[i])
+        world_mats = _batch_cy(
+            n, pos_x, pos_y, pos_z,
+            rot_x, rot_y, rot_z, rot_w,
+            sc_x, sc_y, sc_z,
+            has_parent, parent_idx, parent_outside,
+        )
         for i, t in enumerate(transforms):
             t._world_matrix = Mat4(world_mats[i])
             t._world_target = None

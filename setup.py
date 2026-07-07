@@ -26,7 +26,25 @@ ext_raytrace_data = Extension(
     include_dirs=[numpy.get_include()],
 )
 
+ext_math_helpers = Extension(
+    "core.math_helpers",
+    sources=["core/math_helpers.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
+ext_culling = Extension(
+    "core._culling",
+    sources=["core/_culling.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
+ext_transform_batch = Extension(
+    "core._transform_batch",
+    sources=["core/_transform_batch.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
 setup(
     name="ZarinEngine-cython-extensions",
-    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data], language_level="3"),
+    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch], language_level="3"),
 )

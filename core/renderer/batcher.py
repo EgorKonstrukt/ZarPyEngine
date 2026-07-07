@@ -223,11 +223,8 @@ class RenderBatcher:
         nm = normal_cache.get(ent._id)
         if nm is None:
             try:
-                nm3x3 = model._d[:3, :3].copy()
-                nm3x3[0] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 0])))
-                nm3x3[1] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 1])))
-                nm3x3[2] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 2])))
-                nm = nm3x3.T.astype(np.float32)
+                from core.math_helpers import mat4_normal_matrix
+                nm = mat4_normal_matrix(model._d)
                 normal_cache[ent._id] = nm
             except Exception:
                 nm = np.eye(3, dtype=np.float32).T

@@ -420,8 +420,9 @@ class Mat4:
         n = len(matrices)
         if n == 0:
             return np.zeros((0, 16), dtype=np.float32)
+        from core.math_helpers import batch_matrices_to_f32
         stacked = np.array([m._d for m in matrices])
-        return stacked.reshape(n, 16).astype(np.float32)
+        return batch_matrices_to_f32(stacked)
     def to_list(self): return self._d.tolist()
     def get_translation(self): return Vec3(float(self._d[3,0]), float(self._d[3,1]), float(self._d[3,2]))
     def decompose(self) -> tuple[Vec3, Quat, Vec3]:

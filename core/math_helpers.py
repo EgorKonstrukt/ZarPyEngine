@@ -4,23 +4,15 @@
 #
 # Copyright (c) 2026 Zarrakun
 
+# This is the pure-Python fallback for core.math_helpers.
+# When the Cython extension is built (math_helpers.pyx -> .pyd),
+# it shadows this file at import time for much better performance.
 from __future__ import annotations
 import numpy as np
 import math
 from core.math3d import FLOAT_TYPE
 
-_numba_available = False
 
-def njit(*args, **kwargs):
-    if args and callable(args[0]):
-        return args[0]
-    def wrapper(f):
-        return f
-    return wrapper
-
-prange = range
-
-@njit(cache=True, fastmath=True)
 def mat4_mul_fast(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     r = np.zeros((4, 4), dtype=FLOAT_TYPE)
     for i in range(4):
@@ -31,7 +23,7 @@ def mat4_mul_fast(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         r[i,3] = a0*b[0,3]+a1*b[1,3]+a2*b[2,3]+a3*b[3,3]
     return r
 
-@njit(cache=True, fastmath=True)
+
 def mat4_inv_fast(m: np.ndarray) -> np.ndarray:
     m00,m01,m02,m03 = m[0,0],m[0,1],m[0,2],m[0,3]
     m10,m11,m12,m13 = m[1,0],m[1,1],m[1,2],m[1,3]
@@ -64,19 +56,19 @@ def mat4_inv_fast(m: np.ndarray) -> np.ndarray:
     inv[3,3] = (m00*m11*m22-m00*m12*m21-m01*m10*m22+m01*m12*m20+m02*m10*m21-m02*m11*m20)*inv_det
     return inv
 
-@njit(cache=True, fastmath=True)
+
 def mat4_translation(pos_x: float, pos_y: float, pos_z: float) -> np.ndarray:
     m = np.eye(4, dtype=FLOAT_TYPE)
     m[3,0] = pos_x; m[3,1] = pos_y; m[3,2] = pos_z
     return m
 
-@njit(cache=True, fastmath=True)
+
 def mat4_scale_mat(sx: float, sy: float, sz: float) -> np.ndarray:
     m = np.eye(4, dtype=FLOAT_TYPE)
     m[0,0] = sx; m[1,1] = sy; m[2,2] = sz
     return m
 
-@njit(cache=True, fastmath=True)
+
 def mat4_from_quaternion(x: float, y: float, z: float, w: float) -> np.ndarray:
     m = np.eye(4, dtype=FLOAT_TYPE)
     x2,y2,z2 = x+x,y+y,z+z
@@ -88,7 +80,7 @@ def mat4_from_quaternion(x: float, y: float, z: float, w: float) -> np.ndarray:
     m[2,0]=xz+wy;       m[2,1]=yz-wx;       m[2,2]=1.0-(xx+yy)
     return m
 
-@njit(cache=True, fastmath=True)
+
 def quat_mul(ax: float, ay: float, az: float, aw: float, bx: float, by: float, bz: float, bw: float):
     return (
         aw*bx+ax*bw+ay*bz-az*by,
@@ -97,7 +89,7 @@ def quat_mul(ax: float, ay: float, az: float, aw: float, bx: float, by: float, b
         aw*bw-ax*bx-ay*by-az*bz
     )
 
-@njit(cache=True, fastmath=True)
+
 def quat_slerp(ax: float, ay: float, az: float, aw: float, bx: float, by: float, bz: float, bw: float, t: float):
     dot = ax*bx+ay*by+az*bz+aw*bw
     if dot < 0.0:
@@ -122,7 +114,7 @@ def quat_slerp(ax: float, ay: float, az: float, aw: float, bx: float, by: float,
         return rx*inv_n,ry*inv_n,rz*inv_n,rw*inv_n
     return ax,ay,az,aw
 
-@njit(cache=True, fastmath=True)
+
 def quat_normalize(x: float, y: float, z: float, w: float):
     n=(x*x+y*y+z*z+w*w)**0.5
     if n > 1e-10:
@@ -130,7 +122,7 @@ def quat_normalize(x: float, y: float, z: float, w: float):
         return x*inv_n,y*inv_n,z*inv_n,w*inv_n
     return 0.0,0.0,0.0,1.0
 
-@njit(cache=True, fastmath=True)
+
 def quat_rotate_vec3(qx: float, qy: float, qz: float, qw: float, vx: float, vy: float, vz: float):
     tx=2.0*(qy*vz-qz*vy)
     ty=2.0*(qz*vx-qx*vz)
@@ -141,7 +133,7 @@ def quat_rotate_vec3(qx: float, qy: float, qz: float, qw: float, vx: float, vy: 
         vz+qw*tz+qx*ty-qy*tx
     )
 
-@njit(cache=True, fastmath=True, parallel=True)
+
 def ray_sphere_intersect_batch(
     origins_x: np.ndarray, origins_y: np.ndarray, origins_z: np.ndarray,
     dirs_x: np.ndarray, dirs_y: np.ndarray, dirs_z: np.ndarray,
@@ -149,7 +141,7 @@ def ray_sphere_intersect_batch(
     radii: np.ndarray,
     results: np.ndarray
 ):
-    for i in prange(len(radii)):
+    for i in range(len(radii)):
         ocx=origins_x[i]-centers_x[i]
         ocy=origins_y[i]-centers_y[i]
         ocz=origins_z[i]-centers_z[i]
@@ -168,7 +160,7 @@ def ray_sphere_intersect_batch(
             t2=-b+sq
             results[i]=t2 if t2 > 0.0 else -1.0
 
-@njit(cache=True, fastmath=True)
+
 def mat3x3_inv(m00, m01, m02, m10, m11, m12, m20, m21, m22):
     det=m00*(m11*m22-m12*m21)-m01*(m10*m22-m12*m20)+m02*(m10*m21-m11*m20)
     if abs(det) < 1e-15:
@@ -180,7 +172,7 @@ def mat3x3_inv(m00, m01, m02, m10, m11, m12, m20, m21, m22):
     r[2,0]=(m10*m21-m11*m20)*inv_det; r[2,1]=-(m00*m21-m01*m20)*inv_det; r[2,2]=(m00*m11-m01*m10)*inv_det
     return r
 
-@njit(cache=True, fastmath=True)
+
 def mat4_to_f32_col_major(m: np.ndarray) -> np.ndarray:
     r=np.empty(16, dtype=np.float32)
     for i in range(4):
@@ -189,7 +181,7 @@ def mat4_to_f32_col_major(m: np.ndarray) -> np.ndarray:
         r[i4+2]=np.float32(m[2,i]); r[i4+3]=np.float32(m[3,i])
     return r
 
-@njit(cache=True, fastmath=True)
+
 def mat4_mul_vec3(m: np.ndarray, vx: float, vy: float, vz: float):
     return (
         m[0,0]*vx+m[1,0]*vy+m[2,0]*vz+m[3,0],
@@ -197,7 +189,7 @@ def mat4_mul_vec3(m: np.ndarray, vx: float, vy: float, vz: float):
         m[0,2]*vx+m[1,2]*vy+m[2,2]*vz+m[3,2]
     )
 
-@njit(cache=True, fastmath=True)
+
 def mat4_look_at(eye_x: float, eye_y: float, eye_z: float,
                  center_x: float, center_y: float, center_z: float,
                  up_x: float, up_y: float, up_z: float) -> np.ndarray:
@@ -219,7 +211,7 @@ def mat4_look_at(eye_x: float, eye_y: float, eye_z: float,
     m[3,2]=fx*eye_x+fy*eye_y+fz*eye_z
     return m
 
-@njit(cache=True, fastmath=True)
+
 def mat4_perspective(fov_rad: float, aspect: float, near: float, far: float) -> np.ndarray:
     f=1.0/math.tan(fov_rad*0.5)
     nf=1.0/(near-far)
@@ -229,7 +221,7 @@ def mat4_perspective(fov_rad: float, aspect: float, near: float, far: float) -> 
     m[3,2]=2.0*far*near*nf
     return m
 
-@njit(cache=True, fastmath=True)
+
 def vec3_normalize(x: float, y: float, z: float):
     n=(x*x+y*y+z*z)**0.5
     if n > 1e-10:
@@ -237,27 +229,27 @@ def vec3_normalize(x: float, y: float, z: float):
         return x*inv_n,y*inv_n,z*inv_n
     return 0.0,0.0,0.0
 
-@njit(cache=True, fastmath=True)
+
 def vec3_sub(ax: float, ay: float, az: float, bx: float, by: float, bz: float):
     return ax-bx,ay-by,az-bz
 
-@njit(cache=True, fastmath=True)
+
 def vec3_add(ax: float, ay: float, az: float, bx: float, by: float, bz: float):
     return ax+bx,ay+by,az+bz
 
-@njit(cache=True, fastmath=True)
+
 def vec3_scale(x: float, y: float, z: float, s: float):
     return x*s,y*s,z*s
 
-@njit(cache=True, fastmath=True)
+
 def vec3_dot(ax: float, ay: float, az: float, bx: float, by: float, bz: float):
     return ax*bx+ay*by+az*bz
 
-@njit(cache=True, fastmath=True)
+
 def vec3_cross(ax: float, ay: float, az: float, bx: float, by: float, bz: float):
     return ay*bz-az*by,az*bx-ax*bz,ax*by-ay*bx
 
-@njit(cache=True, fastmath=True)
+
 def ray_triangle_intersect(ox, oy, oz, dx, dy, dz,
                            v0x, v0y, v0z, v1x, v1y, v1z, v2x, v2y, v2z):
     e1x = v1x - v0x; e1y = v1y - v0y; e1z = v1z - v0z
@@ -278,7 +270,7 @@ def ray_triangle_intersect(ox, oy, oz, dx, dy, dz,
     t = (e2x * qx + e2y * qy + e2z * qz) * inv_det
     return t if t > 0.0 else -1.0
 
-@njit(cache=True, fastmath=True)
+
 def ray_mesh_intersect(ox, oy, oz, dx, dy, dz,
                        verts, indices):
     best_t = -1.0
@@ -292,7 +284,7 @@ def ray_mesh_intersect(ox, oy, oz, dx, dy, dz,
             best_t = t
     return best_t
 
-@njit(cache=True, fastmath=True)
+
 def ray_aabb_intersect(ox: float, oy: float, oz: float,
                        dx: float, dy: float, dz: float,
                        bmin_x: float, bmin_y: float, bmin_z: float,
@@ -321,3 +313,21 @@ def ray_aabb_intersect(ox: float, oy: float, oz: float,
         return -1.0
     if tmin>tmax: return -1.0
     return tmin if tmin>0.0 else (tmax if tmax>0.0 else -1.0)
+
+
+def mat4_normal_matrix(model: np.ndarray) -> np.ndarray:
+    m = model[:3, :3].copy()
+    m[0] /= max(1e-10, float(np.linalg.norm(m[:, 0])))
+    m[1] /= max(1e-10, float(np.linalg.norm(m[:, 1])))
+    m[2] /= max(1e-10, float(np.linalg.norm(m[:, 2])))
+    return m.T.astype(np.float32)
+
+
+def batch_matrices_to_f32(matrices: np.ndarray) -> np.ndarray:
+    n = matrices.shape[0]
+    out = np.empty((n, 16), dtype=np.float32)
+    for i in range(n):
+        for r in range(4):
+            for c in range(4):
+                out[i, r*4 + c] = np.float32(matrices[i, r, c])
+    return out
