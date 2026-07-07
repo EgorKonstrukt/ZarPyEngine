@@ -11,6 +11,7 @@ from typing import Optional
 from core.ecs import ComponentRegistry
 from core.components.rendering.graphics_effect import GraphicsEffect
 from core.components.lighting.light import Light, LightType
+from core.components.lighting.projector import Projector
 from core.components.inspector_meta import FieldType, InspectorField
 from core.math3d import Vec3
 
@@ -29,6 +30,8 @@ GOD_RAYS_FRAG = """
 #version 460 core
 uniform sampler2D u_scene_color;
 uniform vec2 u_light_uv;
+uniform vec3 u_light_color;
+uniform float u_light_intensity;
 uniform float u_intensity;
 uniform float u_exposure;
 uniform int u_num_samples;
@@ -71,7 +74,8 @@ void main() {
         weight *= decay;
     }
 
-    frag_color = vec4(max(vec3(0.0), accum * u_intensity), 1.0);
+    vec3 tint = u_light_color * u_light_intensity;
+    frag_color = vec4(max(vec3(0.0), accum * u_intensity * tint), 1.0);
 }
 """
 
@@ -164,32 +168,32 @@ class GodRays(GraphicsEffect):
                         pass
             del self._res_cache[oldest]
 
-    def _compute_light_uv(self, view_mat, proj_mat):
+    def _get_light_source(self):
+        """Find the light source associated with this entity.
+        Returns (component, transform) or (None, None)."""
         if not self.entity:
-            return None
+            return None, None
         light = self.entity.get_component(Light)
-        if not light:
-            for ent in self.entity._scene.get_entities_with_component(Light) if self.entity._scene else []:
-                l = ent.get_component(Light)
-                t = ent.get_component_by_name("Transform")
-                if l and t and l.light_type == LightType.DIRECTIONAL:
-                    fwd = t.forward
-                    pos = t.position
-                    return self._project_to_uv(fwd, pos, view_mat, proj_mat)
-            return None
-        transform = self.transform
-        if not transform:
-            return None
-        return self._project_to_uv(transform.forward, transform.position, view_mat, proj_mat)
+        if light:
+            return light, self.transform
+        proj = self.entity.get_component(Projector)
+        if proj:
+            return proj, self.transform
+        if self.entity._scene:
+            for ent in self.entity._scene.get_entities_with_component(Light):
+                li = ent.get_component(Light)
+                tr = ent.get_component_by_name("Transform")
+                if li and tr:
+                    return li, tr
+            for ent in self.entity._scene.get_entities_with_component(Projector):
+                pj = ent.get_component(Projector)
+                tr = ent.get_component_by_name("Transform")
+                if pj and tr:
+                    return pj, tr
+        return None, None
 
-    def _project_to_uv(self, light_fwd: Vec3, light_pos: Vec3, view_mat, proj_mat) -> Optional[np.ndarray]:
-        sun_dir = Vec3(-light_fwd.x, -light_fwd.y, -light_fwd.z).normalized()
-        sun_pos = Vec3(
-            light_pos.x + sun_dir.x * 1000.0,
-            light_pos.y + sun_dir.y * 1000.0,
-            light_pos.z + sun_dir.z * 1000.0
-        )
-        v = np.array([sun_pos.x, sun_pos.y, sun_pos.z, 1.0], dtype=np.float32)
+    def _project_pos_to_uv(self, pos: Vec3, view_mat, proj_mat) -> Optional[np.ndarray]:
+        v = np.array([pos.x, pos.y, pos.z, 1.0], dtype=np.float32)
         vm = view_mat._d.astype(np.float32)
         pm = proj_mat._d.astype(np.float32)
         v_view = (vm.T) @ v
@@ -202,18 +206,63 @@ class GodRays(GraphicsEffect):
             return None
         return uv
 
+    def _project_dir_to_uv(
+        self, light_fwd: Vec3, light_pos: Vec3, view_mat, proj_mat
+    ) -> Optional[np.ndarray]:
+        sun_dir = Vec3(-light_fwd.x, -light_fwd.y, -light_fwd.z).normalized()
+        sun_pos = Vec3(
+            light_pos.x + sun_dir.x * 5000.0,
+            light_pos.y + sun_dir.y * 5000.0,
+            light_pos.z + sun_dir.z * 5000.0
+        )
+        return self._project_pos_to_uv(sun_pos, view_mat, proj_mat)
+
+    def _compute_light_info(self, view_mat, proj_mat):
+        """Returns (uv, color_r, color_g, color_b, intensity) or None."""
+        source, transform = self._get_light_source()
+        if source is None or transform is None:
+            return None
+        if isinstance(source, Light):
+            if source.light_type == LightType.DIRECTIONAL:
+                uv = self._project_dir_to_uv(
+                    transform.forward, transform.position, view_mat, proj_mat
+                )
+            else:
+                uv = self._project_pos_to_uv(transform.position, view_mat, proj_mat)
+        elif isinstance(source, Projector):
+            uv = self._project_pos_to_uv(transform.position, view_mat, proj_mat)
+        else:
+            return None
+        if uv is None:
+            return None
+        if isinstance(source, Light):
+            color = source.color
+            intensity = source.intensity
+        elif isinstance(source, Projector):
+            color = source.color
+            intensity = source.intensity
+        else:
+            color = [1.0, 1.0, 1.0]
+            intensity = 1.0
+        return (uv, float(color[0]), float(color[1]), float(color[2]), float(intensity))
+
     def render(self, ctx, scene_color_tex, scene_depth_tex,
                view_mat, proj_mat, cam_pos, viewport_w, viewport_h):
         if not self.enabled or not self.entity or not self.entity.active:
             return
         self._ensure_resources(ctx)
-        light_uv = self._compute_light_uv(view_mat, proj_mat)
-        if light_uv is None:
+        info = self._compute_light_info(view_mat, proj_mat)
+        if info is None:
             return
+        light_uv, cr, cg, cb, lintensity = info
         self._prog["u_scene_color"] = 0
         scene_color_tex.use(0)
         if "u_light_uv" in self._prog:
             self._prog["u_light_uv"].value = (float(light_uv[0]), float(light_uv[1]))
+        if "u_light_color" in self._prog:
+            self._prog["u_light_color"].value = (cr, cg, cb)
+        if "u_light_intensity" in self._prog:
+            self._prog["u_light_intensity"].value = lintensity
         if "u_intensity" in self._prog:
             self._prog["u_intensity"].value = self._intensity
         if "u_exposure" in self._prog:
