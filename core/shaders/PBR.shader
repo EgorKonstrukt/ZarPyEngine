@@ -324,24 +324,20 @@ Shader "Zarin/PBR"
                 float proj_penumbra = penumbra_world * u_area_light_fov_scale / max(z_view, 0.001);
                 proj_penumbra = max(proj_penumbra, texel_size.x);
                 float filter_texels = proj_penumbra / texel_size.x;
-                int k = clamp(int(filter_texels * 0.3), 2, 9);
-                float pcf_step = proj_penumbra / max(float(k + k), 1.0);
+                float a2 = hash2(gl_FragCoord.xy + vec2(0.5, 0.5)) * 6.2831853;
+                float ca2 = cos(a2);
+                float sa2 = sin(a2);
+                float pcf_radius = max(proj_penumbra * 0.5, texel_size.x * 2.0);
                 float result = 0.0;
-                float wsum = 0.0;
-                for (int x = -k; x <= k; x++) {
-                    for (int y = -k; y <= k; y++) {
-                        float w = 1.0;
-                        if (x == 0) w += 1.0;
-                        if (y == 0) w += 1.0;
-                        vec2 off = vec2(float(x), float(y));
-                        vec2 rot = vec2(off.x * ca - off.y * sa, off.x * sa + off.y * ca);
-                        vec2 uv = proj_coords.xy + rot * pcf_step;
-                        float d = texture(shadow_map, uv).r;
-                        result += (z_ndc - u_area_shadow_bias > d ? 1.0 : 0.0) * w;
-                        wsum += w;
-                    }
+                int nsamps = POISSON_SAMPLES;
+                for (int s = 0; s < nsamps; s++) {
+                    vec2 off = poisson_disk[s];
+                    vec2 rot = vec2(off.x * ca2 - off.y * sa2, off.x * sa2 + off.y * ca2);
+                    vec2 uv = proj_coords.xy + rot * pcf_radius;
+                    float d = texture(shadow_map, uv).r;
+                    result += (z_ndc - u_area_shadow_bias > d ? 1.0 : 0.0);
                 }
-                float shadow = 1.0 - result / max(wsum, 1.0);
+                float shadow = 1.0 - result / float(nsamps);
                 return smoothstep(0.05, 0.65, shadow);
             }
 
@@ -548,8 +544,24 @@ Shader "Zarin/PBR"
                 float r2 = 1.0 / float(S);
                 for (int i = 0; i < S; i++) {
                     for (int j = 0; j < S; j++) {
-                        float u = (float(i) + 0.5) * r2 * 2.0 - 1.0;
-                        float v = (float(j) + 0.5) * r1 * 2.0 - 1.0;
+                        float jx = hash2(gl_FragCoord.xy + vec2(float(i), float(j))) - 0.5;
+                        float jy = hash2(gl_FragCoord.xy + vec2(float(j), float(i))) - 0.5;
+                        float u = (float(i) + 0.5 + jx) * r2 * 2.0 - 1.0;
+                        float v = (float(j) + 0.5 + jy) * r1 * 2.0 - 1.0;
+                        if (light.area_type == 1) {
+                            float a = u;
+                            float b = v;
+                            float phi_val, r;
+                            if (abs(a) > abs(b)) {
+                                r = a;
+                                phi_val = (PI / 4.0) * (b / max(a, 1e-6));
+                            } else {
+                                r = b;
+                                phi_val = (PI / 2.0) - (PI / 4.0) * (a / max(b, 1e-6));
+                            }
+                            u = r * cos(phi_val);
+                            v = r * sin(phi_val);
+                        }
                         vec3 sp = c + right * u * hw + up * v * hh;
                         vec3 to_sp = sp - v_world_pos;
                         float dist = length(to_sp);

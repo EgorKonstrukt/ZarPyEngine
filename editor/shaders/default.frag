@@ -232,8 +232,24 @@ vec3 calc_area_light(Light light, vec3 normal, vec3 view_dir, vec3 albedo) {
     float r2 = 1.0 / float(S);
     for (int i = 0; i < S; i++) {
         for (int j = 0; j < S; j++) {
-            float u = (float(i) + 0.5) * r2 * 2.0 - 1.0;
-            float v = (float(j) + 0.5) * r1 * 2.0 - 1.0;
+            float jx = hash(gl_FragCoord.xy + vec2(float(i), float(j))) - 0.5;
+            float jy = hash(gl_FragCoord.xy + vec2(float(j), float(i))) - 0.5;
+            float u = (float(i) + 0.5 + jx) * r2 * 2.0 - 1.0;
+            float v = (float(j) + 0.5 + jy) * r1 * 2.0 - 1.0;
+            if (light.area_type == 1) {
+                float a = u;
+                float b = v;
+                float phi_val, r;
+                if (abs(a) > abs(b)) {
+                    r = a;
+                    phi_val = (PI / 4.0) * (b / max(a, 1e-6));
+                } else {
+                    r = b;
+                    phi_val = (PI / 2.0) - (PI / 4.0) * (a / max(b, 1e-6));
+                }
+                u = r * cos(phi_val);
+                v = r * sin(phi_val);
+            }
             vec3 sp = c + right * u * hw + up * v * hh;
             vec3 to_sp = sp - v_world_pos;
             float dist = length(to_sp);
