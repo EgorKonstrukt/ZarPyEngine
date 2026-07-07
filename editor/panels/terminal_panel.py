@@ -155,17 +155,8 @@ _CODE_COLORS = {
 }
 
 
-class _ProxyWriter(io.StringIO):
-    """Captures writes and emits them to a callback for real-time streaming."""
-
-    def __init__(self, callback):
-        super().__init__()
-        self._cb = callback
-
-    def write(self, s):
-        super().write(s)
-        if self._cb:
-            self._cb(s)
+class _CaptureWriter(io.StringIO):
+    """Captures writes for later retrieval."""
 
 
 class TerminalTab(QWidget):
@@ -176,10 +167,6 @@ class TerminalTab(QWidget):
                  font_size: int = 0, parent=None):
         super().__init__(parent)
         self._namespace = namespace
-        self._stream_buffer: list[str] = []
-        self._flush_timer = QTimer(self)
-        self._flush_timer.timeout.connect(self._flush_stream)
-        self._flush_timer.setSingleShot(True)
         if font_family:
             self._font_family = font_family
         if font_size:
@@ -211,14 +198,12 @@ class TerminalTab(QWidget):
         layout.addWidget(self._input)
 
     def _execute(self, code: str):
-        self._stream_buffer.clear()
         old_stdout = sys.stdout
         old_stderr = sys.stderr
-        proxy = _ProxyWriter(self._on_stream)
+        proxy = _CaptureWriter()
         sys.stdout = proxy
         sys.stderr = proxy
 
-        result_text = None
         error_text = None
 
         try:
@@ -231,41 +216,26 @@ class TerminalTab(QWidget):
         sys.stdout = old_stdout
         sys.stderr = old_stderr
 
+        self._write_output(f">>> {code}", _CODE_COLORS["prompt"])
+
         if error_text:
-            self._write_output(f">>> {code}", _CODE_COLORS["prompt"])
             self._write_output(error_text, _CODE_COLORS["error"])
-            if "_" in self._namespace:
-                del self._namespace["_"]
+            self._namespace.pop("_", None)
             return
 
         out = proxy.getvalue()
-        self._write_output(f">>> {code}", _CODE_COLORS["prompt"])
         if out:
             self._write_output(out.rstrip(), _CODE_COLORS["stdout"])
 
-        if "_" in self._namespace:
-            val = self._namespace.pop("_")
-            del self._namespace["_"]
+        self._namespace.pop("_", None)
 
         try:
             expr_val = eval(code, self._namespace)
             if expr_val is not None:
                 self._namespace["_"] = expr_val
                 self._write_output(repr(expr_val), _CODE_COLORS["result"])
-        except (SyntaxError, Exception):
+        except Exception:
             pass
-
-    def _on_stream(self, text: str):
-        self._stream_buffer.append(text)
-        if not self._flush_timer.isActive():
-            self._flush_timer.start(16)
-
-    def _flush_stream(self):
-        if not self._stream_buffer:
-            return
-        text = "".join(self._stream_buffer)
-        self._stream_buffer.clear()
-        self._write_output(text.rstrip(), _CODE_COLORS["stdout"])
 
     def _write_output(self, text: str, color: QColor):
         cursor = self._output.textCursor()
