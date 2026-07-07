@@ -62,6 +62,7 @@ class ShaderManager:
             with open(frag_file, "r") as f:
                 frag_src = f.read()
             vert_src = self._inject_instancing_vertex(vert_src)
+            frag_src = self._inject_area_shadows(frag_src)
             prog = self._ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
             self._cache[shader_path] = prog
             return prog
@@ -88,6 +89,7 @@ class ShaderManager:
             return None
         vert_src, frag_src = result
         vert_src = self._inject_instancing_vertex(vert_src)
+        frag_src = self._inject_area_shadows(frag_src)
         try:
             prog = self._ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
             self._cache[shader_path] = prog
@@ -129,6 +131,20 @@ mat3 _resolve_normal_matrix() {
         if idx >= 0:
             return src[:idx+1] + injection + src[idx+1:]
         return injection + src
+
+    @staticmethod
+    def _inject_area_shadows(src: str) -> str:
+        marker = "// @SHADOW_INCLUDE"
+        if marker not in src:
+            return src
+        include_path = os.path.join(_ENGINE_ROOT, "core", "shaders", "area_shadows.glsl")
+        try:
+            with open(include_path, "r", encoding="utf-8") as f:
+                include_src = f.read()
+        except Exception as e:
+            Logger.warning(f"Failed to read area_shadows.glsl: {e}")
+            return src.replace(marker, "// area shadows include failed to load")
+        return src.replace(marker, include_src)
 
     def store(self, key: str, prog: moderngl.Program):
         self._cache[key] = prog

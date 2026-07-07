@@ -252,9 +252,11 @@ class Renderer:
 
     def initialize(self):
         try:
+            default_frag_src = read_shader("default.frag")
+            default_frag_src = ShaderManager._inject_area_shadows(default_frag_src)
             self._default_prog = self._ctx.program(
                 vertex_shader=read_shader("default.vert"),
-                fragment_shader=read_shader("default.frag")
+                fragment_shader=default_frag_src
             )
             self._grid_prog = self._ctx.program(
                 vertex_shader=read_shader("grid.vert"),

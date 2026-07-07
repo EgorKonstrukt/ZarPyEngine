@@ -56,10 +56,12 @@ def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
 
 class ShadowRenderer:
     def __init__(self, ctx: moderngl.Context, shadow_prog: moderngl.Program,
-                 shadow_resolution: int = 4096, shadow_distance: float = 50.0):
+                 shadow_resolution: int = 4096, shadow_distance: float = 50.0,
+                 area_shadow_resolution: int = 8192):
         self._ctx = ctx
         self._prog = shadow_prog
         self._shadow_resolution = shadow_resolution
+        self._area_shadow_resolution = area_shadow_resolution
         self._shadow_distance = shadow_distance
         self._shadow_maps: list[Any] = []
         self._shadow_fbos: list[Any] = []
@@ -148,7 +150,7 @@ class ShadowRenderer:
             self._projector_shadow_fbos.append(self._ctx.framebuffer(depth_attachment=tex))
 
     def _create_area_shadow_resources(self):
-        res = self._shadow_resolution
+        res = self._area_shadow_resolution
         tex = self._ctx.depth_texture((res, res))
         tex.repeat_x = False
         tex.repeat_y = False
@@ -444,7 +446,7 @@ class ShadowRenderer:
         self._area_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is area_light and lt is area_transform), -1
         )
-        self._render_geometry_with_groups(vp, self._area_shadow_fbo, shadow_groups, resolution=self._shadow_resolution)
+        self._render_geometry_with_groups(vp, self._area_shadow_fbo, shadow_groups, resolution=self._area_shadow_resolution)
 
     def render_projector_shadows(self, projectors, renderable_shadow, shadow_groups: dict = None):
         if shadow_groups is None:
