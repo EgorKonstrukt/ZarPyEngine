@@ -462,11 +462,11 @@ class ShadowRenderer:
             light_pos_vec = Vec3(float(pj.position[0]), float(pj.position[1]), float(pj.position[2]))
             light_dir_vec = Vec3(float(pj.direction[0]), float(pj.direction[1]), float(pj.direction[2]))
             light_dir_vec = light_dir_vec.normalized()
-            light_range = max(pj.range, 0.1)
-            spot_fov = max(pj.spot_angle * 2.0, 1.0)
-            near_plane = 0.1
-            far_plane = light_range
-            view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, Vec3.up())
+            up_vec = Vec3(float(pj.up[0]), float(pj.up[1]), float(pj.up[2]))
+            spot_fov = max(pj.spot_angle, 1.0)
+            near_plane = max(pj.near_plane, 0.01)
+            far_plane = max(pj.far_plane, near_plane + 0.1)
+            view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, up_vec)
             proj = Mat4.perspective(spot_fov, pj.aspect_ratio, near_plane, far_plane)
             vp = (view._d @ proj._d).astype(np.float32)
             self._projector_light_vps[i] = vp

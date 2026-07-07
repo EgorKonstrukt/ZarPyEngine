@@ -89,9 +89,9 @@ class _VideoItem:
 class _ProjectorItem:
     __slots__ = ('texture_path', 'color', 'intensity', 'range', 'spot_angle',
                  'aspect_ratio', 'near_plane', 'far_plane', 'vp_matrix',
-                 'position', 'direction', 'flip_y', 'flip_x', 'cast_shadows')
+                 'position', 'direction', 'up', 'flip_y', 'flip_x', 'cast_shadows')
     def __init__(self, texture_path, color, intensity, range, spot_angle,
-                 aspect_ratio, near_plane, far_plane, vp_matrix, position, direction,
+                 aspect_ratio, near_plane, far_plane, vp_matrix, position, direction, up,
                  flip_y=True, flip_x=False, cast_shadows=True):
         self.texture_path = texture_path
         c = list(color) if color else [1, 1, 1]
@@ -105,6 +105,7 @@ class _ProjectorItem:
         self.vp_matrix = vp_matrix
         self.position = np.array(position.to_array(), dtype=np.float32)
         self.direction = np.array(direction.to_array(), dtype=np.float32)
+        self.up = np.array(up.to_array(), dtype=np.float32)
         self.flip_y = flip_y
         self.flip_x = flip_x
         self.cast_shadows = cast_shadows
@@ -570,6 +571,13 @@ void main() {
                     snap.cloud_components.append(cloud)
         self._sync_probuilder_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
+        if not needs_shadow:
+            for ent in scene.get_entities_with_component(Projector):
+                if ent.active:
+                    pj = ent.get_component(Projector)
+                    if pj and pj.enabled and pj.cast_shadows:
+                        needs_shadow = True
+                        break
         for ent in scene.get_entities_with_component(MeshFilter):
             if not ent.active:
                 continue
@@ -652,7 +660,7 @@ void main() {
             snap.projectors.append(_ProjectorItem(
                 pj.texture_path, pj.color, pj.intensity, pj.range,
                 pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane,
-                vp, pos, fwd, flip_y=pj.flip_y, flip_x=pj.flip_x,
+                vp, pos, fwd, up, flip_y=pj.flip_y, flip_x=pj.flip_x,
                 cast_shadows=pj.cast_shadows))
         for ent in scene.get_entities_with_component(ParticleSystem):
             if not ent.active:
