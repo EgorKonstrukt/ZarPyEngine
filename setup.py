@@ -44,7 +44,13 @@ ext_transform_batch = Extension(
     include_dirs=[numpy.get_include()],
 )
 
+ext_render_utils = Extension(
+    "core._render_utils",
+    sources=["core/_render_utils.pyx"],
+    include_dirs=[numpy.get_include()],
+)
+
 setup(
     name="ZarinEngine-cython-extensions",
-    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch], language_level="3"),
+    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch, ext_render_utils], language_level="3"),
 )

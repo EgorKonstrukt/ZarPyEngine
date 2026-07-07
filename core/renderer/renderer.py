@@ -994,16 +994,14 @@ void main() {
             self._draw_calls = self._batcher.draw_calls + skybox_call
         else:
             self._draw_calls = len(renderable) + skybox_call
-        total_tris = 0
-        total_verts = 0
+        self._triangles_drawn = 0
+        self._vertices_drawn = 0
         for entry in renderable:
             mesh = entry[2]
             if hasattr(mesh, 'indices') and mesh.indices is not None and len(mesh.indices) > 0:
-                total_tris += len(mesh.indices) // 3
+                self._triangles_drawn += len(mesh.indices) // 3
             if hasattr(mesh, 'vertices') and mesh.vertices is not None and len(mesh.vertices) > 0:
-                total_verts += len(mesh.vertices) // 3
-        self._triangles_drawn = total_tris
-        self._vertices_drawn = total_verts
+                self._vertices_drawn += len(mesh.vertices) // 3
         if prof:
             prof.stop("render_stats")
         if GraphicsEffect._registry and not self._effects_disabled:

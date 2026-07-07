@@ -1,10 +1,14 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False
 import numpy as np
 cimport numpy as np
-from libc.math cimport sqrt, sin, cos, tan, acos, fabs
+from libc.math cimport sqrt, sin, cos, tan, acos, fabs, atan2, asin
 
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
+
+cdef DTYPE_t _PI = 3.14159265358979323846
+cdef DTYPE_t _DEG2RAD = _PI / 180.0
+cdef DTYPE_t _RAD2DEG = 180.0 / _PI
 ctypedef np.int32_t INT32_t
 ctypedef np.uint8_t UINT8_t
 
@@ -288,6 +292,34 @@ def quat_slerp(float ax, float ay, float az, float aw,
         n = 1.0 / n
         return (rx*n, ry*n, rz*n, rw*n)
     return (ax, ay, az, aw)
+
+
+def quat_from_euler(float x_deg, float y_deg, float z_deg):
+    cdef DTYPE_t hx = (x_deg * _DEG2RAD) * 0.5
+    cdef DTYPE_t hy = (y_deg * _DEG2RAD) * 0.5
+    cdef DTYPE_t hz = (z_deg * _DEG2RAD) * 0.5
+    cdef DTYPE_t sx = sin(hx)
+    cdef DTYPE_t cx = cos(hx)
+    cdef DTYPE_t sy = sin(hy)
+    cdef DTYPE_t cy = cos(hy)
+    cdef DTYPE_t sz = sin(hz)
+    cdef DTYPE_t cz = cos(hz)
+    return (sx*cy*cz - cx*sy*sz,
+            cx*sy*cz + sx*cy*sz,
+            cx*cy*sz - sx*sy*cz,
+            cx*cy*cz + sx*sy*sz)
+
+
+def quat_to_euler(float x, float y, float z, float w):
+    cdef DTYPE_t sinx_cosp = 2*(w*x + y*z)
+    cdef DTYPE_t cosx_cosp = 1 - 2*(x*x + y*y)
+    cdef DTYPE_t rx = atan2(sinx_cosp, cosx_cosp) * _RAD2DEG
+    cdef DTYPE_t siny_cosp = 2*(w*y - z*x)
+    cdef DTYPE_t ry = asin(max(-1.0, min(1.0, siny_cosp))) * _RAD2DEG
+    cdef DTYPE_t sinz_cosp = 2*(w*z + x*y)
+    cdef DTYPE_t cosz_cosp = 1 - 2*(y*y + z*z)
+    cdef DTYPE_t rz = atan2(sinz_cosp, cosz_cosp) * _RAD2DEG
+    return rx, ry, rz
 
 
 # ── Vec3 helpers ──────────────────────────────────────────────────────

@@ -10,7 +10,7 @@
 from __future__ import annotations
 import numpy as np
 import math
-from core.math3d import FLOAT_TYPE
+FLOAT_TYPE = np.float64
 
 
 def mat4_mul_fast(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -81,6 +81,10 @@ def mat4_from_quaternion(x: float, y: float, z: float, w: float) -> np.ndarray:
     return m
 
 
+def quat_conjugate(x: float, y: float, z: float, w: float):
+    return -x, -y, -z, w
+
+
 def quat_mul(ax: float, ay: float, az: float, aw: float, bx: float, by: float, bz: float, bw: float):
     return (
         aw*bx+ax*bw+ay*bz-az*by,
@@ -113,6 +117,31 @@ def quat_slerp(ax: float, ay: float, az: float, aw: float, bx: float, by: float,
         inv_n=1.0/n
         return rx*inv_n,ry*inv_n,rz*inv_n,rw*inv_n
     return ax,ay,az,aw
+
+
+def quat_from_euler(x_deg: float, y_deg: float, z_deg: float):
+    hx=math.radians(x_deg)*0.5
+    hy=math.radians(y_deg)*0.5
+    hz=math.radians(z_deg)*0.5
+    sx,cx=math.sin(hx),math.cos(hx)
+    sy,cy=math.sin(hy),math.cos(hy)
+    sz,cz=math.sin(hz),math.cos(hz)
+    return (sx*cy*cz-cx*sy*sz,
+            cx*sy*cz+sx*cy*sz,
+            cx*cy*sz-sx*sy*cz,
+            cx*cy*cz+sx*sy*sz)
+
+
+def quat_to_euler(x: float, y: float, z: float, w: float):
+    sinx_cosp=2*(w*x+y*z)
+    cosx_cosp=1-2*(x*x+y*y)
+    rx=math.degrees(math.atan2(sinx_cosp,cosx_cosp))
+    siny_cosp=2*(w*y-z*x)
+    ry=math.degrees(math.asin(max(-1.0,min(1.0,siny_cosp))))
+    sinz_cosp=2*(w*z+x*y)
+    cosz_cosp=1-2*(y*y+z*z)
+    rz=math.degrees(math.atan2(sinz_cosp,cosz_cosp))
+    return rx,ry,rz
 
 
 def quat_normalize(x: float, y: float, z: float, w: float):

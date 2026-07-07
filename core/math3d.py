@@ -11,73 +11,10 @@ from typing import Union
 
 FLOAT_TYPE = np.float64
 
-def _q_mul(x1, y1, z1, w1, x2, y2, z2, w2):
-    return (w1*x2 + x1*w2 + y1*z2 - z1*y2,
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-            w1*z2 + x1*y2 - y1*x2 + z1*w2,
-            w1*w2 - x1*x2 - y1*y2 - z1*z2)
 
-def _q_conjugate(x, y, z, w):
-    return -x, -y, -z, w
-
-def _q_normalized(x, y, z, w):
-    n = math.sqrt(x*x + y*y + z*z + w*w)
-    if n > 1e-10:
-        inv = 1.0 / n
-        return x*inv, y*inv, z*inv, w*inv
-    return 0.0, 0.0, 0.0, 1.0
-
-def _q_rotate_vec3(qx, qy, qz, qw, vx, vy, vz):
-    n = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
-    if n > 1e-10:
-        inv = 1.0 / n
-        qx *= inv; qy *= inv; qz *= inv; qw *= inv
-    tx = qw*vx + qy*vz - qz*vy
-    ty = qw*vy - qx*vz + qz*vx
-    tz = qw*vz + qx*vy - qy*vx
-    tw = -qx*vx - qy*vy - qz*vz
-    return (tw*-qx + tx*qw + ty*-qz - tz*-qy,
-            tw*-qy - tx*-qz + ty*qw + tz*-qx,
-            tw*-qz + tx*-qy - ty*-qx + tz*qw)
-
-def _q_to_euler(x, y, z, w):
-    sinx_cosp = 2*(w*x + y*z)
-    cosx_cosp = 1 - 2*(x*x + y*y)
-    rx = math.degrees(math.atan2(sinx_cosp, cosx_cosp))
-    siny_cosp = 2*(w*y - z*x)
-    ry = math.degrees(math.asin(max(-1.0, min(1.0, siny_cosp))))
-    sinz_cosp = 2*(w*z + x*y)
-    cosz_cosp = 1 - 2*(y*y + z*z)
-    rz = math.degrees(math.atan2(sinz_cosp, cosz_cosp))
-    return rx, ry, rz
-
-def _q_from_euler(x_deg, y_deg, z_deg):
-    hx = math.radians(x_deg) * 0.5
-    hy = math.radians(y_deg) * 0.5
-    hz = math.radians(z_deg) * 0.5
-    sx, cx = math.sin(hx), math.cos(hx)
-    sy, cy = math.sin(hy), math.cos(hy)
-    sz, cz = math.sin(hz), math.cos(hz)
-    return (sx*cy*cz - cx*sy*sz,
-            cx*sy*cz + sx*cy*sz,
-            cx*cy*sz - sx*sy*cz,
-            cx*cy*cz + sx*sy*sz)
-
-def _q_slerp(x1, y1, z1, w1, x2, y2, z2, w2, t):
-    d = x1*x2 + y1*y2 + z1*z2 + w1*w2
-    if d < 0:
-        x2, y2, z2, w2 = -x2, -y2, -z2, -w2
-        d = -d
-    if d > 0.9995:
-        return (x1 + t*(x2 - x1),
-                y1 + t*(y2 - y1),
-                z1 + t*(z2 - z1),
-                w1 + t*(w2 - w1))
-    theta0 = math.acos(d)
-    theta = theta0 * t
-    s0 = math.cos(theta) - d*math.sin(theta)/math.sin(theta0)
-    s1 = math.sin(theta)/math.sin(theta0)
-    return (s0*x1 + s1*x2, s0*y1 + s1*y2, s0*z1 + s1*z2, s0*w1 + s1*w2)
+def _get_mh():
+    from core import math_helpers as _mh
+    return _mh
 
 
 class Vec2:
@@ -273,7 +210,7 @@ class Quat:
 
     @classmethod
     def from_euler(cls, x, y, z):
-        x, y, z, w = _q_from_euler(x, y, z)
+        x, y, z, w = _get_mh().quat_from_euler(x, y, z)
         return Quat._make(x, y, z, w)
 
     @classmethod
@@ -321,21 +258,24 @@ class Quat:
     def w(self): return self._w
 
     def __mul__(self, o):
-        x, y, z, w = _q_mul(self._x, self._y, self._z, self._w, o._x, o._y, o._z, o._w)
+        _mh = _get_mh()
+        x, y, z, w = _mh.quat_mul(self._x, self._y, self._z, self._w, o._x, o._y, o._z, o._w)
         return Quat._make(x, y, z, w)
 
-    def conjugate(self): x, y, z, w = _q_conjugate(self._x, self._y, self._z, self._w); return Quat._make(x, y, z, w)
+    def conjugate(self):
+        x, y, z, w = _get_mh().quat_conjugate(self._x, self._y, self._z, self._w)
+        return Quat._make(x, y, z, w)
 
     def normalized(self):
-        x, y, z, w = _q_normalized(self._x, self._y, self._z, self._w)
+        x, y, z, w = _get_mh().quat_normalize(self._x, self._y, self._z, self._w)
         return Quat._make(x, y, z, w)
 
     def rotate_vec3(self, v: Vec3) -> Vec3:
-        x, y, z = _q_rotate_vec3(self._x, self._y, self._z, self._w, v._x, v._y, v._z)
+        x, y, z = _get_mh().quat_rotate_vec3(self._x, self._y, self._z, self._w, v._x, v._y, v._z)
         return Vec3(x, y, z)
 
     def to_euler(self) -> Vec3:
-        x, y, z = _q_to_euler(self._x, self._y, self._z, self._w)
+        x, y, z = _get_mh().quat_to_euler(self._x, self._y, self._z, self._w)
         return Vec3(x, y, z)
 
     def to_matrix4(self) -> Mat4:
@@ -348,7 +288,7 @@ class Quat:
         return Mat4(m)
 
     def slerp(self, o, t):
-        x, y, z, w = _q_slerp(self._x, self._y, self._z, self._w, o._x, o._y, o._z, o._w, t)
+        x, y, z, w = _get_mh().quat_slerp(self._x, self._y, self._z, self._w, o._x, o._y, o._z, o._w, t)
         n = math.sqrt(x*x + y*y + z*z + w*w)
         if n > 1e-10:
             inv = 1.0 / n

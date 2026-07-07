@@ -132,16 +132,17 @@ class GpuCulling:
             except Exception:
                 self._compute_shader = None
 
+    def _build_spheres(self, matrices: list[Mat4], bounding_radii: np.ndarray) -> np.ndarray:
+        from core._render_utils import compute_bounding_spheres
+        return compute_bounding_spheres(matrices, bounding_radii)
+
     def upload_bounding(self, matrices: list[Mat4], bounding_radii: np.ndarray):
         n = len(matrices)
         self._count = n
         self.ensure_resources(n)
         if n == 0:
             return
-        centers = np.array([m._d[3, 0:3] for m in matrices], dtype=np.float32)
-        spheres = np.zeros((n, 4), dtype=np.float32)
-        spheres[:, :3] = centers
-        spheres[:, 3] = bounding_radii.astype(np.float32)
+        spheres = self._build_spheres(matrices, bounding_radii)
         self._bounding_ssbo.write(spheres.tobytes())
 
     def upload_world_matrices(self, matrices: list[Mat4],
@@ -151,10 +152,7 @@ class GpuCulling:
         self.ensure_resources(n)
         if n == 0:
             return
-        centers = np.array([m._d[3, 0:3] for m in matrices], dtype=np.float32)
-        spheres = np.zeros((n, 4), dtype=np.float32)
-        spheres[:, :3] = centers
-        spheres[:, 3] = bounding_radii.astype(np.float32)
+        spheres = self._build_spheres(matrices, bounding_radii)
         self._bounding_ssbo.write(spheres.tobytes())
 
     def cull(self, view_mat: Mat4, proj_mat: Mat4,
