@@ -143,6 +143,10 @@ def main():
     engine = Engine()
     engine._project_path = project_root
     engine.initialize()
+    from core.audio_system import AudioSystem
+    audio = AudioSystem.instance()
+    if audio:
+        audio.apply_project_audio_config()
     # Load plugins listed in BuildSettings.json
     build_settings_path = os.path.join(project_root, "BuildSettings.json")
     build_plugins = []

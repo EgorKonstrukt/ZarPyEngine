@@ -169,12 +169,23 @@ FIELD_TOOLTIPS = {
     "physics.max_contacts_per_body": "Maximum contacts per rigid body",
     "physics.simulation_mode": "How physics simulation is executed. single = main thread, multi_threaded = one separate process, per_layer_process = one process per collision layer (for extreme parallel workloads)",
     "physics.solver": "Physics solver backend (culverin, pybullet, or physx)",
+    "audio.enable_audio": "Enable the audio system on startup",
+    "audio.device_name": "Audio output device name (leave empty for Windows system default)",
+    "audio.sample_rate": "Audio sample rate in Hz (44100 or 48000 recommended)",
     "audio.master_volume": "Master audio volume",
     "audio.sfx_volume": "Sound effects volume",
     "audio.music_volume": "Music volume",
-    "project.name": "Project display name",
-    "project.version": "Project version string",
-    "project.default_scene": "Default scene path on play",
+    "audio.voice_volume": "Voice / dialogue volume",
+    "audio.ambient_volume": "Ambient / environment volume",
+    "audio.max_sources": "Maximum number of simultaneous audio sources",
+    "audio.stream_buffer_size": "Streaming buffer size in bytes",
+    "audio.distance_model": "3D audio distance attenuation model",
+    "audio.doppler_factor": "Doppler effect intensity factor",
+    "audio.speed_of_sound": "Speed of sound in world units per second",
+    "audio.priority_threshold": "Volume threshold below which sounds can be culled",
+    "audio.enable_spatialization": "Enable 3D spatial audio positioning",
+    "audio.enable_reverb": "Enable reverb / environmental audio effects",
+    "audio.enable_occlusion": "Enable audio occlusion simulation",
     "rendering.render_pipeline": "Active render pipeline",
     "rendering.anti_aliasing": "Anti-aliasing mode",
     "rendering.shadow_distance": "Maximum shadow rendering distance",
@@ -276,9 +287,22 @@ _FIELD_RANGES = {
     "physics.linear_damping": (0.0, 10.0),
     "physics.angular_damping": (0.0, 10.0),
     "physics.max_contacts_per_body": (1, 256),
+    "audio.enable_audio": None,
+    "audio.sample_rate": (8000, 192000),
     "audio.master_volume": (0.0, 1.0),
     "audio.sfx_volume": (0.0, 1.0),
     "audio.music_volume": (0.0, 1.0),
+    "audio.voice_volume": (0.0, 1.0),
+    "audio.ambient_volume": (0.0, 1.0),
+    "audio.max_sources": (8, 256),
+    "audio.stream_buffer_size": (1024, 65536),
+    "audio.distance_model": None,
+    "audio.doppler_factor": (0.0, 10.0),
+    "audio.speed_of_sound": (0.1, 10000.0),
+    "audio.priority_threshold": (0.0, 1.0),
+    "audio.enable_spatialization": None,
+    "audio.enable_reverb": None,
+    "audio.enable_occlusion": None,
     "rendering.shadow_distance": (1.0, 500.0),
     "toolbar.snap_translate": (0.001, 100.0),
     "toolbar.snap_rotate": (0.1, 360.0),
@@ -663,13 +687,55 @@ class SettingsDialog(QDialog):
             cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             vl.addWidget(cb)
             info = QLabel(
-                "single = РІСЃС‘ РІ РѕСЃРЅРѕРІРЅРѕРј РїРѕС‚РѕРєРµ, РѕС‚Р»Р°РґРєР°\n"
-                "multi_threaded = РѕРґРёРЅ РѕС‚РґРµР»СЊРЅС‹Р№ РїСЂРѕС†РµСЃСЃ, СЃС‚Р°РЅРґР°СЂС‚\n"
-                "per_layer_process = СЃРІРѕР№ РїСЂРѕС†РµСЃСЃ РЅР° РєР°Р¶РґС‹Р№ СЃР»РѕР№ РєРѕР»Р»РёР·РёРё, РґР»СЏ Р±РµР·СѓРјРЅС‹С… СЃРёРјСѓР»СЏС†РёР№"
+                "single = всё в основном потоке, отладка\n"
+                "multi_threaded = один отдельный процесс, стандарт\n"
+                "per_layer_process = свой процесс на каждый слой коллизии, для безумных симуляций"
             )
             info.setStyleSheet("color: #888; font-size: 11px; padding-left: 4px;")
             info.setWordWrap(True)
             vl.addWidget(info)
+            return container
+        if key == "audio.distance_model":
+            cb = QComboBox()
+            cb.addItems([
+                "none", "inverse_distance", "inverse_distance_clamped",
+                "linear_distance", "linear_distance_clamped",
+                "exponent_distance", "exponent_distance_clamped",
+            ])
+            cb.setCurrentText(self._config.get(key, "inverse_distance_clamped"))
+            cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            return cb
+        if key == "audio.device_name":
+            container = QWidget()
+            hl = QHBoxLayout(container)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(4)
+            le = QLineEdit(self._config.get(key, ""))
+            le.setPlaceholderText("System default")
+            le.setFixedWidth(220)
+            le.textChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            hl.addWidget(le)
+            from core.audio_system import AudioSystem
+            devices = AudioSystem.get_available_devices()
+            if devices:
+                detect_btn = QPushButton("Detect")
+                detect_btn.setFixedWidth(scale(56))
+                def _detect(btn=detect_btn, edit=le, k=key):
+                    from core.audio_system import AudioSystem
+                    devs = AudioSystem.get_available_devices()
+                    if devs:
+                        current = edit.text()
+                        if current and current in devs:
+                            idx = devs.index(current)
+                        else:
+                            idx = 0
+                        from PyQt6.QtWidgets import QInputDialog
+                        item, ok = QInputDialog.getItem(btn, "Audio Devices", "Select device:", devs, idx, False)
+                        if ok:
+                            edit.setText(item)
+                            self._on_value_changed(k, item)
+                detect_btn.clicked.connect(_detect)
+                hl.addWidget(detect_btn)
             return container
         if isinstance(value, bool):
             cb = QCheckBox()

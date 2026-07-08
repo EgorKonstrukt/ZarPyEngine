@@ -15,10 +15,24 @@ from core.pool import audio as _get_audio_pool
 
 try:
     import openal as al
+    from openal import alc
     _openal_available = True
 except Exception:
     _openal_available = False
     al = None
+    alc = None
+
+_DISTANCE_MODEL_MAP = {
+    "none": al.AL_NONE if al else 0,
+    "inverse_distance": al.AL_INVERSE_DISTANCE if al else 0xD001,
+    "inverse_distance_clamped": al.AL_INVERSE_DISTANCE_CLAMPED if al else 0xD002,
+    "linear_distance": al.AL_LINEAR_DISTANCE if al else 0xD003,
+    "linear_distance_clamped": al.AL_LINEAR_DISTANCE_CLAMPED if al else 0xD004,
+    "exponent_distance": al.AL_EXPONENT_DISTANCE if al else 0xD005,
+    "exponent_distance_clamped": al.AL_EXPONENT_DISTANCE_CLAMPED if al else 0xD006,
+}
+
+_AUDIO_CATEGORIES = ("master", "sfx", "music", "voice", "ambient")
 
 
 class AudioRolloffCurve:
@@ -31,15 +45,12 @@ class AudioRolloffCurve:
             return 1.0
         if distance >= max_dist:
             return 0.0
-
         t = (distance - min_dist) / (max_dist - min_dist)
         keys = sorted(curve_data, key=lambda k: k[0])
-
         if t <= keys[0][0]:
             return keys[0][1]
         if t >= keys[-1][0]:
             return keys[-1][1]
-
         for i in range(len(keys) - 1):
             t0, v0 = keys[i]
             t1, v1 = keys[i + 1]
@@ -48,7 +59,6 @@ class AudioRolloffCurve:
                 if dt == 0:
                     return v0
                 return v0 + (v1 - v0) * (t - t0) / dt
-
         return 1.0
 
 
@@ -95,7 +105,6 @@ class AudioClip:
             sample_rate = wf.getframerate()
             frames = wf.getnframes()
             raw_data = wf.readframes(frames)
-
         self._sample_rate = sample_rate
         self._channels = num_channels
         self._format = self._detect_format(num_channels, sample_width)
@@ -149,6 +158,7 @@ class AudioSystem:
         self._clips: Dict[str, AudioClip] = {}
         self._initialized: bool = False
         self._listener_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._device_name: str = ""
 
     @classmethod
     def instance(cls) -> Optional[AudioSystem]: return cls._instance
@@ -163,9 +173,23 @@ class AudioSystem:
             al.oalInit()
             if not al.oalGetInit():
                 raise RuntimeError("OpenAL oalInit returned not initialized")
+
+            try:
+                default_name = alc.alcGetString(None, alc.ALC_DEFAULT_DEVICE_SPECIFIER)
+                if default_name:
+                    self._device_name = default_name.decode("utf-8", errors="replace") if isinstance(default_name, bytes) else str(default_name)
+                else:
+                    self._device_name = "System Default"
+            except Exception:
+                self._device_name = "System Default"
+
+            from core.logger import Logger
+            Logger.info(f"Audio device: {self._device_name}")
+
             al.alDistanceModel(al.AL_INVERSE_DISTANCE_CLAMPED)
             al.alDopplerFactor(1.0)
             al.alSpeedOfSound(343.3)
+
             AudioSourceManager()
             self._initialized = True
         except Exception as e:
@@ -174,7 +198,7 @@ class AudioSystem:
             self._initialized = False
 
     def shutdown(self):
-        if not _openal_available or not al:
+        if not _openal_available or not al.oalGetInit():
             return
         mgr = AudioSourceManager.instance()
         if mgr:
@@ -199,6 +223,10 @@ class AudioSystem:
         except Exception:
             pass
         self._initialized = False
+
+    @property
+    def device_name(self) -> str:
+        return self._device_name
 
     def load_clip(self, path: str) -> AudioClip:
         abs_path = os.path.abspath(path)
@@ -241,29 +269,118 @@ class AudioSystem:
         mgr = AudioSourceManager.instance()
         if mgr:
             mgr.update_listener_position(pos)
-        if not self._initialized or not al.oalGetInit(): return
+        if not self._initialized: return
         al.alListener3f(al.AL_POSITION, *pos)
 
     def set_listener_velocity(self, vel: tuple[float, float, float]):
-        if not self._initialized or not al.oalGetInit(): return
+        if not self._initialized: return
         al.alListener3f(al.AL_VELOCITY, *vel)
 
     def set_listener_orientation(self, at: tuple[float, float, float], up: tuple[float, float, float]):
-        if not self._initialized or not al.oalGetInit(): return
+        if not self._initialized: return
         arr = (al.ALfloat * 6)(at[0], at[1], at[2], up[0], up[1], up[2])
         al.alListenerfv(al.AL_ORIENTATION, arr)
 
     def set_master_volume(self, volume: float):
-        if not self._initialized or not al.oalGetInit(): return
-        al.alListenerf(al.AL_GAIN, volume)
+        if not self._initialized: return
+        al.alListenerf(al.AL_GAIN, max(0.0, min(1.0, volume)))
 
     def set_doppler_factor(self, factor: float):
-        if not self._initialized or not al.oalGetInit(): return
+        if not self._initialized: return
         al.alDopplerFactor(factor)
 
     def set_speed_of_sound(self, speed: float):
-        if not self._initialized or not al.oalGetInit(): return
+        if not self._initialized: return
         al.alSpeedOfSound(speed)
+
+    def set_distance_model(self, model: str):
+        if not self._initialized: return
+        al.alDistanceModel(_DISTANCE_MODEL_MAP.get(model, al.AL_INVERSE_DISTANCE_CLAMPED))
+
+    def set_category_volume(self, category: str, volume: float):
+        if category not in _AUDIO_CATEGORIES:
+            return
+        from core.config import get_global_config
+        cfg = get_global_config()
+        cfg.set(f"audio.{category}_volume", max(0.0, min(1.0, volume)), notify=False)
+        try:
+            from core.engine import Engine
+            eng = Engine.instance()
+            if eng and eng._project_path:
+                from core.config import get_project_config
+                pcfg = get_project_config(eng._project_path)
+                pcfg.set(f"audio.{category}_volume", max(0.0, min(1.0, volume)), notify=False)
+        except Exception:
+            pass
+
+    def get_category_volume(self, category: str) -> float:
+        if category not in _AUDIO_CATEGORIES:
+            return 1.0
+        from core.config import get_global_config
+        cfg = get_global_config()
+        global_val = cfg.get(f"audio.{category}_volume", 1.0)
+        if category == "master":
+            return global_val
+        try:
+            from core.engine import Engine
+            eng = Engine.instance()
+            if eng and eng._project_path:
+                from core.config import get_project_config
+                pcfg = get_project_config(eng._project_path)
+                proj_val = pcfg.get(f"audio.{category}_volume", 1.0)
+                return global_val * proj_val
+        except Exception:
+            pass
+        return global_val
+
+    def get_effective_volume(self, category: str, base_volume: float) -> float:
+        return base_volume * self.get_category_volume(category) * self.get_category_volume("master")
+
+    def apply_project_audio_config(self):
+        if not self._initialized:
+            return
+        try:
+            from core.engine import Engine
+            eng = Engine.instance()
+            if not eng or not eng._project_path:
+                return
+            from core.config import get_project_config
+            pcfg = get_project_config(eng._project_path)
+        except Exception:
+            return
+        distance_model = pcfg.get("audio.distance_model", "inverse_distance_clamped")
+        al.alDistanceModel(_DISTANCE_MODEL_MAP.get(distance_model, al.AL_INVERSE_DISTANCE_CLAMPED))
+        al.alDopplerFactor(pcfg.get("audio.doppler_factor", 1.0))
+        al.alSpeedOfSound(pcfg.get("audio.speed_of_sound", 343.3))
+
+    @staticmethod
+    def get_available_devices() -> list[str]:
+        if not alc:
+            return []
+        devices = []
+        try:
+            raw = alc.alcGetString(None, alc.ALC_DEVICE_SPECIFIER)
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                for dev in raw.split("\x00"):
+                    if dev.strip():
+                        devices.append(dev.strip())
+        except Exception:
+            pass
+        return devices
+
+    @staticmethod
+    def get_default_device_name() -> str:
+        if not alc:
+            return ""
+        try:
+            raw = alc.alcGetString(None, alc.ALC_DEFAULT_DEVICE_SPECIFIER)
+            if raw:
+                return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        except Exception:
+            pass
+        return ""
 
 
 _AL_AUX_SEND_FILTER = None
@@ -303,34 +420,27 @@ class AudioSourceManager:
         if not al.oalGetInit(): return None
         audio_sys = AudioSystem.instance()
         if not audio_sys: return None
-
         clip = audio_sys.load_clip(clip_path)
         if not clip or not clip.buffer: return None
-
         source_id = al.ctypes.c_uint()
         al.alGenSources(1, al.ctypes.pointer(source_id))
         src_val = source_id.value
-
         al.alSourcei(src_val, al.AL_BUFFER, clip.buffer._geti())
         al.alSourcef(src_val, al.AL_PITCH, pitch)
         al.alSourcef(src_val, al.AL_GAIN, volume)
         al.alSourcei(src_val, al.AL_LOOPING, 1 if loop else 0)
-
         try:
             al.alSourcei(src_val, 0x1214, 0x0001)
         except Exception:
             pass
-
         al.alSource3f(src_val, al.AL_POSITION, 0.0, 0.0, 0.0)
         al.alSource3f(src_val, al.AL_VELOCITY, *velocity)
         al.alSourcef(src_val, al.AL_REFERENCE_DISTANCE, min_distance)
         al.alSourcef(src_val, al.AL_MAX_DISTANCE, max_distance)
         al.alSourcef(src_val, al.AL_ROLLOFF_FACTOR, 0.0)
         al.alSourcei(src_val, al.AL_SOURCE_RELATIVE, 0 if spatial_blend > 0 else 1)
-
         if offset > 0.0:
             al.alSourcef(src_val, 0x1024, offset)
-
         self._active_sources[src_val] = src_val
         self._source_info[src_val] = {
             "min_distance": min_distance,
@@ -354,13 +464,11 @@ class AudioSourceManager:
             al.alGetSourcei(source, al.AL_SOURCE_STATE, state)
             if state.value in (al.AL_PLAYING, al.AL_PAUSED):
                 al.alSourcef(source, al.AL_PITCH, pitch)
-
                 if velocity is not None:
                     al.alSource3f(source, al.AL_VELOCITY, *velocity)
                     info = self._source_info.get(source)
                     if info:
                         info["velocity"] = velocity
-
                 info = self._source_info.get(source)
                 if spatial_blend is not None and info:
                     info["spatial_blend"] = spatial_blend
@@ -469,6 +577,7 @@ class AudioSourceManager:
         self._source_aux_slot.pop(source, None)
 
     def stop_all(self):
+        if not al.oalGetInit(): return
         for src in list(self._active_sources.keys()):
             try:
                 state = al.ctypes.c_int()

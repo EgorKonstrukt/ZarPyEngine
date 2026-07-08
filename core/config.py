@@ -222,6 +222,21 @@ def get_global_config() -> Config:
                 "thumb_size": 64,
                 "dual_pane": True
             },
+            "audio": {
+                "enable_audio": True,
+                "device_name": "",
+                "sample_rate": 48000,
+                "master_volume": 1.0,
+                "sfx_volume": 1.0,
+                "music_volume": 0.8,
+                "voice_volume": 1.0,
+                "ambient_volume": 1.0,
+                "max_sources": 32,
+                "stream_buffer_size": 4096,
+                "distance_model": "inverse_distance_clamped",
+                "doppler_factor": 1.0,
+                "speed_of_sound": 343.3,
+            },
             "file_assoc": {
                 "registered_extensions": ""
             }
@@ -284,7 +299,16 @@ def get_project_config(project_path: str) -> Config:
             "audio": {
                 "master_volume": 1.0,
                 "sfx_volume": 1.0,
-                "music_volume": 0.8
+                "music_volume": 0.8,
+                "voice_volume": 1.0,
+                "ambient_volume": 1.0,
+                "enable_spatialization": True,
+                "enable_reverb": True,
+                "enable_occlusion": True,
+                "distance_model": "inverse_distance_clamped",
+                "doppler_factor": 1.0,
+                "speed_of_sound": 343.3,
+                "priority_threshold": 0.1,
             }
         })
     return _project_config

@@ -234,7 +234,14 @@ class AudioSource(Component):
             effective_volume = self.volume * self._fade_volume
             mgr.update_source(self._source_id, effective_volume, self.pitch, pos, self.spatial_blend, vel)
         except Exception as e:
-            Logger.error(f"AudioSource.on_update error: {e}")
+            err_str = str(e)
+            if "AL_INVALID_NAME" in err_str or "invalid name" in err_str.lower():
+                self._source_id = 0
+                self._playing = False
+                self._fade_active = False
+                self._fade_stop_requested = False
+            else:
+                Logger.error(f"AudioSource.on_update error: {e}")
 
     def gizmo_lines(self) -> list[tuple[Vec3, Vec3, list[float]]]:
         tr = self.transform

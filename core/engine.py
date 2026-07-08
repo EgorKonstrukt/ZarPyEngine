@@ -108,6 +108,16 @@ class Engine:
     @property
     def project_root(self) -> str:
         return getattr(self, '_project_path', os.getcwd())
+    @project_root.setter
+    def project_root(self, path: str):
+        self._project_path = path
+        try:
+            from core.audio_system import AudioSystem
+            audio = AudioSystem.instance()
+            if audio:
+                audio.apply_project_audio_config()
+        except Exception:
+            pass
     def resolve_scene_paths(self, data: dict):
         root = self.project_root
         entities = data.get("entities", {})
@@ -166,6 +176,8 @@ class Engine:
             from core.audio_system import AudioSystem
             audio_sys = AudioSystem()
             audio_sys.initialize()
+            if self._project_path:
+                audio_sys.apply_project_audio_config()
         except Exception as e:
             Logger.error(f"Audio system init failed: {e}")
 
