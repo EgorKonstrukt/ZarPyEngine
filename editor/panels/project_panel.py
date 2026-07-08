@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import shutil
 import datetime
+import subprocess
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QTreeWidget, QTreeWidgetItem, QPushButton,
@@ -34,6 +35,56 @@ from core.editor_scale import scale, scale_xy
 
 _file_clipboard: list[str] = []
 _clipboard_is_cut: bool = False
+
+_VCS_COLORS = {
+    "untracked": QColor("#3C9B3C"),
+    "added":     QColor("#3C9B3C"),
+    "modified":  QColor("#3C6E9B"),
+    "staged":    QColor("#3C6E9B"),
+    "unstaged":  QColor("#3C6E9B"),
+    "deleted":   QColor("#9B3C3C"),
+    "conflict":  QColor("#9B3C3C"),
+    "renamed":   QColor("#9B6E3C"),
+}
+
+
+def _parse_vcs_status(project_path: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for candidate in ["git.exe", "git"]:
+        try:
+            r = subprocess.run([candidate, "--version"], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode == 0:
+                break
+        except FileNotFoundError:
+            continue
+    else:
+        return result
+    try:
+        r = subprocess.run([candidate, "status", "--porcelain", "-u"],
+                           capture_output=True, text=True,
+                           cwd=project_path, timeout=15)
+    except Exception:
+        return result
+    for line in r.stdout.strip().split("\n"):
+        line = line.rstrip()
+        if not line or len(line) < 3:
+            continue
+        xy = line[:2]
+        path = line[3:]
+        if xy[0] == "?" and xy[1] == "?":
+            result[path.replace("\\", "/")] = "untracked"
+        elif xy[0] == "A" or xy[0] == "A ":
+            result[path.replace("\\", "/")] = "added"
+        elif xy[0] == "M" or xy[1] == "M":
+            result[path.replace("\\", "/")] = "modified"
+        elif xy[0] == "D" or xy[1] == "D":
+            result[path.replace("\\", "/")] = "deleted"
+        elif xy[0] == "R" or xy[1] == "R":
+            result[path.replace("\\", "/")] = "renamed"
+        elif xy[0] == "U" or xy[1] == "U":
+            result[path.replace("\\", "/")] = "conflict"
+    return result
 
 
 class _NavButton(QToolButton):
@@ -584,6 +635,7 @@ class _FilePane(QWidget):
             self._panel._nav_bar.update_address(dirpath)
         if self._panel._status_bar:
             self._panel._status_bar.update_path(dirpath)
+        self._panel._apply_vcs_colors()
 
     def _populate_list_view(self, dirpath: str, entries: list[str], filter_text: str):
         widget = self._file_list
@@ -972,6 +1024,11 @@ class ProjectPanel(QDockWidget):
         self._history_index = 0
         self._nav_bar = None
         self._status_bar = None
+        self._vcs_status: dict[str, str] = {}
+        self._vcs_timer = QTimer(self)
+        self._vcs_timer.timeout.connect(self._refresh_vcs_status)
+        self._vcs_timer.start(3000)
+        self._refresh_vcs_status()
         self._setup_ui()
         self._populate_tree()
         self._push_history(self._project_root)
@@ -1218,6 +1275,97 @@ class ProjectPanel(QDockWidget):
         self._connect_mesh_loader()
         self._pane_a.populate_files(self._project_root)
 
+    def _refresh_vcs_status(self):
+        self._vcs_status = _parse_vcs_status(self._project_root)
+        if hasattr(self, "_pane_a"):
+            self._apply_vcs_colors()
+
+    def _vcs_status_of(self, full_path: str) -> str:
+        if not self._vcs_status or not full_path:
+            return ""
+        try:
+            rel = os.path.relpath(full_path, self._project_root)
+        except ValueError:
+            return ""
+        rel = rel.replace("\\", "/")
+        return self._vcs_status.get(rel, "")
+
+    def _apply_vcs_colors(self):
+        if not self._vcs_status:
+            return
+        default = QBrush()
+        for pane in (self._pane_a, self._pane_b):
+            if not pane:
+                continue
+            for i in range(pane._file_list.count()):
+                item = pane._file_list.item(i)
+                path = item.data(Qt.ItemDataRole.UserRole)
+                if path and os.path.isfile(path):
+                    status = self._vcs_status_of(path)
+                    item.setForeground(_VCS_COLORS.get(status, default))
+            for i in range(pane._detail_tree.topLevelItemCount()):
+                item = pane._detail_tree.topLevelItem(i)
+                path = item.data(0, Qt.ItemDataRole.UserRole)
+                if path and os.path.isfile(path):
+                    status = self._vcs_status_of(path)
+                    item.setForeground(0, _VCS_COLORS.get(status, default))
+
+    def _git_run(self, *args: str) -> tuple[int, str, str]:
+        for candidate in ["git.exe", "git"]:
+            try:
+                r = subprocess.run([candidate, "--version"], capture_output=True,
+                                   text=True, timeout=5)
+                if r.returncode == 0:
+                    break
+            except FileNotFoundError:
+                continue
+        else:
+            return -1, "", "git not found"
+        try:
+            r = subprocess.run([candidate] + list(args), capture_output=True,
+                               text=True, cwd=self._project_root, timeout=30)
+            return r.returncode, r.stdout, r.stderr
+        except Exception as e:
+            return -1, "", str(e)
+
+    def _git_add_file(self, path: str):
+        try:
+            rel = os.path.relpath(path, self._project_root)
+        except ValueError:
+            return
+        rc, _, err = self._git_run("add", "--", rel)
+        if rc == 0:
+            self._refresh_vcs_status()
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Git Add Failed", err[:200])
+
+    def _git_unstage_file(self, path: str):
+        try:
+            rel = os.path.relpath(path, self._project_root)
+        except ValueError:
+            return
+        rc, _, err = self._git_run("restore", "--staged", "--", rel)
+        if rc == 0:
+            self._refresh_vcs_status()
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Git Unstage Failed", err[:200])
+
+    def _git_ignore_file(self, path: str):
+        try:
+            rel = os.path.relpath(path, self._project_root)
+        except ValueError:
+            return
+        gi_path = os.path.join(self._project_root, ".gitignore")
+        try:
+            with open(gi_path, "a", encoding="utf-8") as f:
+                f.write(f"\n/{rel}\n")
+            self._refresh_vcs_status()
+        except OSError as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Could not update .gitignore:\n{e}")
+
     def _connect_mesh_loader(self):
         from editor.resource_picker import _get_mesh_loader
         loader = _get_mesh_loader()
@@ -1441,6 +1589,10 @@ class ProjectPanel(QDockWidget):
                 item.setText(0, entry)
                 item.setData(0, Qt.ItemDataRole.UserRole, full)
                 item.setIcon(0, self._icon_provider.icon(QFileIconProvider.IconType.Folder))
+                status = self._vcs_status_of(full)
+                c = _VCS_COLORS.get(status)
+                if c:
+                    item.setForeground(0, c)
                 self._add_subfolders(item, full)
 
     def _on_list_item_changed(self, item: QListWidgetItem):
@@ -1562,6 +1714,7 @@ class ProjectPanel(QDockWidget):
                 stack.append((child, child.data(0, Qt.ItemDataRole.UserRole)))
 
     def _refresh(self):
+        self._refresh_vcs_status()
         self._populate_tree()
         self._pane_a.refresh()
         if self._pane_b:
@@ -1645,6 +1798,26 @@ class ProjectPanel(QDockWidget):
                 reveal_act = QAction("Show in File Manager", self)
                 reveal_act.triggered.connect(lambda: self._reveal_file(path))
                 menu.addAction(reveal_act)
+                menu.addSeparator()
+                status = self._vcs_status_of(path) if path else ""
+                if status:
+                    label = {"untracked": "Untracked", "added": "Added",
+                             "modified": "Modified", "deleted": "Deleted",
+                             "conflict": "Conflict", "renamed": "Renamed"}
+                    info = QAction(f"VCS: {label.get(status, status)}", self)
+                    info.setEnabled(False)
+                    menu.addAction(info)
+                if status in ("untracked", "modified", "deleted"):
+                    add_act = QAction("Add to VCS", self)
+                    add_act.triggered.connect(lambda p=path: self._git_add_file(p))
+                    menu.addAction(add_act)
+                if status == "added":
+                    unstage_act = QAction("Unstage", self)
+                    unstage_act.triggered.connect(lambda p=path: self._git_unstage_file(p))
+                    menu.addAction(unstage_act)
+                ignore_act = QAction("Ignore in Git", self)
+                ignore_act.triggered.connect(lambda p=path: self._git_ignore_file(p))
+                menu.addAction(ignore_act)
         menu.addSeparator()
         copy_path_act = QAction("Copy Path", self)
         if item:
@@ -2094,4 +2267,5 @@ class NewScript(Component):
         self._pane_a._current_dir = self._project_root
         if self._pane_b:
             self._pane_b._current_dir = self._project_root
+        self._refresh_vcs_status()
         self._populate_tree()

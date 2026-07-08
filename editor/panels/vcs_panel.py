@@ -5,25 +5,37 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import json
 import os
 import subprocess
 import time
+import urllib.request
+import urllib.error
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QTreeWidget, QTreeWidgetItem, QPlainTextEdit, QListWidget,
     QListWidgetItem, QPushButton, QToolBar, QLineEdit, QLabel,
     QCheckBox, QTabWidget, QComboBox, QMenu, QProgressBar,
     QHeaderView, QMessageBox, QInputDialog, QApplication,
-    QStyledItemDelegate,
+    QStyledItemDelegate, QDialog, QDialogButtonBox, QFormLayout,
+    QRadioButton, QGroupBox, QTextEdit,
 )
 from PyQt6.QtCore import (
-    Qt, QTimer, pyqtSignal, QThread, QSize, QPoint,
+    Qt, QTimer, pyqtSignal, QThread, QSize, QPoint, QProcess,
 )
 from PyQt6.QtGui import (
     QFont, QColor, QTextCharFormat, QSyntaxHighlighter,
     QPainter, QPen, QTextDocument,
 )
 from core.editor_scale import scale
+
+
+def _open_url(url: str):
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 def _find_git() -> str:
@@ -778,6 +790,514 @@ class _RemoteWidget(QWidget):
         self.fetch_requested.emit(remote)
 
 
+def _find_gh() -> str:
+    for candidate in ["gh.exe", "gh"]:
+        try:
+            r = subprocess.run([candidate, "--version"], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode == 0:
+                return candidate
+        except FileNotFoundError:
+            continue
+    extra_dirs = [
+        os.environ.get("LOCALAPPDATA", ""),
+        os.environ.get("PROGRAMFILES", ""),
+        os.environ.get("PROGRAMFILES(X86)", ""),
+        os.path.expanduser("~\\scoop\\apps\\gh\\current\\bin"),
+        os.path.expanduser("~\\AppData\\Local\\GitHubCLI"),
+        "C:\\Program Files\\GitHub CLI",
+        "C:\\Program Files (x86)\\GitHub CLI",
+        "C:\\ProgramData\\chocolatey\\bin",
+    ]
+    seen = set()
+    for base in extra_dirs:
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        for exe in ["gh.exe", "gh"]:
+            full = os.path.join(base, exe)
+            if os.path.isfile(full):
+                return full
+    return ""
+
+
+def _gh_run(gh: str, args: list[str], cwd: str | None = None,
+            timeout: int = 60) -> tuple[int, str, str]:
+    try:
+        r = subprocess.run([gh] + args, capture_output=True, text=True,
+                           cwd=cwd, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as e:
+        return -3, "", str(e)
+
+
+def _github_api(url: str, token: str, data: dict | None = None,
+                method: str = "GET") -> tuple[int, dict | str]:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "ZarinEngine",
+    }
+    body = json.dumps(data).encode("utf-8") if data else None
+    if method != "GET" and body:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            return resp.status, json.loads(raw)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8"))
+        except Exception:
+            return e.code, str(e)
+    except urllib.error.URLError as e:
+        return -1, str(e)
+
+
+def _github_create_repo(token: str, name: str, description: str = "",
+                        private: bool = False,
+                        gitignore_template: str = "",
+                        license_template: str = "") -> tuple[int, str]:
+    data: dict = {
+        "name": name,
+        "description": description,
+        "private": private,
+    }
+    if gitignore_template:
+        data["gitignore_template"] = gitignore_template
+    if license_template:
+        data["license_template"] = license_template
+    status, result = _github_api(
+        "https://api.github.com/user/repos", token, data, "POST")
+    if status in (200, 201):
+        if isinstance(result, dict):
+            return 0, result.get("clone_url", "")
+        return 0, str(result)
+    if isinstance(result, dict):
+        msg = result.get("message", str(result))
+        errors = result.get("errors", [])
+        if errors:
+            msg += ": " + "; ".join(
+                e.get("message", "") for e in errors)
+        return status, msg
+    return status, str(result)
+
+
+class _GhLoginDialog(QDialog):
+    def __init__(self, gh_path: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("GitHub Login")
+        self.setMinimumSize(scale(500), scale(320))
+        self._gh = gh_path
+        self._success = False
+        self._setup_ui()
+        self._start_login()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        header = QLabel("GitHub Device Authorization")
+        header.setStyleSheet("font-weight: bold; font-size: 13px;")
+        layout.addWidget(header)
+
+        self._output = QPlainTextEdit()
+        self._output.setReadOnly(True)
+        self._output.setFont(QFont("Courier New", 10))
+        self._output.setMinimumHeight(scale(160))
+        layout.addWidget(self._output)
+
+        hint = QLabel(
+            "A browser will open with a one-time code.\n"
+            "Enter the code shown above and authorize the application.\n"
+            "After authorization, this dialog will close automatically.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #888;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(self._cancel_btn)
+        layout.addLayout(btn_row)
+
+    def _start_login(self):
+        self._proc = QProcess(self)
+        self._proc.setProcessChannelMode(
+            QProcess.ProcessChannelMode.MergedChannels)
+        self._proc.readyReadStandardOutput.connect(self._on_output)
+        self._proc.finished.connect(self._on_finished)
+        self._proc.start(self._gh, ["auth", "login", "-s", "repo"])
+
+    def _on_output(self):
+        data = self._proc.readAllStandardOutput()
+        text = bytes(data).decode("utf-8", errors="replace")
+        self._output.appendPlainText(text)
+        lower = text.lower()
+        if "http" in lower and ("github" in lower or "device" in lower):
+            for word in text.split():
+                if word.startswith("http"):
+                    _open_url(word.rstrip(".,;"))
+                    break
+        elif "one-time code" in lower:
+            self._output.setStyleSheet("background: #1e1e1e; color: #fff; font-size: 14px;")
+        self._output.verticalScrollBar().setValue(
+            self._output.verticalScrollBar().maximum())
+
+    def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        if exit_code == 0:
+            self._success = True
+            self._output.appendPlainText("\nLogin successful!")
+        else:
+            err = bytes(self._proc.readAllStandardOutput()).decode("utf-8", errors="replace")
+            self._output.appendPlainText(f"\nLogin failed (exit code {exit_code}): {err[:200]}")
+        self._cancel_btn.setText("Close")
+
+    def done(self, rc: int):
+        if self._success:
+            super().done(QDialog.DialogCode.Accepted)
+        else:
+            super().done(rc)
+
+
+class _RepoSetupWorker(QThread):
+    status_update = pyqtSignal(str)
+    done = pyqtSignal(int, str, str)
+
+    def __init__(self, git_path: str, project_path: str, config: dict):
+        super().__init__()
+        self._git_path = git_path
+        self._project_path = project_path
+        self._config = config
+
+    def run(self):
+        self.status_update.emit("Creating GitHub repository...")
+        gh = _find_gh()
+        repo_url = ""
+        if gh and not self._config["token"]:
+            args = ["repo", "create", self._config["name"],
+                    "--" + ("private" if self._config["private"] else "public"),
+                    "--description", self._config["description"] or self._config["name"]]
+            if self._config["init_readme"]:
+                args.append("--add-readme")
+            if self._config["gitignore"]:
+                args.extend(["--gitignore", self._config["gitignore"]])
+            if self._config["license"]:
+                args.extend(["--license", self._config["license"]])
+            rc, out, err = _gh_run(gh, args)
+            if rc != 0:
+                self.done.emit(rc, "", f"GitHub creation failed: {err or out}")
+                return
+            for line in out.split("\n"):
+                if line.startswith("http"):
+                    repo_url = line.strip()
+                    break
+            if not repo_url:
+                try:
+                    data = json.loads(out)
+                    repo_url = data.get("clone_url", data.get("html_url", ""))
+                except Exception:
+                    repo_url = f"https://github.com/{self._config['name']}.git"
+        else:
+            token = self._config["token"]
+            if not token and not gh:
+                self.done.emit(1, "", "GitHub token required")
+                return
+            if not token:
+                self.done.emit(1, "", "gh CLI token not available")
+                return
+            status, result = _github_create_repo(
+                token, self._config["name"], self._config["description"],
+                self._config["private"], self._config["gitignore"],
+                self._config["license"])
+            if status != 0:
+                self.done.emit(status, "", f"GitHub API error: {result}")
+                return
+            repo_url = result if isinstance(result, str) else ""
+            if not repo_url.startswith("http"):
+                repo_url = f"https://github.com/{self._config['name']}.git"
+
+        self.status_update.emit(f"Setting up local repository...")
+        rc, _, err = _git_run(self._git_path, ["init"], cwd=self._project_path)
+        if rc != 0:
+            self.done.emit(rc, "", f"git init failed: {err}")
+            return
+        readme_path = os.path.join(self._project_path, "README.md")
+        if self._config["init_readme"] and not os.path.exists(readme_path):
+            try:
+                with open(readme_path, "w", encoding="utf-8") as f:
+                    f.write(f"# {self._config['name']}\n\n{self._config['description']}\n")
+            except Exception:
+                pass
+        self.status_update.emit("Staging files...")
+        rc, _, err = _git_run(self._git_path, ["add", "-A"],
+                               cwd=self._project_path)
+        if rc == 0:
+            self.status_update.emit("Creating initial commit...")
+            _git_run(self._git_path, ["commit", "-m", "Initial commit"],
+                      cwd=self._project_path)
+
+        self.status_update.emit("Adding remote...")
+        rc, _, err = _git_run(self._git_path, ["remote", "add", "origin", repo_url],
+                               cwd=self._project_path)
+        if rc != 0:
+            existing, _, _ = _git_run(self._git_path, ["remote", "get-url", "origin"],
+                                       cwd=self._project_path)
+            if existing.strip():
+                _git_run(self._git_path, ["remote", "set-url", "origin", repo_url],
+                          cwd=self._project_path)
+
+        self.status_update.emit("Pushing to GitHub...")
+        rc, out, err = _git_run(self._git_path, ["push", "-u", "origin", "HEAD"],
+                                 cwd=self._project_path, timeout=120)
+        if rc != 0:
+            self.done.emit(rc, repo_url, f"Push failed: {err or out}")
+            return
+        self.done.emit(0, repo_url, "")
+
+
+class _CreateRepoDialog(QDialog):
+    _GH_CLIENT_ID = ""  # Set your GitHub OAuth App client_id here
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create GitHub Repository")
+        self.setMinimumWidth(scale(450))
+        self._result: dict | None = None
+        self._token: str = ""
+        self._auth_method: str = "none"
+        self._setup_ui()
+        self._check_auth()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("my-awesome-project")
+        form.addRow("Repository name:", self._name_edit)
+
+        self._desc_edit = QTextEdit()
+        self._desc_edit.setMaximumHeight(scale(60))
+        self._desc_edit.setPlaceholderText("Short description of the project")
+        form.addRow("Description:", self._desc_edit)
+
+        vis_group = QGroupBox("Visibility")
+        vis_layout = QHBoxLayout(vis_group)
+        self._public_rb = QRadioButton("Public")
+        self._public_rb.setChecked(True)
+        self._private_rb = QRadioButton("Private")
+        vis_layout.addWidget(self._public_rb)
+        vis_layout.addWidget(self._private_rb)
+        vis_layout.addStretch()
+        form.addRow(vis_group)
+
+        self._init_readme_cb = QCheckBox("Initialize with README")
+        self._init_readme_cb.setChecked(True)
+        form.addRow(self._init_readme_cb)
+
+        self._gitignore_combo = QComboBox()
+        self._gitignore_combo.setEditable(True)
+        self._gitignore_combo.setPlaceholderText("None")
+        templates = ["", "Python", "VisualStudio", "C++", "Java",
+                      "Node", "Unity", "UnrealEngine", "Rust", "Go",
+                      "Ruby", "Swift", "Kotlin", "CMake"]
+        for t in templates:
+            self._gitignore_combo.addItem(t)
+        form.addRow(".gitignore template:", self._gitignore_combo)
+
+        self._license_combo = QComboBox()
+        self._license_combo.setEditable(True)
+        licenses = ["", "mit", "apache-2.0", "gpl-3.0", "gpl-2.0",
+                     "bsd-3-clause", "bsd-2-clause", "mpl-2.0",
+                     "lgpl-3.0", "lgpl-2.1", "unlicense"]
+        for l in licenses:
+            self._license_combo.addItem(l)
+        form.addRow("License:", self._license_combo)
+
+        auth_group = QGroupBox("GitHub Authentication")
+        auth_layout = QVBoxLayout(auth_group)
+
+        self._auth_status = QLabel("Checking authentication...")
+        self._auth_status.setWordWrap(True)
+        auth_layout.addWidget(self._auth_status)
+
+        self._login_btn = QPushButton("Login with GitHub (opens browser)")
+        self._login_btn.clicked.connect(self._login_github)
+        auth_layout.addWidget(self._login_btn)
+
+        self._install_btn = QPushButton("Install gh CLI")
+        self._install_btn.clicked.connect(self._install_gh)
+        self._install_btn.hide()
+        auth_layout.addWidget(self._install_btn)
+
+        manual_group = QGroupBox("Manual Token (alternative)")
+        manual_layout = QVBoxLayout(manual_group)
+        self._token_edit = QLineEdit()
+        self._token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._token_edit.setPlaceholderText("ghp_xxxxxxxxxxxxxxxxxxxx")
+        manual_layout.addWidget(self._token_edit)
+        manual_btn_row = QHBoxLayout()
+        self._create_token_btn = QPushButton("Open Token Settings")
+        self._create_token_btn.clicked.connect(
+            lambda: _open_url("https://github.com/settings/tokens/new?scopes=repo&description=Zarin+Engine"))
+        manual_btn_row.addWidget(self._create_token_btn)
+        self._use_token_btn = QPushButton("Use This Token")
+        self._use_token_btn.clicked.connect(self._use_manual_token)
+        manual_btn_row.addWidget(self._use_token_btn)
+        manual_layout.addLayout(manual_btn_row)
+        manual_label = QLabel("Required scope: repo (Full control of private repositories)")
+        manual_label.setWordWrap(True)
+        manual_label.setStyleSheet("color: #888; font-size: 10px;")
+        manual_layout.addWidget(manual_label)
+        auth_layout.addWidget(manual_group)
+
+        form.addRow(auth_group)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _check_auth(self):
+        gh = _find_gh()
+        if gh:
+            self._install_btn.hide()
+            rc, out, _ = _gh_run(gh, ["auth", "status"])
+            if rc == 0:
+                trc, tok, _ = _gh_run(gh, ["auth", "token"])
+                if trc == 0:
+                    self._token = tok.strip()
+                    self._auth_method = "gh"
+                    self._auth_status.setText("Authenticated via gh CLI")
+                    self._auth_status.setStyleSheet("color: #6a9955; font-weight: bold;")
+                    self._login_btn.hide()
+                    self._token_edit.setEnabled(False)
+                    self._token_edit.setPlaceholderText("Using gh CLI token")
+                    return
+        self._auth_status.setText("Not authenticated")
+        self._auth_status.setStyleSheet("color: #dcdcaa;")
+        if not gh:
+            self._install_btn.show()
+
+    def _install_gh(self):
+        self._install_btn.setEnabled(False)
+        self._install_btn.setText("Installing...")
+        self._auth_status.setText("Installing gh CLI...")
+        QApplication.processEvents()
+        attempts = [
+            ("winget", ["winget", "install", "--id", "GitHub.cli",
+                         "--silent", "--accept-package-agreements",
+                         "--accept-source-agreements"]),
+            ("scoop", ["scoop", "install", "gh"]),
+            ("choco", ["choco", "install", "gh", "-y"]),
+        ]
+        installed = False
+        for name, cmd in attempts:
+            try:
+                subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=120)
+            except FileNotFoundError:
+                continue
+            except Exception:
+                continue
+            if _find_gh():
+                installed = True
+                break
+        if not installed:
+            installed = bool(_find_gh())
+        if installed:
+            self._check_auth()
+            if self._auth_method == "none":
+                self._auth_status.setText("gh CLI installed. Click Login.")
+                self._auth_status.setStyleSheet("color: #6a9955;")
+            self._install_btn.hide()
+        else:
+            self._auth_status.setText(
+                "Could not install automatically.\n"
+                "Download from: https://cli.github.com/")
+            self._auth_status.setStyleSheet("color: #f44747;")
+            self._install_btn.setText("Open Download Page")
+            self._install_btn.setEnabled(True)
+            self._install_btn.clicked.disconnect()
+            self._install_btn.clicked.connect(
+                lambda: _open_url("https://cli.github.com/"))
+
+    def _login_github(self):
+        gh = _find_gh()
+        if gh:
+            dlg = _GhLoginDialog(gh, self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                trc, tok, _ = _gh_run(gh, ["auth", "token"])
+                if trc == 0:
+                    self._token = tok.strip()
+                    self._auth_method = "gh"
+                    self._auth_status.setText("Authenticated via gh CLI")
+                    self._auth_status.setStyleSheet("color: #6a9955; font-weight: bold;")
+                    self._login_btn.hide()
+                    self._token_edit.setPlaceholderText("Using gh CLI token")
+                    return
+            self._auth_status.setText("Login cancelled or failed")
+            self._auth_status.setStyleSheet("color: #f44747;")
+        else:
+            _open_url("https://cli.github.com/")
+            self._auth_status.setText(
+                "gh CLI not found. Install it and try again.")
+            self._auth_status.setStyleSheet("color: #dcdcaa;")
+
+    def _use_manual_token(self):
+        tok = self._token_edit.text().strip()
+        if not tok:
+            QMessageBox.warning(self, "Empty Token", "Paste your GitHub token first.")
+            return
+        status, result = _github_api("https://api.github.com/user", tok)
+        if status == 200:
+            self._token = tok
+            self._auth_method = "token"
+            username = result.get("login", "?") if isinstance(result, dict) else "?"
+            self._auth_status.setText(f"Authenticated as {username}")
+            self._auth_status.setStyleSheet("color: #6a9955; font-weight: bold;")
+            self._token_edit.setEnabled(False)
+        else:
+            msg = result.get("message", str(result)) if isinstance(result, dict) else str(result)
+            self._auth_status.setText(f"Token invalid: {msg}")
+            self._auth_status.setStyleSheet("color: #f44747;")
+
+    def _on_accept(self):
+        name = self._name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Missing Name",
+                                "Repository name is required.")
+            return
+        if not self._token:
+            QMessageBox.warning(self, "Not Authenticated",
+                                "Login with GitHub or provide a token first.")
+            return
+        self._result = {
+            "name": name,
+            "description": self._desc_edit.toPlainText().strip(),
+            "private": self._private_rb.isChecked(),
+            "init_readme": self._init_readme_cb.isChecked(),
+            "gitignore": self._gitignore_combo.currentText(),
+            "license": self._license_combo.currentText(),
+            "token": self._token,
+        }
+        self.accept()
+
+    @property
+    def result(self) -> dict | None:
+        return self._result
+
+
 class VcsPanel(QDockWidget):
     def __init__(self, parent=None):
         super().__init__("Version Control", parent)
@@ -789,20 +1309,20 @@ class VcsPanel(QDockWidget):
             QDockWidget.DockWidgetFeature.DockWidgetClosable)
 
         self._git = _Git()
+        self._project_path: str = ""
         self._recent_commits: list[dict] = []
         self._branches_text: str = ""
         self._branches_list: list[str] = []
         self._status_entries: list[dict] = []
         self._last_status_output: str = ""
         self._watch_timer = QTimer(self)
-        self._watch_timer.timeout.connect(self._refresh_status)
+        self._watch_timer.timeout.connect(self._on_timer)
         self._watch_interval: int = 3000
         self._diff_cache: dict[str, str] = {}
 
         self._setup_ui()
         self._watch_timer.start(self._watch_interval)
-        self._try_detect()
-        self._refresh_all()
+        self._on_timer()
 
     def _setup_ui(self):
         w = QWidget()
@@ -834,6 +1354,13 @@ class VcsPanel(QDockWidget):
         self._stash_btn = QPushButton("Stash")
         self._stash_btn.clicked.connect(self._stash_push)
         toolbar.addWidget(self._stash_btn)
+
+        toolbar.addSeparator()
+
+        self._create_repo_btn = QPushButton("Create Repo")
+        self._create_repo_btn.setToolTip("Create repository on GitHub")
+        self._create_repo_btn.clicked.connect(self._create_repo)
+        toolbar.addWidget(self._create_repo_btn)
 
         self._progress = QProgressBar()
         self._progress.setMaximumWidth(scale(150))
@@ -897,8 +1424,15 @@ class VcsPanel(QDockWidget):
         project_path = ""
         if eng:
             project_path = getattr(eng, "_project_path", "") or ""
+        self._project_path = project_path
         if not project_path:
-            project_path = os.getcwd()
+            self._repo_label.setText(" No project open ")
+            self._branch_label.setText("")
+            self._ahead_behind_label.setText("")
+            self._commit_panel.set_status("Open a project to use Version Control")
+            self._set_widgets_enabled(False)
+            return False
+        self._set_widgets_enabled(True)
         if self._git.detect(project_path):
             self._repo_label.setText(f" {os.path.basename(self._git.repo_root)} ")
             self._repo_label.setToolTip(self._git.repo_root)
@@ -907,13 +1441,38 @@ class VcsPanel(QDockWidget):
             self._repo_label.setText(" No repository ")
             self._branch_label.setText("")
             self._ahead_behind_label.setText("")
+            self._commit_panel.set_status("Project has no git repository")
             return False
+
+    def _set_widgets_enabled(self, enabled: bool):
+        for w in [self._status_tree, self._commit_panel, self._stash_btn,
+                  self._diff_view, self._log_tree, self._branch_list,
+                  self._stash_list, self._remote_widget]:
+            w.setEnabled(enabled)
+
+    def _on_timer(self):
+        eng = None
+        try:
+            from core.engine import Engine
+            eng = Engine.instance()
+        except Exception:
+            pass
+        current_path = getattr(eng, "_project_path", "") if eng else ""
+        if current_path != self._project_path:
+            self._git._repo_root = ""
+            self._git._cwd = ""
+            self._try_detect()
+        if self._git.repo_root:
+            self._refresh_status()
+        else:
+            self._refresh_all()
 
     def _refresh_all(self):
         if not self._git.available:
             return
         if not self._git.repo_root:
-            if not self._try_detect():
+            self._try_detect()
+            if not self._git.repo_root:
                 return
         self._refresh_branch_info()
         self._refresh_status()
@@ -1187,6 +1746,39 @@ class VcsPanel(QDockWidget):
         tab = self.sender()
         if tab and tab.widget(index) is self._log_tree:
             self._refresh_log()
+
+    def _create_repo(self):
+        if not self._project_path:
+            self._commit_panel.set_status("Open a project first")
+            return
+        dlg = _CreateRepoDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        r = dlg.result
+        if not r:
+            return
+        self._progress.show()
+        self._progress.setRange(0, 0)
+        self._progress.setValue(0)
+        self._set_widgets_enabled(False)
+        self._create_repo_btn.setEnabled(False)
+        self._commit_panel.set_status("Creating GitHub repository...")
+        self._worker = _RepoSetupWorker(
+            self._git._path, self._project_path, r)
+        self._worker.status_update.connect(self._commit_panel.set_status)
+        self._worker.done.connect(self._on_repo_setup_done)
+        self._worker.start()
+
+    def _on_repo_setup_done(self, rc: int, repo_url: str, error: str):
+        self._progress.hide()
+        self._set_widgets_enabled(True)
+        self._create_repo_btn.setEnabled(True)
+        if rc == 0:
+            self._commit_panel.set_status(f"Repository ready: {repo_url}")
+            self._git.detect(self._project_path)
+            self._refresh_all()
+        else:
+            self._commit_panel.set_status(f"Repo setup failed: {error[:200]}")
 
     def load_config(self, config):
         pass
