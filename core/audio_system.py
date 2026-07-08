@@ -88,6 +88,17 @@ class AudioClip:
         raise ValueError(f"Unsupported audio format: {num_channels}ch, {sample_width}bytes")
 
     def load_from_file(self, path: str):
+        import json
+        quality = None
+        import_path = path + ".import"
+        if os.path.exists(import_path):
+            try:
+                with open(import_path) as f:
+                    settings = json.load(f)
+                quality = settings.get("quality")
+            except Exception:
+                pass
+
         ext = os.path.splitext(path)[1].lower()
         if ext in (".ogg", ".vorbis"):
             self._load_ogg(path)
@@ -97,6 +108,9 @@ class AudioClip:
             self._load_mp3(path)
         else:
             raise ValueError(f"Unsupported audio format: {ext}")
+
+        if quality is not None:
+            self._resample(quality)
 
     def _load_wav(self, path: str):
         with wave.open(path, "rb") as wf:
@@ -129,6 +143,31 @@ class AudioClip:
         self._channels = segment.channels
         self._format = self._detect_format(segment.channels, segment.sample_width)
         self._data = memoryview(bytearray(raw_data))
+
+    def _resample(self, quality: int):
+        if quality >= 100 or self._data is None:
+            return
+        import numpy as np
+        old_rate = self._sample_rate
+        new_rate = max(8000, int(old_rate * quality / 100))
+        if new_rate >= old_rate:
+            return
+        ratio = old_rate / new_rate
+        raw = np.frombuffer(self._data, dtype=np.int16)
+        if self._channels == 2:
+            raw = raw.reshape(-1, 2)
+        n = len(raw)
+        new_n = max(1, int(n / ratio))
+        indices = np.linspace(0, n - 1, new_n)
+        if self._channels == 2:
+            resampled = np.column_stack([
+                np.interp(indices, np.arange(n), raw[:, 0]),
+                np.interp(indices, np.arange(n), raw[:, 1])
+            ]).astype(np.int16)
+        else:
+            resampled = np.interp(indices, np.arange(n), raw).astype(np.int16)
+        self._data = memoryview(resampled.tobytes())
+        self._sample_rate = new_rate
 
     def create_buffer(self):
         if not self._data: return
