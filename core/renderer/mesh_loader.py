@@ -9,13 +9,14 @@ import os
 import json
 import numpy as np
 import threading
-from typing import Optional, Any
+from typing import Optional
 from core.engine import Engine
 from core.logger import Logger
 from core.renderer.mesh_data import MeshData
 from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh
+from core.pool import asset as _get_asset_pool
 
-_MAX_ASYNC_PROCESS_PER_FRAME = 1
+_MAX_PENDING_PER_FRAME = 6
 
 
 def _deferred_call(cb):
@@ -27,10 +28,6 @@ def _deferred_call(cb):
 
 
 class MeshLoader:
-    """Loads, caches and manages mesh data from files and primitives."""
-
-    _shared_import_cache: dict[str, Any] = {}
-
     def __init__(self, ctx, default_prog, outline_prog=None):
         self._ctx = ctx
         self._default_prog = default_prog
@@ -39,7 +36,7 @@ class MeshLoader:
         self._pending_async_loads: int = 0
         self._pending_cache_keys: set = set()
         self._async_lock: threading.Lock = threading.Lock()
-        self._pending_mesh_queue: list[tuple[str, Any, float, bool, bool]] = []
+        self._pending_mesh_queue: list = []
         self._render_callback = None
 
     def register_primitives(self):
@@ -60,12 +57,6 @@ class MeshLoader:
         cache_key = f"{file_path or name}|s={scale}|cp={center_pivot}|fu={flip_uvs}"
         if cache_key in self._meshes:
             return self._meshes[cache_key]
-        if cache_key in MeshLoader._shared_import_cache:
-            import_data = MeshLoader._shared_import_cache[cache_key]
-            m = self._build_mesh_data(import_data)
-            if m:
-                self._apply_transforms(m, cache_key, scale, center_pivot, flip_uvs)
-            return m
         if not file_path:
             if name == "cube":
                 m = make_cube_mesh()
@@ -116,12 +107,6 @@ class MeshLoader:
         from core.spatial.bvh import prebuild_mesh_bvh
         prebuild_mesh_bvh(m.vertices, m.indices)
 
-    def _on_async_load_complete(self):
-        with self._async_lock:
-            self._pending_async_loads -= 1
-            if self._pending_async_loads <= 0 and self._render_callback:
-                _deferred_call(self._render_callback)
-
     def _resolve_path(self, key: str, file_path: str) -> str:
         if file_path and os.path.exists(file_path):
             return file_path
@@ -157,7 +142,7 @@ class MeshLoader:
                         return candidate
         return ""
 
-    def _build_mesh_data(self, import_data: Any) -> Optional[MeshData]:
+    def _build_mesh_data(self, import_data):
         if import_data is None or len(import_data.vertices) == 0:
             return None
         m = MeshData()
@@ -194,6 +179,12 @@ class MeshLoader:
     def set_render_callback(self, callback):
         self._render_callback = callback
 
+    def _on_async_load_complete(self):
+        with self._async_lock:
+            self._pending_async_loads -= 1
+            if self._pending_async_loads <= 0 and self._render_callback:
+                _deferred_call(self._render_callback)
+
     def _do_render_request(self):
         if self._render_callback:
             self._render_callback()
@@ -204,35 +195,27 @@ class MeshLoader:
             self._pending_mesh_queue.clear()
         processed = 0
         for cache_key, import_data, scale, cp, fuvs in pending:
-            if processed >= _MAX_ASYNC_PROCESS_PER_FRAME:
+            if processed >= _MAX_PENDING_PER_FRAME:
                 with self._async_lock:
                     self._pending_mesh_queue.insert(0, (cache_key, import_data, scale, cp, fuvs))
-                continue
-            if import_data is None or len(import_data.vertices) == 0:
-                self._pending_cache_keys.discard(cache_key)
-                processed += 1
-                continue
-            # Skip stale loads from before last clear_scene_data()
+                break
             if cache_key not in self._pending_cache_keys:
-                processed += 1
                 continue
-            MeshLoader._shared_import_cache[cache_key] = import_data
-            m = self._build_mesh_data(import_data)
-            if m:
-                self._apply_transforms(m, cache_key, scale, cp, fuvs)
-            self._pending_cache_keys.discard(cache_key)
             processed += 1
+            m = self._build_mesh_data(import_data)
+            if not m:
+                self._pending_cache_keys.discard(cache_key)
+                continue
+            self._apply_transforms(m, cache_key, scale, cp, fuvs)
 
     def clear_scene_data(self):
-        """Release GPU resources and clear all mesh caches for scene reload."""
         with self._async_lock:
             self._pending_mesh_queue.clear()
             self._pending_async_loads = 0
+            self._pending_cache_keys.clear()
         for m in self._meshes.values():
             m.release()
         self._meshes.clear()
-        MeshLoader._shared_import_cache.clear()
-        self._pending_cache_keys.clear()
         self.register_primitives()
 
     def release(self):

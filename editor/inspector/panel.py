@@ -291,9 +291,10 @@ class InspectorPanel(QDockWidget):
         preview = ModelPreviewWidget()
         preview.setFixedHeight(200)
         self._add_asset_widget(preview)
+        from PyQt6.QtCore import QTimer
         def _on_mesh_loaded(data):
             if data is not None and len(data.vertices) >= 3 and len(data.indices) >= 3:
-                preview.set_mesh(data.vertices, data.indices, normals=data.normals)
+                QTimer.singleShot(0, lambda: preview.set_mesh(data.vertices, data.indices, normals=data.normals))
         ext = os.path.splitext(self._asset_path)[1].lower()
         if ext == ".obj":
             load_obj_async(self._asset_path, _on_mesh_loaded)

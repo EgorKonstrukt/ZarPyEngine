@@ -80,16 +80,15 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     cached = _mesh_data.get(cache_key)
     if cached is not _SENTINEL:
         return cached
-    from core.renderer.mesh_loader import MeshLoader
-    if cache_key in MeshLoader._shared_import_cache:
-        data = MeshLoader._shared_import_cache[cache_key]
-    else:
-        try:
-            from core.asset_importer import load_mesh_future
-            fut = load_mesh_future(resolved)
-            data = fut.result(timeout=0.01)
-        except Exception:
-            return None
+    try:
+        from core.asset_importer import load_mesh, load_obj
+        lower_path = resolved.lower()
+        if lower_path.endswith(".obj"):
+            data = load_obj(resolved)
+        else:
+            data = load_mesh(resolved)
+    except Exception:
+        return None
     scale = 1.0
     import_path = resolved + ".import"
     if os.path.exists(import_path):
