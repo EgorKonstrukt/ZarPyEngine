@@ -86,6 +86,53 @@ def make_plane_mesh(size: float = 1.0) -> MeshData:
     return mesh
 
 
+def make_water_plane(size: float = 1.0, segments: int = 200) -> MeshData:
+    """Create a tessellated horizontal plane (y=0) for water/ocean rendering.
+
+    Provides positions, up-normals and 0..1 UVs. Vertex shader displaces it
+    (Gerstner waves), so a single large plane can represent an ocean.
+    """
+    seg = max(1, int(segments))
+    half = size * 0.5
+    step = size / seg
+    verts = []
+    uvs = []
+    norms = []
+    idxs = []
+    for z in range(seg + 1):
+        for x in range(seg + 1):
+            px = -half + x * step
+            pz = -half + z * step
+            verts.append(px)
+            verts.append(0.0)
+            verts.append(pz)
+            uvs.append(float(x) / seg)
+            uvs.append(float(z) / seg)
+            norms.append(0.0)
+            norms.append(1.0)
+            norms.append(0.0)
+    def vid(x, z):
+        return z * (seg + 1) + x
+    for z in range(seg):
+        for x in range(seg):
+            a = vid(x, z)
+            b = vid(x + 1, z)
+            c = vid(x + 1, z + 1)
+            d = vid(x, z + 1)
+            idxs.append(a)
+            idxs.append(b)
+            idxs.append(c)
+            idxs.append(a)
+            idxs.append(c)
+            idxs.append(d)
+    mesh = MeshData()
+    mesh.vertices = np.array(verts, dtype=np.float32)
+    mesh.normals = np.array(norms, dtype=np.float32)
+    mesh.uvs = np.array(uvs, dtype=np.float32)
+    mesh.indices = np.array(idxs, dtype=np.uint32)
+    return mesh
+
+
 def make_quad_mesh(size: float = 1.0) -> MeshData:
     """Create a screen-aligned quad facing +Z."""
     h = size * 0.5

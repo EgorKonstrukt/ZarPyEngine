@@ -267,7 +267,7 @@ class RaytracingRenderer(Component):
             tri_count = idxs.shape[0]
 
             mat_idx = 0
-            mat_path = mr.material_path
+            mat_path = mr.get_material_path(0)
             if mat_path:
                 if mat_path not in material_map:
                     material_map[mat_path] = len(material_map)

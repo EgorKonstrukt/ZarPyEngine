@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 import json, os
+import numpy as np
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QScrollArea, QLabel, QLineEdit, QPushButton, QCheckBox, QDoubleSpinBox,
@@ -294,7 +295,9 @@ class InspectorPanel(QDockWidget):
         from PyQt6.QtCore import QTimer
         def _on_mesh_loaded(data):
             if data is not None and len(data.vertices) >= 3 and len(data.indices) >= 3:
-                QTimer.singleShot(0, lambda: preview.set_mesh(data.vertices, data.indices, normals=data.normals))
+                s = settings.get("scale", 1.0)
+                verts = data.vertices.reshape(-1, 3).astype(np.float32) * s
+                QTimer.singleShot(0, lambda: preview.set_mesh(verts, data.indices, normals=data.normals))
         ext = os.path.splitext(self._asset_path)[1].lower()
         if ext == ".obj":
             load_obj_async(self._asset_path, _on_mesh_loaded)

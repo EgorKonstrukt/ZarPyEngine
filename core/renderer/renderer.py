@@ -33,12 +33,13 @@ from core.math3d import Mat4, Vec3
 
 from core.renderer.types import RenderMode
 from core.renderer.mesh_data import MeshData, read_shader
-from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh
+from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh, make_water_plane
 from core.renderer.grid import GridRenderer
 from core.renderer.gizmo import GizmoRenderer, FATLINE_VERT, FATLINE_FRAG
 from core.renderer.shadows import ShadowRenderer
 from core.components.rendering.sky import Sky
 from core.components.rendering.clouds import Cloud
+from core.components.rendering.water import Water
 from core.renderer.particles import ParticleRenderer
 from core.renderer.sprites import SpriteRendererGL
 from core.renderer.svgs import SvgRendererGL
@@ -113,7 +114,7 @@ class _ProjectorItem:
 class _RenderSnapshot:
     __slots__ = (
         'lights', 'dir_light', 'sky_component', 'sky_entity', 'cloud_components',
-        'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
+        'water_components', 'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors',
     )
@@ -123,6 +124,7 @@ class _RenderSnapshot:
         self.sky_component = None
         self.sky_entity = None
         self.cloud_components: list = []
+        self.water_components: list = []
         self.renderable: list = []
         self.shadow_renderables: list = []
         self.sprite_items: list = []
@@ -202,6 +204,7 @@ class Renderer:
         self._line_width: float = 0.6667
         self._clear_color: list = [0.18, 0.18, 0.18]
         self._import_meta_cache: dict[str, tuple] = {}
+        self._import_meta_mtime: dict[str, float] = {}
         self._normal_cache: dict[int, np.ndarray] = {}
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
@@ -237,6 +240,11 @@ class Renderer:
         self._mesh_loader: Optional[MeshLoader] = None
         self._cloud_quad: Optional[MeshData] = None
         self._cloud_plane: Optional[MeshData] = None
+        self._water_plane: Optional[MeshData] = None
+        self._water_fbo: Optional[moderngl.Framebuffer] = None
+        self._water_color_tex: Optional[moderngl.Texture] = None
+        self._water_depth_rb: Optional[moderngl.Renderbuffer] = None
+        self._water_fbo_size: tuple = (0, 0)
         self._batcher: Optional[RenderBatcher] = None
         self._gpu_storage: Optional[GpuStorage] = None
         self._gpu_culling: Optional[GpuCulling] = None
@@ -448,6 +456,8 @@ void main() {
             self._cloud_quad.build_gl(self._ctx, self._default_prog)
             self._cloud_plane = make_plane_mesh(1.0)
             self._cloud_plane.build_gl(self._ctx, self._default_prog)
+            self._water_plane = make_water_plane(1.0, 200)
+            self._water_plane.build_gl(self._ctx, self._default_prog)
             self._particles = ParticleRenderer(self._ctx, self._particle_prog)
             self._particles.load_compute_shader(
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "particle.compute")
@@ -522,6 +532,29 @@ void main() {
         self._pp_fbo_b = None
         self._pp_color_tex_b = None
         self._pp_fbo_size = (0, 0)
+
+    def _ensure_water_fbo(self, w: int, h: int):
+        if self._water_fbo_size == (w, h) and self._water_fbo:
+            return
+        self._release_water_fbo()
+        self._water_color_tex = self._ctx.texture((w, h), 4, dtype='f1')
+        self._water_color_tex.repeat_x = False
+        self._water_color_tex.repeat_y = False
+        self._water_depth_rb = self._ctx.depth_renderbuffer((w, h))
+        self._water_fbo = self._ctx.framebuffer(self._water_color_tex, depth_attachment=self._water_depth_rb)
+        self._water_fbo_size = (w, h)
+
+    def _release_water_fbo(self):
+        for obj in [self._water_fbo, self._water_color_tex, self._water_depth_rb]:
+            if obj:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self._water_fbo = None
+        self._water_color_tex = None
+        self._water_depth_rb = None
+        self._water_fbo_size = (0, 0)
 
     def _ensure_velocity_fbo(self, w: int, h: int):
         if self._velocity_fbo_size == (w, h) and self._velocity_fbo:
@@ -674,6 +707,11 @@ void main() {
                 cloud = ent.get_component(Cloud)
                 if cloud and cloud.enabled:
                     snap.cloud_components.append(cloud)
+        for ent in scene.get_entities_with_component(Water):
+            if ent.active:
+                water = ent.get_component(Water)
+                if water and water.enabled:
+                    snap.water_components.append(water)
         self._sync_probuilder_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         if not needs_shadow:
@@ -695,11 +733,7 @@ void main() {
             scale, cp, fuvs = 1.0, False, False
             mesh_path = mf.mesh_path or ""
             if mesh_path:
-                meta = self._import_meta_cache.get(mesh_path)
-                if meta is None:
-                    meta = (1.0, False, False)
-                    self._import_meta_cache[mesh_path] = meta
-                scale, cp, fuvs = meta
+                scale, cp, fuvs = self._sync_import_meta(mesh_path)
             if not mesh_name and not mesh_path:
                 mesh_name = "cube"
             elif not mesh_name and mesh_path:
@@ -707,7 +741,12 @@ void main() {
             mesh = self.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)
             if mesh:
                 wm = tr.world_matrix
-                snap.renderable.append((ent, tr, mesh, mr, wm))
+                sub_ranges = mesh.sub_mesh_ranges
+                if sub_ranges:
+                    for sub_idx in range(len(sub_ranges)):
+                        snap.renderable.append((ent, tr, mesh, mr, wm, sub_idx))
+                else:
+                    snap.renderable.append((ent, tr, mesh, mr, wm, -1))
                 if needs_shadow and mr.cast_shadows:
                     snap.shadow_renderables.append((mesh, wm))
         for ent in scene.get_entities_with_component(SpriteRenderer):
@@ -809,6 +848,7 @@ void main() {
         sky_component = snap.sky_component
         sky_entity = snap.sky_entity
         cloud_components = snap.cloud_components
+        water_components = snap.water_components
         renderable = snap.renderable
         if prof:
             prof.start("gl_state_setup")
@@ -871,8 +911,7 @@ void main() {
         if prof:
             prof.stop("mesh_async_load")
 
-        renderable = [(ent, tr, mesh, mr, wm, i)
-                       for i, (ent, tr, mesh, mr, wm) in enumerate(renderable)]
+
         self._culled_total = len(renderable) if renderable else 0
         self._culled_visible = self._culled_total
         if renderable:
@@ -915,7 +954,7 @@ void main() {
                 ent, tr, mesh, mr = entry[:4]
                 wm = entry[4]
                 try:
-                    mat = self._materials.load_material(mr.material_path)
+                    mat = self._materials.load_material(mr.get_material_path(0))
                     shader_path = mat.shader_path if mat else ""
                     prog = self._shaders.get_or_compile(shader_path if shader_path else "") or self._default_prog
                     self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=not mr.receive_shadows)
@@ -1025,6 +1064,32 @@ void main() {
             self._grid.render(view_f32, proj_f32, cam_pos, self._clear_color, viewport_h, cam_fov)
             if prof:
                 prof.stop("render_grid")
+        if water_components and self._water_plane:
+            if prof:
+                prof.start("render_water")
+            self._ensure_water_fbo(viewport_w, viewport_h)
+            self._ctx.copy_framebuffer(self._water_fbo, self._scene_fbo)
+            self._water_fbo.use()
+            self._water_fbo.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.enable(moderngl.DEPTH_TEST)
+            self._ctx.enable(moderngl.CULL_FACE)
+            self._ctx.cull_face = 'back'
+            for water_component in water_components:
+                water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
+                                             dir_light, cam_pos, self._water_plane,
+                                             self._scene_color_tex, self._scene_depth_tex,
+                                             (viewport_w, viewport_h), cam_near, cam_far)
+            self._scene_fbo.use()
+            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._ctx.disable(moderngl.DEPTH_TEST)
+            self._pp_copy_prog["u_input_tex"] = 0
+            self._water_color_tex.use(0)
+            self._pp_copy_vao.render()
+            self._ctx.enable(moderngl.DEPTH_TEST)
+            if prof:
+                prof.stop("render_water")
         if cloud_components and self._cloud_plane and self._skybox_enabled:
             if prof:
                 prof.start("render_cloud_layer")
@@ -1324,6 +1389,35 @@ void main() {
             self._ctx.wireframe = old_wireframe
             self._ctx.depth_mask = old_depth_mask
 
+    def _sync_import_meta(self, mesh_path: str) -> tuple:
+        if not mesh_path:
+            return (1.0, False, False)
+        import_cache = mesh_path + ".import"
+        try:
+            mtime = os.path.getmtime(import_cache) if os.path.exists(import_cache) else -1.0
+        except OSError:
+            mtime = -1.0
+        cached_mtime = self._import_meta_mtime.get(mesh_path)
+        if cached_mtime == mtime and mesh_path in self._import_meta_cache:
+            return self._import_meta_cache[mesh_path]
+        self._import_meta_mtime[mesh_path] = mtime
+        if os.path.exists(import_cache):
+            try:
+                with open(import_cache) as _f:
+                    _s = json.load(_f)
+                meta = (_s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False))
+            except Exception:
+                meta = (1.0, False, False)
+        else:
+            meta = (1.0, False, False)
+        old = self._import_meta_cache.get(mesh_path)
+        self._import_meta_cache[mesh_path] = meta
+        if old is not None and old != meta and self._mesh_loader is not None:
+            prefix = mesh_path + "|"
+            for k in [k for k in list(self._mesh_loader._meshes.keys()) if k.startswith(prefix)]:
+                self._mesh_loader._meshes.pop(k, None)
+        return meta
+
     def _preload_import_meta(self, scene):
         paths = set()
         for ent in scene.get_entities_with_component(MeshFilter):
@@ -1331,20 +1425,7 @@ void main() {
             if mf and mf.mesh_path:
                 paths.add(mf.mesh_path)
         for mesh_path in paths:
-            if mesh_path in self._import_meta_cache:
-                continue
-            import_cache = mesh_path + ".import"
-            if os.path.exists(import_cache):
-                try:
-                    with open(import_cache) as _f:
-                        _s = json.load(_f)
-                    self._import_meta_cache[mesh_path] = (
-                        _s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False)
-                    )
-                except Exception:
-                    self._import_meta_cache[mesh_path] = (1.0, False, False)
-            else:
-                self._import_meta_cache[mesh_path] = (1.0, False, False)
+            self._sync_import_meta(mesh_path)
 
     def _lookup_outline_mesh(self, mf) -> Optional[MeshData]:
         if not self._mesh_loader:
@@ -1534,12 +1615,14 @@ void main() {
         caches to avoid reloading all 3D models after play mode toggle."""
         self._normal_cache.clear()
         self._import_meta_cache.clear()
+        self._import_meta_mtime.clear()
 
     def release_all_caches(self):
         """Clear mesh, material and texture caches. Called when loading a
         completely different scene (not on play mode toggle)."""
         self._normal_cache.clear()
         self._import_meta_cache.clear()
+        self._import_meta_mtime.clear()
         if self._materials:
             self._materials.clear_caches()
         if self._mesh_loader:
@@ -1604,6 +1687,7 @@ void main() {
         self._prev_view_proj_by_target.clear()
         self._release_scene_fbo()
         self._release_pp_fbo()
+        self._release_water_fbo()
         if self._batcher:
             self._batcher.release()
         if self._mesh_loader:

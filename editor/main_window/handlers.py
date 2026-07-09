@@ -295,7 +295,7 @@ def _apply_material_to_entity(mw, path: str, entity):
     from core.material import MaterialLibrary
     mat = MaterialLibrary.load(path)
     if mat:
-        mr.material_path = path
+        mr.materials[0]["path"] = path
         Logger.info(f"Applied material {path} to {entity.name}")
 
 
@@ -311,7 +311,7 @@ def _drop_material_on_scene(mw, path: str, world_pos):
     mf.mesh_name = "cube"
     e.add_component(mf)
     mr = MeshRenderer()
-    mr.material_path = path
+    mr.materials[0]["path"] = path
     e.add_component(mr)
     Logger.info(f"Created entity with material {path}")
 
@@ -365,7 +365,7 @@ def _create_material_and_apply(mw, texture_path: str, entity, mr):
     except ValueError:
         rel_path = mat_path
     mat.save(mat_path, mw._engine.project_root)
-    mr.material_path = rel_path
+    mr.materials[0]["path"] = rel_path
     Logger.info(f"Created material {mat_path} and applied to {entity.name}")
 
 

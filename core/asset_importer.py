@@ -203,12 +203,17 @@ def load_mesh(path: str) -> Optional[MeshImportData]:
             all_norms = []
             all_uvs = []
             all_idxs = []
+            ranges = []
+            idx_offset = 0
             for verts, norms, uvs, idxs, nv in mesh_parts:
                 all_verts.append(verts)
                 all_norms.append(norms)
                 all_uvs.append(uvs)
                 if len(idxs) > 0:
-                    all_idxs.append(idxs + vert_offset)
+                    offset_idxs = idxs + vert_offset
+                    ranges.append((idx_offset, len(offset_idxs)))
+                    idx_offset += len(offset_idxs)
+                    all_idxs.append(offset_idxs)
                 vert_offset += nv
             verts_out = np.concatenate(all_verts).reshape(-1, 3)
             norms_out = np.concatenate(all_norms).reshape(-1, 3)
@@ -227,6 +232,7 @@ def load_mesh(path: str) -> Optional[MeshImportData]:
             data.uvs = np.concatenate(all_uvs)
             if all_idxs:
                 data.indices = np.concatenate(all_idxs)
+                data.sub_mesh_ranges = ranges
         if prof: prof.stop("load_mesh")
         return data
     except Exception:
@@ -242,6 +248,7 @@ class MeshImportData:
         self.uvs: np.ndarray = np.array([], dtype=np.float32)
         self.indices: np.ndarray = np.array([], dtype=np.uint32)
         self.is_error_mesh: bool = False
+        self.sub_mesh_ranges: list[tuple[int, int]] = []
 
 
 def load_obj(path: str) -> Optional[MeshImportData]:

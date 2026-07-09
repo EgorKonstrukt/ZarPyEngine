@@ -706,7 +706,7 @@ class BSPImportPlugin(PluginBase):
             entity.add_component(mf)
 
             mr = MeshRenderer()
-            mr.material_path = group.get('_material_abs', '')
+            mr.materials[0]["path"] = group.get('_material_abs', '')
 
             entity.set_parent(root_entity)
             imported_count += 1
@@ -805,7 +805,7 @@ class BSPImportPlugin(PluginBase):
                 entity.add_component(mf)
 
                 mr = MeshRenderer()
-                mr.material_path = group.get('_material_abs', '')
+                mr.materials[0]["path"] = group.get('_material_abs', '')
 
                 entity.set_parent(root_entity)
                 imported_count += 1

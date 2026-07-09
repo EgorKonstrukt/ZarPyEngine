@@ -368,7 +368,7 @@ class MeshEditorPanel(QDockWidget):
             entity.add_component(mr)
         mf.mesh_name = f"ProBuilder_{entity.id[:6]}"
         mf.mesh_path = ""
-        mr.material_path = "assets/materials/ProBuilderPrototype.mat"
+        mr.materials[0]["path"] = "assets/materials/ProBuilderPrototype.mat"
         self._mesh_comp = pb
         self._update_info()
         if self._engine.scene:

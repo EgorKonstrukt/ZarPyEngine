@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 from core.ecs import Component, ComponentRegistry
-from core.components.inspector_meta import FieldType, InspectorField
+from core.components.inspector_meta import FieldType, InspectorField, ListElementField
 @ComponentRegistry.register
 class MeshRenderer(Component):
     _icon = "MeshRenderer.png"
@@ -17,25 +17,42 @@ class MeshRenderer(Component):
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
-            InspectorField("material_path", "Material", FieldType.RESOURCE_PATH, file_filter="Material (*.mat)"),
+            InspectorField("materials", "Materials", FieldType.LIST, element_fields=[
+                ListElementField("path", "Material", FieldType.RESOURCE_PATH, file_filter="Material (*.mat)"),
+            ]),
             InspectorField("cast_shadows", "Cast Shadows", FieldType.BOOL),
             InspectorField("receive_shadows", "Receive Shadows", FieldType.BOOL),
         ]
 
     def __init__(self):
         super().__init__()
-        self.material_path: str = ""
+        self.materials: list[dict] = [{"path": ""}]
         self.cast_shadows: bool = True
         self.receive_shadows: bool = True
+
+    def get_material_path(self, sub_mesh_index: int = 0) -> str:
+        if sub_mesh_index < len(self.materials):
+            return self.materials[sub_mesh_index].get("path", "")
+        if self.materials:
+            return self.materials[-1].get("path", "")
+        return ""
+
     def serialize(self) -> dict:
         d = super().serialize()
-        d.update({"material_path": self.material_path, "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows})
+        d.update({"materials": self.materials, "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows})
         return d
+
     @classmethod
     def deserialize(cls, data: dict) -> MeshRenderer:
         mr = cls()
         mr.enabled = data.get("enabled", True)
-        mr.material_path = data.get("material_path", "") or ""
+        raw = data.get("materials")
+        if raw:
+            mr.materials = raw
+        elif "material_path" in data:
+            mr.materials = [{"path": data.get("material_path", "")}]
+        else:
+            mr.materials = [{"path": ""}]
         mr.cast_shadows = data.get("cast_shadows", True)
         mr.receive_shadows = data.get("receive_shadows", True)
         return mr

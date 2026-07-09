@@ -39,6 +39,7 @@ class MeshData:
         self.aabb_min: np.ndarray = np.array([-0.5, -0.5, -0.5], dtype=np.float32)
         self.aabb_max: np.ndarray = np.array([0.5, 0.5, 0.5], dtype=np.float32)
         self.is_error_mesh: bool = False
+        self.sub_mesh_ranges: list[tuple[int, int]] = []
         self._vao: Optional[Any] = None
         self._vbo: Optional[Any] = None
         self._ibo: Optional[Any] = None
@@ -123,6 +124,15 @@ class MeshData:
                 vao.render()
             except Exception as e:
                 Logger.error("MeshData.render VAO render failed", e)
+
+    def render_range(self, program: moderngl.Program, start: int, count: int):
+        self._build_vao_for_program(program)
+        vao = self._vao_cache.get(id(program))
+        if vao:
+            try:
+                vao.render(vertices=count, first=start)
+            except Exception as e:
+                Logger.error("MeshData.render_range VAO render failed", e)
 
     def build_outline_vao(self, ctx: moderngl.Context, program: moderngl.Program):
         if len(self.vertices) == 0:

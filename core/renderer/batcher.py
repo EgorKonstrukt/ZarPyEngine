@@ -95,13 +95,13 @@ class RenderBatcher:
         for entry in renderables:
             ent, tr, mesh, mr = entry[:4]
             wm = entry[4] if len(entry) > 4 else tr.world_matrix
-            orig_idx = entry[5] if len(entry) > 5 else -1
-            mat = materials.load_material(mr.material_path)
+            sub_idx = entry[5] if len(entry) > 5 else -1
+            mat = materials.load_material(mr.get_material_path(sub_idx))
             shader_path = mat.shader_path if mat else ""
             prog = shaders.get_or_compile(shader_path) or self._default_prog
             mat_key = id(mat) if mat else id(self._MAT_NONE)
-            key = (id(prog), mat_key, id(mesh), mr.receive_shadows)
-            groups[key].append((ent, tr, mesh, mr, mat, prog, wm, orig_idx))
+            key = (id(prog), mat_key, id(mesh), mr.receive_shadows, sub_idx)
+            groups[key].append((ent, tr, mesh, mr, mat, prog, wm, sub_idx))
         return groups
 
     def _ensure_index_buffer(self, n: int) -> moderngl.Buffer:
@@ -142,7 +142,7 @@ class RenderBatcher:
                       selected_entities: set, outline_queue: list,
                       gpu_storage=None):
         self.reset_stats()
-        for (prog_id, mat_path, mesh_id, receive_shadows), group in groups.items():
+        for (prog_id, mat_path, mesh_id, receive_shadows, sub_idx), group in groups.items():
             _, _, mesh, _, mat, prog, _, _ = group[0]
             self._stats_batches += 1
             n = len(group)
@@ -177,7 +177,7 @@ class RenderBatcher:
         world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
 
         if world_ssbo is not None:
-            indices = np.array([item[-1] for item in group], dtype=np.uint32)
+            indices = np.array(range(len(group)), dtype=np.uint32)
             idx_buf = self._ensure_index_buffer(len(indices))
             idx_buf.write(indices.tobytes())
             world_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
@@ -202,7 +202,13 @@ class RenderBatcher:
         else:
             apply_material_fn(mat, prog)
 
-        vao.render(instances=len(group))
+        sub_idx = group[0][7]
+        ranges = mesh.sub_mesh_ranges
+        if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+            start, count = ranges[sub_idx]
+            vao.render(instances=len(group), vertices=count, first=start)
+        else:
+            vao.render(instances=len(group))
         self._stats_draw_calls += 1
         self._stats_instanced += len(group)
 
@@ -218,7 +224,7 @@ class RenderBatcher:
                        apply_material_fn, normal_cache,
                        selected_entities, outline_queue):
         self._stats_draw_calls += 1
-        ent, tr, _, _, _, _, wm, _ = item
+        ent, tr, _, _, _, _, wm, sub_idx = item
         if "u_use_instancing" in prog:
             prog["u_use_instancing"].value = 0
         set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
@@ -244,7 +250,12 @@ class RenderBatcher:
                 prog["u_albedo_color"].write(np.array([r, 0.0, 0.0, 0.8], dtype=np.float32).tobytes())
         else:
             apply_material_fn(mat, prog)
-        mesh.render(prog)
+        ranges = mesh.sub_mesh_ranges
+        if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+            start, count = ranges[sub_idx]
+            mesh.render_range(prog, start, count)
+        else:
+            mesh.render(prog)
         if selected_entities and ent in selected_entities:
             outline_queue.append((mesh, wm))
 

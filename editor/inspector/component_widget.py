@@ -994,7 +994,7 @@ class ComponentWidget(QWidget):
                     setattr(self._component, pn, items)
             combo.currentTextChanged.connect(on_change)
             return combo
-        elif ef.field_type.value == "resource":
+        elif ef.field_type.value == "resource" or ef.field_type.value == "resource_path":
             path = val.get(ef.name, "") if isinstance(val, dict) else ""
             filter_str = ef.file_filter or "All Files (*)"
             def on_change(t, idx=index, pn=prop_name, fn=ef.name):
