@@ -18,6 +18,7 @@ class GraphicsEffect(Component):
     render_type: str = "additive"
     _skip_rate: int = 0
     _intensity_prop: str = ""
+    _use_velocity: bool = False
     _frame_counter: int = 0
 
     @classmethod
@@ -59,7 +60,10 @@ class GraphicsEffect(Component):
                cam_pos: Vec3,
                viewport_w: int, viewport_h: int,
                input_tex: Optional[moderngl.Texture] = None,
-               output_fbo: Optional[moderngl.Framebuffer] = None):
+               output_fbo: Optional[moderngl.Framebuffer] = None,
+               velocity_tex: Optional[moderngl.Texture] = None,
+               prev_view_proj: Optional[Mat4] = None,
+               **kwargs):
         pass
 
     @classmethod

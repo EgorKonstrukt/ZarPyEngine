@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import time
 import numpy as np
 import moderngl
 from typing import Any, Optional
@@ -193,7 +194,13 @@ class RenderBatcher:
 
         set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
                               disable_shadows=disable_shadows)
-        apply_material_fn(mat, prog)
+        if mesh.is_error_mesh:
+            apply_material_fn(None, prog)
+            r = 0.1 + 0.9 * abs(np.sin(time.perf_counter() * 3.0))
+            if "u_albedo_color" in prog:
+                prog["u_albedo_color"].write(np.array([r, 0.0, 0.0, 0.8], dtype=np.float32).tobytes())
+        else:
+            apply_material_fn(mat, prog)
 
         vao.render(instances=len(group))
         self._stats_draw_calls += 1
@@ -230,7 +237,13 @@ class RenderBatcher:
                 nm = np.eye(3, dtype=np.float32).T
         if "u_normal_matrix" in prog:
             prog["u_normal_matrix"].write(nm.tobytes())
-        apply_material_fn(mat, prog)
+        if mesh.is_error_mesh:
+            apply_material_fn(None, prog)
+            r = 0.1 + 0.9 * abs(np.sin(time.perf_counter() * 3.0))
+            if "u_albedo_color" in prog:
+                prog["u_albedo_color"].write(np.array([r, 0.0, 0.0, 0.8], dtype=np.float32).tobytes())
+        else:
+            apply_material_fn(mat, prog)
         mesh.render(prog)
         if selected_entities and ent in selected_entities:
             outline_queue.append((mesh, wm))

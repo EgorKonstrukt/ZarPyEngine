@@ -38,6 +38,7 @@ class MeshData:
         self.uvs: np.ndarray = np.array([], dtype=np.float32)
         self.aabb_min: np.ndarray = np.array([-0.5, -0.5, -0.5], dtype=np.float32)
         self.aabb_max: np.ndarray = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        self.is_error_mesh: bool = False
         self._vao: Optional[Any] = None
         self._vbo: Optional[Any] = None
         self._ibo: Optional[Any] = None

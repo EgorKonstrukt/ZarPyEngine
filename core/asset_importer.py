@@ -241,6 +241,7 @@ class MeshImportData:
         self.normals: np.ndarray = np.array([], dtype=np.float32)
         self.uvs: np.ndarray = np.array([], dtype=np.float32)
         self.indices: np.ndarray = np.array([], dtype=np.uint32)
+        self.is_error_mesh: bool = False
 
 
 def load_obj(path: str) -> Optional[MeshImportData]:

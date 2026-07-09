@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 import os
-import json
 import numpy as np
 import threading
 from typing import Optional
@@ -17,6 +16,8 @@ from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_me
 from core.pool import asset as _get_asset_pool
 
 _MAX_PENDING_PER_FRAME = 6
+
+_ERROR_MESH_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "3d_models", "ERRORText.fbx"))
 
 
 def _deferred_call(cb):
@@ -150,15 +151,15 @@ class MeshLoader:
         m.normals = import_data.normals.copy()
         m.uvs = import_data.uvs.copy()
         m.indices = import_data.indices.copy()
+        m.is_error_mesh = import_data.is_error_mesh
         return m
 
     def _load_async(self, key: str, file_path: str, cache_key: str,
                     scale: float, cp: bool, fuvs: bool):
         path = self._resolve_path(key, file_path)
         if not path:
-            self._pending_cache_keys.discard(cache_key)
-            self._on_async_load_complete()
-            return
+            Logger.warning(f"Mesh not found: {key}, using error fallback")
+            path = _ERROR_MESH_PATH
         from core.asset_importer import load_obj_future, load_mesh_future
         lower_path = path.lower()
 
@@ -167,6 +168,22 @@ class MeshLoader:
                 import_data = fut.result()
             except Exception:
                 import_data = None
+            is_error = (path == _ERROR_MESH_PATH)
+            if not is_error and (import_data is None or len(import_data.vertices) == 0):
+                Logger.warning(f"Failed to load mesh, falling back to error mesh")
+                from core.asset_importer import load_mesh
+                import_data = load_mesh(_ERROR_MESH_PATH)
+                is_error = True
+            if is_error and import_data is not None and len(import_data.vertices) > 0:
+                verts = import_data.vertices.reshape(-1, 3).astype(np.float32)
+                norms = import_data.normals.reshape(-1, 3).astype(np.float32)
+                rot = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+                verts = verts @ rot.T
+                norms = norms @ rot.T
+                s = np.array([0.25 / 9.0, 1.0 / 9.0, 1.0 / 9.0], dtype=np.float32)
+                import_data.vertices = (verts * s).ravel().astype(np.float32)
+                import_data.normals = norms.ravel().astype(np.float32)
+                import_data.is_error_mesh = True
             with self._async_lock:
                 self._pending_mesh_queue.append((cache_key, import_data, scale, cp, fuvs))
             self._on_async_load_complete()

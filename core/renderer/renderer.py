@@ -212,6 +212,16 @@ class Renderer:
         self._pp_copy_prog: Optional[moderngl.Program] = None
         self._pp_copy_vao: Optional[moderngl.VertexArray] = None
 
+        self._velocity_tex: Optional[moderngl.Texture] = None
+        self._velocity_fbo: Optional[moderngl.Framebuffer] = None
+        self._velocity_depth: Optional[moderngl.Renderbuffer] = None
+        self._velocity_prog: Optional[moderngl.Program] = None
+        self._velocity_vao: Optional[moderngl.VertexArray] = None
+        self._velocity_geom_prog: Optional[moderngl.Program] = None
+        self._prev_view_proj_by_target: dict[int, Mat4] = {}
+        self._prev_model_by_entity: dict[int, Mat4] = {}
+        self._velocity_fbo_size: tuple = (0, 0)
+
         self._grid: Optional[GridRenderer] = None
         self._gizmo: Optional[GizmoRenderer] = None
         self._shadows: Optional[ShadowRenderer] = None
@@ -341,6 +351,76 @@ void main() {
                 [(self._quad_vbo, '2f', 'in_position')],
                 self._quad_ibo
             )
+            VELOCITY_FRAG = """
+#version 460 core
+uniform sampler2D u_depth_tex;
+uniform mat4 u_inv_view_proj;
+uniform mat4 u_prev_view_proj;
+uniform vec2 u_pixel_size;
+in vec2 v_uv;
+out vec2 frag_velocity;
+void main() {
+    float depth = texture(u_depth_tex, v_uv).r;
+    if (depth >= 0.99999) {
+        frag_velocity = vec2(0.0);
+        return;
+    }
+    vec4 clip_pos = vec4(v_uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    vec4 world_pos = u_inv_view_proj * clip_pos;
+    world_pos /= world_pos.w;
+    vec4 prev_clip = u_prev_view_proj * world_pos;
+    vec2 prev_uv = prev_clip.xy / prev_clip.w * 0.5 + 0.5;
+    vec2 velocity = v_uv - prev_uv;
+    if (isnan(velocity.x) || isnan(velocity.y) || isinf(velocity.x) || isinf(velocity.y)) {
+        frag_velocity = vec2(0.0);
+        return;
+    }
+    float max_v = 64.0 * max(u_pixel_size.x, u_pixel_size.y);
+    velocity = clamp(velocity, -vec2(max_v), vec2(max_v));
+    frag_velocity = velocity;
+}
+"""
+            self._velocity_prog = self._ctx.program(
+                vertex_shader=read_shader("shadow_overlay.vert"),
+                fragment_shader=VELOCITY_FRAG
+            )
+            self._velocity_vao = self._ctx.vertex_array(
+                self._velocity_prog,
+                [(self._quad_vbo, '2f', 'in_position')],
+                self._quad_ibo
+            )
+            VELOCITY_GEOM_VERT = """
+#version 460 core
+in vec3 in_position;
+uniform mat4 u_view_proj;
+uniform mat4 u_prev_view_proj;
+uniform mat4 u_model;
+uniform mat4 u_prev_model;
+out vec2 v_velocity;
+void main() {
+    vec4 cur_clip = u_view_proj * u_model * vec4(in_position, 1.0);
+    vec4 prev_clip = u_prev_view_proj * u_prev_model * vec4(in_position, 1.0);
+    vec2 cur_ndc = cur_clip.xy / cur_clip.w;
+    vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+    v_velocity = (prev_ndc - cur_ndc) * 0.5;
+    gl_Position = cur_clip;
+}
+"""
+            VELOCITY_GEOM_FRAG = """
+#version 460 core
+in vec2 v_velocity;
+out vec2 frag_velocity;
+void main() {
+    vec2 vel = v_velocity;
+    if (isnan(vel.x) || isnan(vel.y) || isinf(vel.x) || isinf(vel.y))
+        vel = vec2(0.0);
+    frag_velocity = vel;
+}
+"""
+            self._velocity_geom_prog = self._ctx.program(
+                vertex_shader=VELOCITY_GEOM_VERT,
+                fragment_shader=VELOCITY_GEOM_FRAG
+            )
             self._projector_vao = self._ctx.vertex_array(
                 self._projector_prog,
                 [(self._quad_vbo, '2f', 'in_position')],
@@ -442,6 +522,29 @@ void main() {
         self._pp_fbo_b = None
         self._pp_color_tex_b = None
         self._pp_fbo_size = (0, 0)
+
+    def _ensure_velocity_fbo(self, w: int, h: int):
+        if self._velocity_fbo_size == (w, h) and self._velocity_fbo:
+            return
+        self._release_velocity_fbo()
+        self._velocity_tex = self._ctx.texture((w, h), 2, dtype='f2')
+        self._velocity_tex.repeat_x = False
+        self._velocity_tex.repeat_y = False
+        self._velocity_depth = self._ctx.depth_renderbuffer((w, h))
+        self._velocity_fbo = self._ctx.framebuffer(self._velocity_tex, depth_attachment=self._velocity_depth)
+        self._velocity_fbo_size = (w, h)
+
+    def _release_velocity_fbo(self):
+        for obj in [self._velocity_fbo, self._velocity_tex, self._velocity_depth]:
+            if obj:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self._velocity_fbo = None
+        self._velocity_tex = None
+        self._velocity_depth = None
+        self._velocity_fbo_size = (0, 0)
 
     def _set_overlay_uniforms(self, overlay_prog, view_f32, inv_vp_f32):
         overlay_prog["u_inv_vp"].write(inv_vp_f32.tobytes())
@@ -735,8 +838,9 @@ void main() {
         if prof:
             prof.stop("gl_state_setup")
         self._ensure_scene_fbo(viewport_w, viewport_h)
-        self._scene_fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
+        self._ctx.disable(moderngl.BLEND)
         self._scene_fbo.use()
+        self._scene_fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
         aspect = viewport_w / max(1, viewport_h)
         if prof:
             prof.start("render_shadow_pass")
@@ -1006,11 +1110,56 @@ void main() {
                 self._vertices_drawn += len(mesh.vertices) // 3
         if prof:
             prof.stop("render_stats")
+        _pv_key = id(fbo) if fbo is not None else 0
+        prev_view_proj = self._prev_view_proj_by_target.get(_pv_key)
+        self._prev_view_proj_by_target[_pv_key] = proj_mat @ view_mat
         if GraphicsEffect._registry and not self._effects_disabled:
             GraphicsEffect.increment_frame()
             if prof:
                 prof.start("render_graphics_effects")
             self._ctx.disable(moderngl.DEPTH_TEST)
+
+            has_velocity_effects = any(
+                getattr(e, '_use_velocity', False) for e in GraphicsEffect._registry
+                if e.enabled and e.entity and e.entity.active
+            )
+            velocity_tex = None
+            if has_velocity_effects and renderable and prev_view_proj is not None and self._velocity_geom_prog:
+                try:
+                    self._ensure_velocity_fbo(viewport_w, viewport_h)
+                    self._velocity_fbo.use()
+                    self._velocity_fbo.viewport = (0, 0, viewport_w, viewport_h)
+                    self._velocity_fbo.clear(red=0.0, green=0.0, depth=1.0)
+                    self._ctx.enable(moderngl.DEPTH_TEST)
+                    self._ctx.enable(moderngl.CULL_FACE)
+                    self._ctx.cull_face = 'back'
+                    cur_vp = proj_mat @ view_mat
+                    prog = self._velocity_geom_prog
+                    prog["u_view_proj"].write(cur_vp.to_f32().tobytes())
+                    prog["u_prev_view_proj"].write(prev_view_proj.to_f32().tobytes())
+                    for entry in renderable:
+                        ent = entry[0]
+                        wm = entry[4]
+                        mesh = entry[2]
+                        prev_model = self._prev_model_by_entity.get(id(ent))
+                        if prev_model is None:
+                            continue
+                        prog["u_model"].write(wm.to_f32().tobytes())
+                        prog["u_prev_model"].write(prev_model.to_f32().tobytes())
+                        mesh.render(prog)
+                    for entry in renderable:
+                        ent = entry[0]
+                        wm = entry[4]
+                        self._prev_model_by_entity[id(ent)] = wm
+                    velocity_tex = self._velocity_tex
+                    self._scene_fbo.use()
+                    self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
+                    self._ctx.disable(moderngl.DEPTH_TEST)
+                except Exception as e:
+                    Logger.error(f"Velocity geometry pass error: {e}")
+                    import traceback; traceback.print_exc()
+                    velocity_tex = None
+
             additive_effects = []
             screen_effects = []
             for e in list(GraphicsEffect._registry):
@@ -1024,20 +1173,29 @@ void main() {
                     additive_effects.append(e)
             for effect in additive_effects:
                 try:
+                    extra = {}
+                    if getattr(effect, '_use_velocity', False):
+                        extra['velocity_tex'] = velocity_tex
+                        extra['prev_view_proj'] = prev_view_proj
                     effect.render(self._ctx, self._scene_color_tex, self._scene_depth_tex,
-                                  view_mat, proj_mat, cam_pos, viewport_w, viewport_h)
+                                  view_mat, proj_mat, cam_pos, viewport_w, viewport_h,
+                                  **extra)
                 except Exception as e:
                     Logger.error(f"GraphicsEffect.render error: {e}")
             if screen_effects:
                 self._ensure_pp_fbo(viewport_w, viewport_h)
-                if fbo is not None:
-                    self._ctx.copy_framebuffer(self._pp_fbo_a, fbo)
-                else:
-                    self._pp_fbo_a.use()
-                    self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
-                    self._pp_copy_prog["u_input_tex"] = 0
-                    self._scene_color_tex.use(0)
-                    self._pp_copy_vao.render()
+                self._ctx.disable(moderngl.BLEND)
+                self._pp_fbo_a.use()
+                self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
+                self._pp_fbo_a.clear(0.0, 0.0, 0.0, 0.0, 1.0)
+                self._pp_fbo_b.use()
+                self._pp_fbo_b.viewport = (0, 0, viewport_w, viewport_h)
+                self._pp_fbo_b.clear(0.0, 0.0, 0.0, 0.0, 1.0)
+                self._pp_fbo_a.use()
+                self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
+                self._pp_copy_prog["u_input_tex"] = 0
+                self._scene_color_tex.use(0)
+                self._pp_copy_vao.render()
                 src_fbo = self._pp_fbo_a
                 dst_fbo = self._pp_fbo_b
                 src_tex = self._pp_color_tex_a
@@ -1047,9 +1205,14 @@ void main() {
                     try:
                         if prof:
                             prof.start(f"effect_{effect.__class__.__name__}")
+                        extra = {}
+                        if getattr(effect, '_use_velocity', False):
+                            extra['velocity_tex'] = velocity_tex
+                            extra['prev_view_proj'] = prev_view_proj
                         effect.render(self._ctx, self._scene_color_tex, self._scene_depth_tex,
                                       view_mat, proj_mat, cam_pos, viewport_w, viewport_h,
-                                      input_tex=src_tex, output_fbo=dst_fbo)
+                                      input_tex=src_tex, output_fbo=dst_fbo,
+                                      **extra)
                         if prof:
                             time_elapsed = prof.stop(f"effect_{effect.__class__.__name__}")
                             if time_elapsed is not None and time_elapsed > 0.01:
@@ -1071,6 +1234,7 @@ void main() {
                 self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             if prof:
                 prof.stop("render_graphics_effects")
+
         if prof:
             prof.start("render_text")
         if self._text and scene:
@@ -1436,6 +1600,8 @@ void main() {
             del self._pb_scale_cache[k]
 
     def release(self):
+        GraphicsEffect.cleanup_registry()
+        self._prev_view_proj_by_target.clear()
         self._release_scene_fbo()
         self._release_pp_fbo()
         if self._batcher:
@@ -1485,13 +1651,20 @@ void main() {
                 self._projector_vao.release()
             except Exception:
                 pass
+        if self._velocity_vao:
+            try:
+                self._velocity_vao.release()
+            except Exception:
+                pass
+        self._release_velocity_fbo()
         if self._gpu_storage:
             self._gpu_storage.release()
         for prog in [self._default_prog, self._grid_prog, self._gizmo_prog,
                      self._wireframe_prog, self._outline_prog,
                      self._gizmo_fatline_prog, self._gizmo_solid_prog,
                      self._shadow_prog, self._particle_prog, self._icon_prog, self._sprite_prog,
-                     self._text_prog, self._overlay_prog, self._projector_prog, self._pp_copy_prog]:
+                     self._text_prog, self._overlay_prog, self._projector_prog, self._pp_copy_prog,
+                     self._velocity_prog]:
             if prog:
                 try:
                     prog.release()
