@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from typing import Optional, Callable
 from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSpinBox, QSlider, QDialog, QFileDialog, \
-    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect
+    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect, QStyle
 from PyQt6.QtCore import Qt, QObject, QEvent, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as QF
 from core.editor_scale import scale, scale_xy
@@ -179,6 +179,42 @@ def update_resource_icon(icon_lbl: QLabel, path: str, size: int):
     icon_lbl.clear()
     icon_lbl.setText("")
 
+_COMMON_EXT = (".fbx", ".obj", ".stl", ".gltf", ".glb", ".usdz",
+               ".png", ".jpg", ".jpeg", ".bmp", ".tga",
+               ".wav", ".mp3", ".ogg",
+               ".py",
+               ".mat",
+               ".shader", ".vert", ".frag")
+
+def _is_path_valid(p: str) -> bool:
+    if not p:
+        return False
+    p = os.path.normpath(p)
+    if os.path.exists(p):
+        return True
+    for ext in _COMMON_EXT:
+        if os.path.exists(p + ext):
+            return True
+    try:
+        from core.engine import Engine
+        eng = Engine.instance()
+        if eng and eng.project_root:
+            root = eng.project_root
+            for ext in ("",) + _COMMON_EXT:
+                if os.path.exists(os.path.normpath(os.path.join(root, p + ext))):
+                    return True
+    except Exception:
+        pass
+    return False
+
+_ERROR_STYLE = """
+    QLabel {
+        background: #3d1a1a; color: #f44747;
+        border: 1px solid #f44747; border-radius: 2px;
+        padding: 2px 4px; font-size: 11px;
+    }
+"""
+
 def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], None]) -> QWidget:
     from editor.resource_picker import pick_resource
     w = QWidget()
@@ -188,24 +224,31 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     name = os.path.basename(path) if path else ""
     icon_lbl = QLabel()
     icon_lbl.setFixedSize(*scale_xy(20, 20))
-    update_resource_icon(icon_lbl, path, 20)
     layout.addWidget(icon_lbl)
     def _on_resource_drop(p: str):
         _update_display(p)
     name_lbl = _ResourceDropLabel(_on_resource_drop, name if name else "None")
     name_lbl.setMinimumHeight(22)
-    name_lbl.setToolTip(path if path else "No resource selected")
     name_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
     name_lbl.installEventFilter(_NavFilter(lambda: _flash_resource(name_lbl), lambda: _navigate_resource(name_lbl), name_lbl))
     layout.addWidget(name_lbl, 1)
-    def _update_display(p: str):
-        nonlocal name
-        new_name = os.path.basename(p) if p else ""
-        name_lbl.setText(new_name if new_name else "None")
+    def _apply_state(p: str):
+        name_lbl.setText(os.path.basename(p) if p else "None")
         name_lbl.setToolTip(p if p else "No resource selected")
-        update_resource_icon(icon_lbl, p, 20)
+        if _is_path_valid(p):
+            name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
+            update_resource_icon(icon_lbl, p, 20)
+        else:
+            name_lbl.setStyleSheet(_ERROR_STYLE)
+            if p:
+                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+            else:
+                update_resource_icon(icon_lbl, p, 20)
+    def _update_display(p: str):
+        _apply_state(p)
         clear_btn.setVisible(bool(p))
         callback(p)
+    _apply_state(path)
     btn = QPushButton("\u25CB")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip("Pick Resource")
