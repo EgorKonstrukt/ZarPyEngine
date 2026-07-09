@@ -16,12 +16,14 @@ from core.components.lighting.light import Light
 
 
 _DEFAULT_WAVES = [
-    {"direction": 0.0,   "amplitude": 0.35, "wavelength": 24.0, "speed": 1.0, "steepness": 0.50},
-    {"direction": 45.0,  "amplitude": 0.22, "wavelength": 14.0, "speed": 1.1, "steepness": 0.55},
-    {"direction": 110.0, "amplitude": 0.13, "wavelength": 8.0,  "speed": 1.2, "steepness": 0.60},
-    {"direction": 200.0, "amplitude": 0.08, "wavelength": 5.0,  "speed": 1.3, "steepness": 0.65},
-    {"direction": 300.0, "amplitude": 0.05, "wavelength": 3.2,  "speed": 1.4, "steepness": 0.70},
-    {"direction": 30.0,  "amplitude": 0.03, "wavelength": 1.8,  "speed": 1.5, "steepness": 0.80},
+    {"direction": 12.0,  "amplitude": 0.30, "wavelength": 31.0, "speed": 0.9, "steepness": 0.42},
+    {"direction": 57.0,  "amplitude": 0.21, "wavelength": 19.0, "speed": 1.0, "steepness": 0.48},
+    {"direction": 103.0, "amplitude": 0.14, "wavelength": 12.0, "speed": 1.1, "steepness": 0.55},
+    {"direction": 149.0, "amplitude": 0.10, "wavelength": 8.0,  "speed": 1.2, "steepness": 0.60},
+    {"direction": 201.0, "amplitude": 0.07, "wavelength": 5.4,  "speed": 1.3, "steepness": 0.62},
+    {"direction": 256.0, "amplitude": 0.045, "wavelength": 3.6, "speed": 1.4, "steepness": 0.68},
+    {"direction": 309.0, "amplitude": 0.028, "wavelength": 2.4, "speed": 1.5, "steepness": 0.72},
+    {"direction": 338.0, "amplitude": 0.018, "wavelength": 1.5, "speed": 1.6, "steepness": 0.78},
 ]
 
 

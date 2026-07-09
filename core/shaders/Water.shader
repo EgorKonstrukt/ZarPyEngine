@@ -4,7 +4,6 @@
 //
 // Copyright (c) 2026 Zarrakun
 //
-// Water shader (Unity 6-style realistic water surface).
 //
 // This is the DEFAULT water material and also serves as the reference for
 // writing CUSTOM water shaders. Any .shader file assigned to the Water
@@ -27,11 +26,13 @@
 //   _FoamColor              vec3
 //   _SSSColor               vec3    subsurface scattering tint
 //   _HorizonColor           vec3    ocean distance fade color
-//   _Smoothness             float  specular sharpness
+//   _Smoothness             float  specular sharpness (0..1)
 //   _Distortion             float  refraction distortion amount
 //   _NormalStrength         float  micro-detail normal strength
 //   _WaveTiling             float  detail normal tiling frequency
-//   _RefractStrength        float  how strongly deep color tints refraction
+//   _WarpAmount             float  domain-warp strength (breaks repetition)
+//   _DetailSpeed            float  detail ripple scroll speed
+//   _RefractStrength        float  how strongly deep/shallow color tints refraction
 //   _FresnelPower           float  fresnel exponent
 //   _FoamStrength           float  crest + shore foam amount
 //   _Specular               float  sun specular intensity
@@ -48,18 +49,20 @@ Shader "Zarin/Water"
 {
     Properties
     {
-        _DeepColor("Deep Color", Color) = (0.02, 0.18, 0.28, 1)
-        _ShallowColor("Shallow Color", Color) = (0.10, 0.42, 0.52, 1)
+        _DeepColor("Deep Color", Color) = (0.015, 0.13, 0.22, 1)
+        _ShallowColor("Shallow Color", Color) = (0.13, 0.46, 0.52, 1)
         _FoamColor("Foam Color", Color) = (0.92, 0.97, 1.0, 1)
         _SSSColor("SSS Color", Color) = (0.0, 0.55, 0.45, 1)
         _HorizonColor("Horizon Color", Color) = (0.62, 0.78, 0.86, 1)
-        _Smoothness("Smoothness", Float) = 0.96
-        _Distortion("Distortion", Float) = 0.04
-        _NormalStrength("Normal Strength", Float) = 0.35
-        _WaveTiling("Wave Tiling", Float) = 0.25
-        _RefractStrength("Refraction Tint", Float) = 0.55
-        _FresnelPower("Fresnel Power", Float) = 4.0
-        _FoamStrength("Foam Strength", Float) = 1.0
+        _Smoothness("Smoothness", Float) = 0.92
+        _Distortion("Distortion", Float) = 0.035
+        _NormalStrength("Normal Strength", Float) = 0.55
+        _WaveTiling("Wave Tiling", Float) = 0.6
+        _WarpAmount("Domain Warp", Float) = 1.6
+        _DetailSpeed("Detail Speed", Float) = 1.0
+        _RefractStrength("Refraction Tint", Float) = 0.6
+        _FresnelPower("Fresnel Power", Float) = 5.0
+        _FoamStrength("Foam Strength", Float) = 0.9
         _Specular("Specular", Float) = 1.0
         _ShoreFade("Shore Fade", Float) = 3.0
     }
@@ -83,17 +86,27 @@ Shader "Zarin/Water"
             uniform int _WaveCount;
             uniform vec2 _WaveDirection[MAX_WAVES];
             uniform vec4 _WaveParams[MAX_WAVES];
+            uniform float _WarpAmount;
 
             out vec3 v_world_pos;
             out vec3 v_normal;
             out vec2 v_screen_uv;
+            out vec2 v_detail_coord;
             out float v_crest;
 
             const float G = 9.81;
 
+            vec2 domain_warp(vec2 p, float t) {
+                vec2 w;
+                w.x = sin(p.x * 0.017 + t * 0.05) + sin(p.y * 0.023 - t * 0.041);
+                w.y = cos(p.y * 0.019 + t * 0.045) + cos(p.x * 0.027 + t * 0.033);
+                return w * _WarpAmount;
+            }
+
             void main() {
                 vec3 world = (u_model * vec4(in_position, 1.0)).xyz;
                 vec2 p = world.xz;
+                vec2 wp = p + domain_warp(p, _Time);
 
                 vec3 disp = vec3(0.0);
                 vec3 tangent = vec3(1.0, 0.0, 0.0);
@@ -108,7 +121,7 @@ Shader "Zarin/Water"
                     float steep = _WaveParams[i].w;
                     float k = 6.2831853 / wlen;
                     float c = sqrt(G / k);
-                    float f = k * (dot(d, p) - c * speed * _Time);
+                    float f = k * (dot(d, wp) - c * speed * _Time);
                     float a = amp;
                     float q = steep / (k * a * float(_WaveCount) + 1e-4);
                     float cosf = cos(f);
@@ -124,6 +137,7 @@ Shader "Zarin/Water"
                 world += disp;
                 v_world_pos = world;
                 v_crest = disp.y;
+                v_detail_coord = wp;
                 vec3 n = normalize(cross(binormal, tangent));
                 v_normal = n;
 
@@ -139,6 +153,7 @@ Shader "Zarin/Water"
             in vec3 v_world_pos;
             in vec3 v_normal;
             in vec2 v_screen_uv;
+            in vec2 v_detail_coord;
             in float v_crest;
             out vec4 frag_color;
 
@@ -158,6 +173,7 @@ Shader "Zarin/Water"
             uniform float _Distortion;
             uniform float _NormalStrength;
             uniform float _WaveTiling;
+            uniform float _DetailSpeed;
             uniform float _RefractStrength;
             uniform float _FresnelPower;
             uniform float _FoamStrength;
@@ -185,15 +201,32 @@ Shader "Zarin/Water"
                 float d = hash(i + vec2(1.0, 1.0));
                 return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
             }
-            vec3 detail_normal(vec2 uv, float t) {
-                float e = 0.05;
-                float n1 = vnoise(uv * 6.0 + vec2(t * 0.6, 0.0));
-                float n2 = vnoise(uv * 13.0 - vec2(0.0, t * 0.5));
-                float nx = vnoise(uv * 8.0 + vec2(t * 0.3, 0.0) + vec2(e, 0.0)) - vnoise(uv * 8.0 + vec2(t * 0.3, 0.0) - vec2(e, 0.0));
-                float nz = vnoise(uv * 8.0 + vec2(0.0, t * 0.3) + vec2(0.0, e)) - vnoise(uv * 8.0 + vec2(0.0, t * 0.3) - vec2(0.0, e));
-                vec3 nrm = normalize(vec3(-nx, 1.0, -nz));
-                nrm.xy *= _NormalStrength;
-                return nrm;
+            float fbm(vec2 p) {
+                float v = 0.0;
+                float amp = 0.5;
+                mat2 rot = mat2(0.8, -0.6, 0.6, 0.8);
+                for (int i = 0; i < 4; i++) {
+                    v += amp * vnoise(p);
+                    p = rot * p * 2.02 + 7.3;
+                    amp *= 0.5;
+                }
+                return v;
+            }
+            // Multi-octave detail normal in warped space (kills the tiling look).
+            vec3 detail_normal(vec2 coord, float t) {
+                float e = 0.12;
+                vec2 a = coord * 3.0 + vec2(t * 0.35, t * 0.22);
+                vec2 b = coord * 6.5 - vec2(t * 0.19, t * 0.31);
+                vec2 c = coord * 12.0 + vec2(t * 0.27, -t * 0.17);
+                float hx = fbm(a + vec2(e, 0.0)) - fbm(a - vec2(e, 0.0))
+                        + 0.6 * (fbm(b + vec2(e, 0.0)) - fbm(b - vec2(e, 0.0)))
+                        + 0.3 * (fbm(c + vec2(e, 0.0)) - fbm(c - vec2(e, 0.0)));
+                float hz = fbm(a + vec2(0.0, e)) - fbm(a - vec2(0.0, e))
+                        + 0.6 * (fbm(b + vec2(0.0, e)) - fbm(b - vec2(0.0, e)))
+                        + 0.3 * (fbm(c + vec2(0.0, e)) - fbm(c - vec2(0.0, e)));
+                vec3 n = normalize(vec3(-hx, 1.0, -hz));
+                n.xy *= _NormalStrength;
+                return n;
             }
             float linearize_depth(float d) {
                 float z_n = 2.0 * d - 1.0;
@@ -202,27 +235,39 @@ Shader "Zarin/Water"
             vec3 sky_tint(vec3 dir) {
                 float h = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
                 vec3 horizon = _HorizonColor;
-                vec3 zenith = vec3(0.18, 0.40, 0.85);
-                return mix(horizon, zenith, pow(h, 0.6));
+                vec3 zenith = vec3(0.16, 0.38, 0.82);
+                vec3 sky = mix(horizon, zenith, pow(h, 0.55));
+                float sun = max(dot(normalize(dir), normalize(_SunDirection)), 0.0);
+                sky += _SunColor * _SunIntensity * pow(sun, 200.0) * 0.8;
+                return sky;
             }
 
             void main() {
                 vec3 N = normalize(v_normal);
-                vec3 dn = detail_normal(v_world_pos.xz * _WaveTiling, _Time);
+                vec3 dn = detail_normal(v_detail_coord * _WaveTiling, _Time * _DetailSpeed);
                 N = normalize(N + vec3(dn.x, 0.0, dn.z));
 
                 vec3 V = normalize(u_camera_pos - v_world_pos);
-                float fres = pow(clamp(1.0 - max(dot(N, V), 0.0), 0.0, 1.0), _FresnelPower);
-                fres = mix(0.02, 1.0, fres);
+                float ndv = max(dot(N, V), 0.0);
+                float fres = 0.02 + 0.98 * pow(1.0 - ndv, _FresnelPower);
+
+                // Water body color from depth (shallow -> deep)
+                float depthT = 1.0;
+                if (_HasScene == 1) {
+                    float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
+                    float water_d = linearize_depth(gl_FragCoord.z);
+                    depthT = clamp((scene_d - water_d) / 8.0, 0.0, 1.0);
+                }
+                vec3 waterBody = mix(_ShallowColor, _DeepColor, depthT);
 
                 vec3 color;
                 if (_HasScene == 1) {
                     vec2 refr_uv = clamp(v_screen_uv + N.xz * _Distortion, 0.001, 0.999);
                     vec3 refr = texture(_SceneColor, refr_uv).rgb;
-                    refr = mix(refr, _DeepColor, _RefractStrength);
+                    refr = mix(refr, waterBody, _RefractStrength * (0.4 + 0.6 * depthT));
 
                     vec3 R = reflect(-V, N);
-                    vec4 rclip = u_proj * u_view * vec4(v_world_pos + R * 60.0, 1.0);
+                    vec4 rclip = u_proj * u_view * vec4(v_world_pos + R * 80.0, 1.0);
                     vec2 ruv = rclip.xy / rclip.w * 0.5 + 0.5;
                     vec3 refl;
                     if (ruv.x > 0.0 && ruv.x < 1.0 && ruv.y > 0.0 && ruv.y < 1.0) {
@@ -230,40 +275,43 @@ Shader "Zarin/Water"
                     } else {
                         refl = sky_tint(R);
                     }
+                    // Blend reflection toward sky tint so it never looks flat/black
+                    refl = mix(refl, sky_tint(R), 0.35);
                     color = mix(refr, refl, fres);
                 } else {
                     vec3 R = reflect(-V, N);
-                    color = mix(_DeepColor, sky_tint(R), fres);
+                    color = mix(waterBody, sky_tint(R), fres);
                 }
 
                 // Subsurface scattering approximation
                 float back = max(dot(V, -_SunDirection), 0.0);
                 vec3 sss = _SSSColor * clamp(v_crest * 1.5 + 0.2, 0.0, 1.0) * back;
-                color += sss * 0.6;
+                color += sss * 0.5;
 
-                // Sun specular highlight
+                // Sun specular highlight (Blinn-Phong with roughness from smoothness)
                 vec3 H = normalize(V + _SunDirection);
-                float spec = pow(max(dot(N, H), 0.0), mix(8.0, 1024.0, _Smoothness));
+                float shininess = mix(16.0, 2048.0, pow(_Smoothness, 1.5));
+                float spec = pow(max(dot(N, H), 0.0), shininess);
                 color += _SunColor * _SunIntensity * spec * _Specular;
 
-                // Foam: crest + shoreline
-                float crest_foam = smoothstep(0.35, 0.85, v_crest) * 0.6
-                                + smoothstep(0.6, 1.0, abs(dn.x) + abs(dn.z)) * 0.4;
+                // Foam: crest (noise-broken) + shoreline
+                float fn = fbm(v_detail_coord * 0.7 + vec2(_Time * 0.1, -_Time * 0.08));
+                float crest_foam = smoothstep(0.45, 1.1, v_crest) * smoothstep(0.55, 0.95, fn);
                 float shore_foam = 0.0;
                 if (_HasScene == 1) {
                     float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
                     float water_d = linearize_depth(gl_FragCoord.z);
                     float diff = scene_d - water_d;
-                    shore_foam = (1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0));
+                    shore_foam = (1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0)) * smoothstep(0.4, 0.8, fn);
                 }
                 float foam = clamp((crest_foam + shore_foam) * _FoamStrength, 0.0, 1.0);
                 color = mix(color, _FoamColor, foam);
 
                 // Distance fade to horizon (for infinite ocean)
                 float dist = length(u_camera_pos.xz - v_world_pos.xz);
-                float fade = clamp(dist / 900.0, 0.0, 1.0);
+                float fade = clamp(dist / 1100.0, 0.0, 1.0);
                 color = mix(color, _HorizonColor, fade * fade);
-                float alpha = mix(0.92, 0.98, fres);
+                float alpha = mix(0.93, 0.99, fres);
                 alpha = mix(alpha, 1.0, foam);
 
                 frag_color = vec4(color, alpha);
