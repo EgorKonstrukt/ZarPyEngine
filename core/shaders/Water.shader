@@ -185,13 +185,32 @@ Shader "Zarin/Water"
                 vec3 tangent = vec3(1.0, 0.0, 0.0);
                 vec3 binormal = vec3(0.0, 0.0, 1.0);
 
-                float gust = 1.0 + _WindGust * _WindTurbulence;
-                float chop = _Choppiness * (1.0 + _WindSpeed * 0.03);
+                // ---- Wind -> storm model ----
+                // More wind does not just raise the swell: it makes the sea
+                // stormier — taller AND far steeper (peaked, breaking) waves
+                // that line up with the wind, riding on fast wind-aligned
+                // chop. Calm air stays small and rounded.
+                float windNorm = clamp(_WindSpeed / 60.0, 0.0, 1.0);
+                float storm = pow(windNorm, 1.3);
+                float gust = 1.0 + _WindGust * _WindTurbulence * (0.4 + 0.8 * windNorm);
+                float ampScale = mix(0.85, 2.6, storm);
+                float chop = _Choppiness * mix(0.6, 3.2, windNorm);
+                vec2 wdir = normalize(_WindDir + vec2(1e-5));
 
                 for (int i = 0; i < MAX_WAVES; i++) {
                     if (i >= _WaveCount) break;
                     vec2 d = _WaveDirection[i];
-                    float amp = _WaveParams[i].x * gust;
+                    // Steer each wave's heading toward the wind as it
+                    // strengthens, so the sea becomes a coherent, wind-driven
+                    // system instead of randomly crossed swells.
+                    if (_WindAlign > 0.001) {
+                        float a0 = atan(d.y, d.x);
+                        float aw = atan(wdir.y, wdir.x);
+                        float da = mod(a0 - aw + 3.14159265, 6.2831853) - 3.14159265;
+                        float a = a0 - da * _WindAlign;
+                        d = vec2(cos(a), sin(a));
+                    }
+                    float amp = _WaveParams[i].x * gust * ampScale;
                     float wlen = max(_WaveParams[i].y, 0.0001);
                     float speed = _WaveParams[i].z;
                     float steep = _WaveParams[i].w * chop;
@@ -346,6 +365,31 @@ Shader "Zarin/Water"
                 }
                 return v;
             }
+            vec2 hash2(vec2 p) {
+                p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+                return fract(sin(p) * 43758.5453);
+            }
+            // Animated Voronoi-edge caustic web: bright thin lines form where
+            // refracted light focuses, giving the classic underwater pattern.
+            float caustic_web(vec2 uv, float t) {
+                vec2 n = floor(uv);
+                vec2 f = fract(uv);
+                float f1 = 8.0;
+                float f2 = 8.0;
+                for (int j = -1; j <= 1; j++) {
+                    for (int i = -1; i <= 1; i++) {
+                        vec2 g = vec2(float(i), float(j));
+                        vec2 o = hash2(n + g);
+                        o = 0.5 + 0.5 * sin(t * 0.9 + 6.2831853 * o);
+                        vec2 r = g + o - f;
+                        float d = dot(r, r);
+                        if (d < f1) { f2 = f1; f1 = d; }
+                        else if (d < f2) { f2 = d; }
+                    }
+                }
+                float edge = sqrt(f2) - sqrt(f1);
+                return 1.0 - smoothstep(0.0, 0.07, edge);
+            }
             // Multi-octave detail normal. Each octave uses an incommensurate
             // frequency (1.93x) and an independent time scroll + phase, so the
             // micro-surface never tiles into a recognisable pattern even when
@@ -431,18 +475,20 @@ Shader "Zarin/Water"
                     vec3 L = normalize(_SunDirection);
                     float sssAmt = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0);
                     vec3 sss = _SSSColor * sssAmt * (0.3 + 0.6 * h) * _SunIntensity;
-                    // Caustic shimmer on the glass walls / floor. Strongest
-                    // near the floor where the focused light lands.
-                    float caus1 = vnoise(dc * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
-                    float caus2 = vnoise(dc * 3.1 - vec2(_Time * 0.13, _Time * 0.17));
-                    float caustic = pow(caus1, 3.0) * 0.6 + pow(caus2, 4.0) * 0.4;
-                    caustic *= (0.6 + 0.4 * _Caustics);
+                    // Caustic web on the glass walls / floor — strongest near
+                    // the floor where the focused light lands.
+                    float ct = _Time * _DetailSpeed;
+                    vec2 flow = vec2(ct * 0.05, -ct * 0.04);
+                    float caustic = caustic_web(dc * 2.2 + flow, ct);
+                    caustic = caustic * 0.65 + 0.35 * caustic_web(dc * 4.7 - flow * 1.3, ct * 1.4);
+                    caustic = pow(caustic, 1.8) * (0.6 + 0.4 * _Caustics);
                     // Sky/environment reflection.
                     vec3 R = reflect(-V, Nv);
                     vec3 sky = sky_tint(R);
-                    // Combine: base water color + SSS + caustic tint (brighter
+                    // Combine: base water color + SSS + caustic web (brighter
                     // toward the floor), then blend toward sky via fresnel.
-                    vec3 col = waterBody + sss * 0.5 + _SSSColor * caustic * (0.22 + 0.3 * _Caustics) * (1.2 - h);
+                    vec3 causCol = mix(_SSSColor, vec3(1.0), 0.4);
+                    vec3 col = waterBody + sss * 0.5 + causCol * caustic * (0.3 + 0.4 * _Caustics) * (1.2 - h);
                     col = mix(col, sky, fr * 0.45);
                     // Sun specular on the glass surface.
                     vec3 Hh = normalize(V + L);
@@ -521,14 +567,18 @@ Shader "Zarin/Water"
                 if (backface) sss *= 1.8;
                 color += sss * 0.6;
 
-                // Caustics shimmer on shallow water / pond floor. For the pond
-                // (box) there is no scene depth, so fall back to a fixed
-                // shallow factor so caustics are always visible.
+                // Caustics: animated Voronoi web seen through the clear water
+                // (or projected on the pond floor). For the pond (box) with no
+                // scene depth, fall back to a fixed shallow factor.
                 if (_Caustics > 0.0) {
-                    float caus = vnoise(dc * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
+                    float ct = _Time * _DetailSpeed;
+                    vec2 flow = vec2(ct * 0.05, -ct * 0.04);
+                    float caus = caustic_web(dc * 2.2 + flow, ct);
+                    caus = caus * 0.65 + 0.35 * caustic_web(dc * 4.7 - flow * 1.3, ct * 1.4);
+                    caus = pow(caus, 1.8);
                     float causDepth = (_IsBox == 1) ? 0.6 : (1.0 - depthT);
-                    caus = pow(caus, 3.0) * causDepth * _Caustics;
-                    color += _SSSColor * caus * 0.3;
+                    vec3 causCol = mix(_SSSColor, vec3(1.0), 0.4) * causDepth * _Caustics;
+                    color += causCol * caus * 0.55;
                 }
 
                 // Sun specular highlight (Blinn-Phong), perturbed by the detail
@@ -559,43 +609,45 @@ Shader "Zarin/Water"
                 }
 
                 // ---- Foam ----
-                // Animated, turbulent field driving churned sea-foam. Two
-                // scrolling octaves of fbm give wispy, fingered boundaries
-                // instead of solid blobs.
                 float ft = _Time * _DetailSpeed;
-                float foamField = fbm(dc * 1.4 + vec2(ft * 0.12, -ft * 0.09));
-                foamField = foamField * 0.7 + 0.3 * fbm(dc * 3.3 - vec2(ft * 0.08, ft * 0.13));
+                // Turbulent, scrolling foam texture (two fbm octaves) plus a
+                // finer octave used to erode the edges into churned wisps.
+                float foamTex = fbm(dc * 1.6 + vec2(ft * 0.10, -ft * 0.07));
+                foamTex = foamTex * 0.6 + 0.4 * fbm(dc * 4.2 - vec2(ft * 0.06, ft * 0.11));
+                float fine = fbm(dc * 7.0 + vec2(-ft * 0.2, ft * 0.15));
+                foamTex = clamp(foamTex, 0.0, 1.0);
+                fine = clamp(fine, 0.0, 1.0);
 
-                // Crest foam: where steep wave crests break.
-                float crestMask = smoothstep(0.2, 0.95, v_crest * v_chop);
-                float crest_foam = crestMask * smoothstep(0.30, 0.78, foamField);
+                // Crest foam: a broken band riding the steep wave crests.
+                float crestAmt = smoothstep(0.1, 0.85, v_crest * v_chop);
+                float crest_foam = crestAmt * smoothstep(0.40, 0.80, foamTex);
 
-                // Shoreline foam from scene depth (only with the scene).
+                // Shoreline foam from scene depth.
                 float shore_foam = 0.0;
                 if (useScene) {
                     float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
                     float water_d = linearize_depth(gl_FragCoord.z);
                     float diff = scene_d - water_d;
                     float shoreMask = 1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0);
-                    shore_foam = shoreMask * smoothstep(0.25, 0.80, foamField);
+                    shore_foam = shoreMask * smoothstep(0.35, 0.75, foamTex);
                 }
 
-                float rawFoam = clamp((crest_foam + shore_foam) * _FoamStrength, 0.0, 1.0);
-
-                // High-frequency bubble texture trapped inside the foam.
-                float bubbles = smoothstep(0.58, 0.95, vnoise(dc * 7.0 + ft * 0.4));
-                float foam = clamp(rawFoam, 0.0, 1.0);
+                // Erode the density with fine turbulence so the foam reads as
+                // churned sea-foam with fingered boundaries, not a solid blob.
+                float dens = clamp((crest_foam + shore_foam) * _FoamStrength, 0.0, 1.0);
+                dens *= smoothstep(0.2, 0.9, dens * 1.3 + fine * 0.6 - 0.35);
+                float foam = clamp(dens, 0.0, 1.0);
 
                 if (foam > 0.001) {
                     vec3 foamCol = _FoamColor;
-                    // Density shading: dense cores read brighter, thinning
-                    // edges stay slightly cooler — gives volume to the foam.
-                    foamCol *= 0.88 + 0.22 * foamField;
-                    // Foam is glossy: a soft sun glint on the churned surface.
-                    float foamSpec = pow(max(dot(N, H), 0.0), mix(80.0, 400.0, _Smoothness)) * _Specular;
-                    foamCol += _SunColor * _SunIntensity * foamSpec * 0.5;
-                    // Sparkle from the air bubbles catching the light.
-                    foamCol += _SunColor * _SunIntensity * bubbles * foam * 0.45;
+                    // Thick foam is bright white; thin rims stay cool/translucent.
+                    foamCol *= 0.82 + 0.25 * foamTex;
+                    // Glossy sun glint on the broken surface.
+                    float foamSpec = pow(max(dot(N, H), 0.0), mix(140.0, 600.0, _Smoothness)) * _Specular;
+                    foamCol += _SunColor * _SunIntensity * foamSpec * 0.6;
+                    // Trapped-air bubble sparkle.
+                    float bubbles = smoothstep(0.6, 0.95, vnoise(dc * 11.0 + ft * 0.6));
+                    foamCol += _SunColor * _SunIntensity * bubbles * foam * 0.5;
                     color = mix(color, foamCol, foam);
                 }
 
