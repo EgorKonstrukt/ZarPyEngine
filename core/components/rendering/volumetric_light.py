@@ -326,7 +326,7 @@ class VolumetricLight(GraphicsEffect):
         prog["u_proj_count"] = n
 
     def render(self, ctx, scene_color_tex, scene_depth_tex,
-               view_mat, proj_mat, cam_pos, viewport_w, viewport_h):
+               view_mat, proj_mat, cam_pos, viewport_w, viewport_h, **kwargs):
         if not self.enabled or not self.entity or not self.entity.active:
             return
         if self._intensity < 0.001 or self._density < 0.0001:

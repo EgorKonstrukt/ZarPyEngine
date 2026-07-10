@@ -247,7 +247,7 @@ class GodRays(GraphicsEffect):
         return (uv, float(color[0]), float(color[1]), float(color[2]), float(intensity))
 
     def render(self, ctx, scene_color_tex, scene_depth_tex,
-               view_mat, proj_mat, cam_pos, viewport_w, viewport_h):
+               view_mat, proj_mat, cam_pos, viewport_w, viewport_h, **kwargs):
         if not self.enabled or not self.entity or not self.entity.active:
             return
         self._ensure_resources(ctx)
