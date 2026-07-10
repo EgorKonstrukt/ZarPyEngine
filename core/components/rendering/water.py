@@ -69,6 +69,8 @@ class Water(Component):
             InspectorField("distortion", "Distortion", FieldType.SLIDER, min_val=0.0, max_val=0.3, step=0.005, decimals=3),
             InspectorField("normal_strength", "Detail Normal", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("wave_tiling", "Wave Tiling", FieldType.SLIDER, min_val=0.01, max_val=2.0, step=0.01, decimals=3),
+            InspectorField("warp_amount", "Domain Warp", FieldType.SLIDER, min_val=0.0, max_val=4.0, step=0.05, decimals=3),
+            InspectorField("detail_speed", "Detail Speed", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.01, decimals=3),
             InspectorField("refract_strength", "Refraction Tint", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("fresnel_power", "Fresnel Power", FieldType.SLIDER, min_val=0.5, max_val=8.0, step=0.1, decimals=2),
             InspectorField("foam_strength", "Foam Strength", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.05, decimals=2),
@@ -106,6 +108,8 @@ class Water(Component):
         self.distortion: float = 0.04
         self.normal_strength: float = 0.35
         self.wave_tiling: float = 0.25
+        self.warp_amount: float = 1.6
+        self.detail_speed: float = 1.0
         self.refract_strength: float = 0.55
         self.fresnel_power: float = 4.0
         self.foam_strength: float = 1.0
@@ -209,10 +213,12 @@ class Water(Component):
 
         wind = self._resolve_wind(wind_zones, water_wx, water_wz, t)
         wdir = wind["dir"]
-        wang = math.atan2(wdir[1], wdir[0])
         wind_speed = wind["speed"]
         wind_infl = wind["influence"]
-        wind_amp = 0.4 + 0.6 * min(max(wind_speed / 15.0, 0.0), 2.5)
+        # Coherent wind alignment: even without manually setting Wind
+        # Influence, stronger wind steers the waves toward the wind heading.
+        wind_norm = min(max(wind_speed / 60.0, 0.0), 1.0)
+        wind_align = min(1.0, wind_infl + wind_norm * 0.8)
 
         if "_WaveCount" in prog:
             n = min(len(self.waves), 8)
@@ -222,14 +228,9 @@ class Water(Component):
             for i in range(n):
                 w = self.waves[i]
                 ang = math.radians(float(w.get("direction", 0.0)))
-                if wind_infl > 0.0:
-                    spread = (i - (n - 1) / 2.0) * (self.wind_turbulence * 0.45)
-                    target = wang + spread
-                    da = (target - ang + math.pi) % (2.0 * math.pi) - math.pi
-                    ang = ang + da * wind_infl
                 dirs[i] = [math.cos(ang), math.sin(ang)]
                 params[i] = [
-                    float(w.get("amplitude", 0.0)) * wind_amp,
+                    float(w.get("amplitude", 0.0)),
                     float(w.get("wavelength", 1.0)),
                     float(w.get("speed", 1.0)),
                     float(w.get("steepness", 0.0)),
@@ -242,6 +243,7 @@ class Water(Component):
         _set_float(prog, "_WindSpeed", wind_speed)
         _set_float(prog, "_WindGust", wind["gust"])
         _set_float(prog, "_WindTurbulence", wind["turbulence"])
+        _set_float(prog, "_WindAlign", wind_align)
         _set_float(prog, "_Choppiness", self.choppiness)
         _set_float(prog, "_Caustics", self.caustics)
         _set_float(prog, "_MacroWave", self.macro_wave)
@@ -298,6 +300,8 @@ class Water(Component):
         _set_float(prog, "_Distortion", self.distortion)
         _set_float(prog, "_NormalStrength", self.normal_strength)
         _set_float(prog, "_WaveTiling", self.wave_tiling)
+        _set_float(prog, "_WarpAmount", self.warp_amount)
+        _set_float(prog, "_DetailSpeed", self.detail_speed)
         _set_float(prog, "_RefractStrength", self.refract_strength)
         _set_float(prog, "_FresnelPower", self.fresnel_power)
         _set_float(prog, "_FoamStrength", self.foam_strength)
@@ -353,6 +357,8 @@ class Water(Component):
             "distortion": self.distortion,
             "normal_strength": self.normal_strength,
             "wave_tiling": self.wave_tiling,
+            "warp_amount": self.warp_amount,
+            "detail_speed": self.detail_speed,
             "refract_strength": self.refract_strength,
             "fresnel_power": self.fresnel_power,
             "foam_strength": self.foam_strength,
@@ -396,6 +402,8 @@ class Water(Component):
         c.distortion = data.get("distortion", 0.04)
         c.normal_strength = data.get("normal_strength", 0.35)
         c.wave_tiling = data.get("wave_tiling", 0.25)
+        c.warp_amount = data.get("warp_amount", 1.6)
+        c.detail_speed = data.get("detail_speed", 1.0)
         c.refract_strength = data.get("refract_strength", 0.55)
         c.fresnel_power = data.get("fresnel_power", 4.0)
         c.foam_strength = data.get("foam_strength", 1.0)

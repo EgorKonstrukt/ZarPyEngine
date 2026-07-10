@@ -116,6 +116,7 @@ Shader "Zarin/Water"
             uniform float _WindSpeed;
             uniform float _WindGust;
             uniform float _WindTurbulence;
+            uniform float _WindAlign;
             uniform float _WarpAmount;
             uniform float _Choppiness;
             uniform float _MacroWave;
@@ -127,6 +128,7 @@ Shader "Zarin/Water"
             out vec2 v_detail_coord;
             out float v_crest;
             out float v_chop;
+            out float v_foamMask;
             out float v_face;
             out float v_local_y;
 
@@ -148,9 +150,7 @@ Shader "Zarin/Water"
                 return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
             }
 
-            // Multi-octave, large-scale domain warp. The incommensurate
-            // frequencies mean the warp itself never forms a visible tiling
-            // grid, which is what used to read as "repetition" far away.
+            // Multi-octave, large-scale domain warp.
             vec2 domain_warp(vec2 p, float t, float chaos) {
                 const float TAU = 6.2831853;
                 float s = 1.0 + chaos;
@@ -185,17 +185,17 @@ Shader "Zarin/Water"
                 vec3 tangent = vec3(1.0, 0.0, 0.0);
                 vec3 binormal = vec3(0.0, 0.0, 1.0);
 
-                // ---- Wind -> storm model ----
-                // More wind does not just raise the swell: it makes the sea
-                // stormier — taller AND far steeper (peaked, breaking) waves
-                // that line up with the wind, riding on fast wind-aligned
-                // chop. Calm air stays small and rounded.
                 float windNorm = clamp(_WindSpeed / 60.0, 0.0, 1.0);
                 float storm = pow(windNorm, 1.3);
                 float gust = 1.0 + _WindGust * _WindTurbulence * (0.4 + 0.8 * windNorm);
-                float ampScale = mix(0.85, 2.6, storm);
-                float chop = _Choppiness * mix(0.6, 3.2, windNorm);
+                float ampScale = mix(0.8, 3.6, storm);
+                float wlenScale = mix(1.0, 2.6, storm);
+                float chop = _Choppiness * mix(0.6, 2.2, windNorm);
                 vec2 wdir = normalize(_WindDir + vec2(1e-5));
+
+                float Jxx = 1.0;
+                float Jzz = 1.0;
+                float Jxz = 0.0;
 
                 for (int i = 0; i < MAX_WAVES; i++) {
                     if (i >= _WaveCount) break;
@@ -211,7 +211,8 @@ Shader "Zarin/Water"
                         d = vec2(cos(a), sin(a));
                     }
                     float amp = _WaveParams[i].x * gust * ampScale;
-                    float wlen = max(_WaveParams[i].y, 0.0001);
+                    float wlenGrow = mix(1.0, wlenScale, clamp(1.0 - float(i) / max(float(_WaveCount - 1), 1.0), 0.0, 1.0));
+                    float wlen = max(_WaveParams[i].y, 0.0001) * wlenGrow;
                     float speed = _WaveParams[i].z;
                     float steep = _WaveParams[i].w * chop;
                     float k = 6.2831853 / wlen;
@@ -228,18 +229,61 @@ Shader "Zarin/Water"
                     float f = k * (dot(d, wp) - c * speed * _Time);
                     f = mod(f, 6.2831853);
                     float a = amp;
-                    float q = steep / (k * a * float(_WaveCount) + 1e-4);
+                    float wa = k * a;
+                    float q = steep / (wa * float(_WaveCount) + 1e-4);
+                    // Safety clamp on q*k*a (the actual dimensionless
+                    // steepness that folds the surface), not on q alone --
+                    // q alone is scale-dependent on k and a, so clamping it
+                    // directly collapses to near-flat once wavelength/
+                    // amplitude grow with wind instead of guarding anything.
+                    float qwa = q * wa;
+                    const float QWA_MAX = 0.32;
+                    if (qwa > QWA_MAX) {
+                        q *= QWA_MAX / qwa;
+                        qwa = QWA_MAX;
+                    }
                     float cosf = cos(f);
                     float sinf = sin(f);
                     disp.x += q * a * d.x * cosf;
                     disp.z += q * a * d.y * cosf;
                     disp.y += a * sinf;
-                    float wa = k * a;
                     tangent += vec3(-q * d.x * d.x * wa * sinf, d.x * wa * cosf, -q * d.x * d.y * wa * sinf);
                     binormal += vec3(-q * d.x * d.y * wa * sinf, d.y * wa * cosf, -q * d.y * d.y * wa * sinf);
+                    // Jacobian of the horizontal displacement field: where it
+                    // drops toward/below zero the surface is folding in on
+                    // itself (a breaking crest), which is the physically
+                    // correct place for foam -- not just "wherever it's tall".
+                    Jxx -= qwa * d.x * d.x * sinf;
+                    Jzz -= qwa * d.y * d.y * sinf;
+                    Jxz -= qwa * d.x * d.y * sinf;
                 }
 
-                disp.y += _MacroWave * swell(p, _Time) * 0.22;
+                float jacobian = Jxx * Jzz - Jxz * Jxz;
+                float foamMask = clamp(1.0 - jacobian, 0.0, 3.0);
+
+                disp.y += _MacroWave * swell(p * mix(1.0, 0.4, storm), _Time) * (0.3 + 1.4 * windNorm);
+
+                // Wind-driven chop: short, fast, wind-aligned ripples that only
+                // build up in a blow. This is the broken, agitated skin of a
+                // stormy sea (its high-frequency normal is covered by the
+                // fragment detail normal).
+                {
+                    float chopAmp = storm * 0.16;
+                    float baseWL = mix(2.6, 0.9, windNorm);
+                    for (int c = 0; c < 4; c++) {
+                        float ph = float(c) * 2.39996323;
+                        vec2 cd = normalize(mix(wdir, vec2(cos(ph), sin(ph)), 0.45));
+                        float wl = baseWL * (0.7 + 0.3 * float(c));
+                        float k = 6.2831853 / wl;
+                        float sp = 1.0 + 0.6 * float(c);
+                        float f = k * (dot(cd, wp) - sqrt(G / k) * sp * _Time);
+                        f = mod(f, 6.2831853);
+                        float a = chopAmp / (1.0 + float(c));
+                        disp.x += cd.x * a * cos(f);
+                        disp.z += cd.y * a * cos(f);
+                        disp.y += a * sin(f);
+                    }
+                }
 
                 if (isTop) {
                     // Top surface: full Gerstner displacement.
@@ -247,6 +291,7 @@ Shader "Zarin/Water"
                     v_world_pos = world;
                     v_crest = disp.y;
                     v_chop = chop;
+                    v_foamMask = foamMask;
                     v_detail_coord = wp;
                     v_normal = normalize(cross(binormal, tangent));
                 } else if (isBottom) {
@@ -255,6 +300,7 @@ Shader "Zarin/Water"
                     v_normal = in_normal;
                     v_crest = 0.0;
                     v_chop = 0.0;
+                    v_foamMask = 0.0;
                     v_detail_coord = world.xz;
                 } else {
                     // Side walls: follow the full Gerstner displacement so
@@ -268,6 +314,7 @@ Shader "Zarin/Water"
                     v_normal = in_normal;
                     v_crest = disp.y * blend;
                     v_chop = 0.0;
+                    v_foamMask = foamMask * blend;
                     v_detail_coord = wp;
                 }
 
@@ -287,6 +334,7 @@ Shader "Zarin/Water"
             in vec2 v_detail_coord;
             in float v_crest;
             in float v_chop;
+            in float v_foamMask;
             in float v_face;
             in float v_local_y;
             out vec4 frag_color;
@@ -354,11 +402,12 @@ Shader "Zarin/Water"
                 float d = hash(i + vec2(1.0, 1.0));
                 return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
             }
-            float fbm(vec2 p) {
+            float fbm(vec2 p, int octaves) {
                 float v = 0.0;
                 float amp = 0.5;
                 mat2 rot = mat2(0.83, -0.56, 0.56, 0.83);
                 for (int i = 0; i < 6; i++) {
+                    if (i >= octaves) break;
                     v += amp * vnoise(p);
                     p = rot * p * 2.03 + 7.3 + float(i) * 1.7;
                     amp *= 0.5;
@@ -369,8 +418,7 @@ Shader "Zarin/Water"
                 p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
                 return fract(sin(p) * 43758.5453);
             }
-            // Animated Voronoi-edge caustic web: bright thin lines form where
-            // refracted light focuses, giving the classic underwater pattern.
+
             float caustic_web(vec2 uv, float t) {
                 vec2 n = floor(uv);
                 vec2 f = fract(uv);
@@ -406,8 +454,9 @@ Shader "Zarin/Water"
                     float f = freq * pow(1.93, float(i));
                     vec2 q = coord * f + vec2(t * (0.11 + 0.017 * float(i)) + phase,
                                               -t * (0.08 + 0.013 * float(i)) - phase);
-                    float hx = vnoise(q + vec2(e, 0.0)) - vnoise(q - vec2(e, 0.0));
-                    float hz = vnoise(q + vec2(0.0, e)) - vnoise(q - vec2(0.0, e));
+                    float n0 = vnoise(q);
+                    float hx = (vnoise(q + vec2(e, 0.0)) - n0) * 2.0;
+                    float hz = (vnoise(q + vec2(0.0, e)) - n0) * 2.0;
                     nrm += vec2(hx, hz) * amp;
                     totalW += amp;
                     phase += 19.1;
@@ -438,6 +487,51 @@ Shader "Zarin/Water"
                 float z_n = 2.0 * d - 1.0;
                 return 2.0 * _CamNear * _CamFar / (_CamFar + _CamNear - z_n * (_CamFar - _CamNear));
             }
+
+            // Screen-space reflection ray march with occlusion testing and a
+            // binary-search refine step.
+            vec4 trace_ssr(vec3 ro, vec3 rd) {
+                const int STEPS = 20;
+                const int REFINE = 6;
+                const float MAX_DIST = 240.0;
+                float t = 0.35;
+                float stepLen = MAX_DIST / float(STEPS);
+                bool hit = false;
+                float tHit = 0.0;
+                for (int i = 0; i < STEPS; i++) {
+                    vec3 p = ro + rd * t;
+                    vec4 clip = u_proj * u_view * vec4(p, 1.0);
+                    if (clip.w <= 0.001) break;
+                    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+                    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0) break;
+                    float sceneD = linearize_depth(texture(_SceneDepth, uv).r);
+                    float rayD = linearize_depth(clip.z / clip.w * 0.5 + 0.5);
+                    if (rayD > sceneD && rayD - sceneD < 6.0) {
+                        hit = true;
+                        tHit = t;
+                        break;
+                    }
+                    t += stepLen * (1.0 + float(i) * 0.08);
+                }
+                if (!hit) return vec4(0.0);
+                float lo = max(tHit - stepLen, 0.01);
+                float hi = tHit;
+                vec2 hitUV = vec2(0.5);
+                for (int j = 0; j < REFINE; j++) {
+                    float mid = (lo + hi) * 0.5;
+                    vec3 pm = ro + rd * mid;
+                    vec4 cm = u_proj * u_view * vec4(pm, 1.0);
+                    vec2 um = cm.xy / cm.w * 0.5 + 0.5;
+                    float sceneD = linearize_depth(texture(_SceneDepth, um).r);
+                    float rayD = linearize_depth(cm.z / cm.w * 0.5 + 0.5);
+                    hitUV = um;
+                    if (rayD > sceneD) hi = mid; else lo = mid;
+                }
+                vec2 edge = min(hitUV, 1.0 - hitUV);
+                float edgeFade = smoothstep(0.0, 0.10, min(edge.x, edge.y));
+                float distFade = 1.0 - smoothstep(MAX_DIST * 0.6, MAX_DIST, tHit);
+                return vec4(texture(_SceneColor, hitUV).rgb, edgeFade * distFade);
+            }
             vec3 sky_tint(vec3 dir) {
                 float h = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
                 vec3 horizon = _HorizonColor;
@@ -459,7 +553,6 @@ Shader "Zarin/Water"
                 float dist = length(u_camera_pos.xz - v_world_pos.xz);
                 float detailFade = 1.0 - smoothstep(_DetailFade * 0.3, _DetailFade, dist);
 
-                // ---------- Pond / aquarium cube walls ----------
                 if (v_face > 0.5) {
                     vec3 Nv = normalize(v_normal);
                     vec3 V = normalize(u_camera_pos - v_world_pos);
@@ -520,18 +613,21 @@ Shader "Zarin/Water"
                     fres = F0 + (1.0 - F0) * pow(1.0 - ndv, _FresnelPower);
                 }
 
-                // Water body color from depth (shallow -> deep)
-                float depthT = 1.0;
-                // The top surface (v_face < 0.5) refracts the scene behind /
-                // below it for both ocean and pond; the side walls / floor use
-                // the volume path instead.
+                // Water body color from depth. Real light absorption through
+                // water is exponential (Beer-Lambert), not linear, and red
+                // wavelengths are absorbed several times faster than blue/
+                // green -- that's what actually produces the shallow-turquoise
+                // to deep-navy gradient instead of a flat color lerp.
+                float depthDist = 0.0;
                 bool useScene = (_HasScene == 1) && (v_face < 0.5);
                 if (useScene) {
                     float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
                     float water_d = linearize_depth(gl_FragCoord.z);
-                    depthT = clamp((scene_d - water_d) / 8.0, 0.0, 1.0);
+                    depthDist = max(scene_d - water_d, 0.0);
                 }
+                float depthT = 1.0 - exp(-depthDist * 0.22);
                 vec3 waterBody = mix(_ShallowColor, _DeepColor, depthT);
+                vec3 absorb = exp(-depthDist * vec3(0.45, 0.16, 0.10));
 
                 vec3 color;
                 if (useScene) {
@@ -539,24 +635,23 @@ Shader "Zarin/Water"
                     // (dn), which always varies, instead of the wave normal N
                     // that is near-flat for calm water and produced no warp.
                     vec2 refr_uv = clamp(v_screen_uv + (N.xz * 0.4 + dn.xz) * _Distortion, 0.001, 0.999);
-                    vec3 refr = texture(_SceneColor, refr_uv).rgb;
+                    vec3 refr = texture(_SceneColor, refr_uv).rgb * absorb;
                     refr = mix(refr, waterBody, _RefractStrength * (0.4 + 0.6 * depthT));
 
                     vec3 R = reflect(-V, N);
-                    vec4 rclip = u_proj * u_view * vec4(v_world_pos + R * 80.0, 1.0);
-                    vec2 ruv = rclip.xy / rclip.w * 0.5 + 0.5;
-                    vec3 refl;
-                    if (ruv.x > 0.0 && ruv.x < 1.0 && ruv.y > 0.0 && ruv.y < 1.0) {
-                        refl = texture(_SceneColor, ruv).rgb;
-                    } else {
-                        refl = sky_tint(R);
+                    vec3 sky = sky_tint(R);
+                    vec3 refl = sky;
+                    if (fres > 0.025) {
+                        vec4 ssr = trace_ssr(v_world_pos + N * 0.05, R);
+                        refl = mix(sky, ssr.rgb, ssr.a);
                     }
-                    refl = mix(refl, sky_tint(R), 0.35);
                     color = mix(refr, refl, fres);
                 } else {
                     vec3 R = reflect(-V, N);
                     color = mix(waterBody, sky_tint(R), fres);
                 }
+                // Faint ambient occlusion in wave troughs for volume.
+                color *= mix(0.88, 1.0, smoothstep(-0.35, 0.15, v_crest));
 
                 // Subsurface scattering: light transmitted through thin wave
                 // crests, modulated by how directly we look toward the sun.
@@ -570,7 +665,7 @@ Shader "Zarin/Water"
                 // Caustics: animated Voronoi web seen through the clear water
                 // (or projected on the pond floor). For the pond (box) with no
                 // scene depth, fall back to a fixed shallow factor.
-                if (_Caustics > 0.0) {
+                if (_Caustics > 0.0 && depthT < 0.94) {
                     float ct = _Time * _DetailSpeed;
                     vec2 flow = vec2(ct * 0.05, -ct * 0.04);
                     float caus = caustic_web(dc * 2.2 + flow, ct);
@@ -584,9 +679,16 @@ Shader "Zarin/Water"
                 // Sun specular highlight (Blinn-Phong), perturbed by the detail
                 // normal for a moving sun glitter.
                 vec3 H = normalize(V + L);
-                float shininess = mix(32.0, 4096.0, pow(_Smoothness, 1.5));
+                // Specular anti-aliasing: a fixed 9000-power sun-glitter term
+                // has no filtering, so distant or grazing-angle pixels alias
+                // into hard, flickering noise instead of a soft glitter path.
+                // Widen (soften) the highlight as distance / grazing angle
+                // increase, matching the loss of resolvable micro-detail.
+                float aa = clamp(1.0 - dist / 260.0, 0.0, 1.0) * clamp(ndv * 1.4, 0.1, 1.0);
+                float shininess = mix(32.0, 4096.0, pow(_Smoothness, 1.5)) * mix(0.18, 1.0, aa);
                 float spec = pow(max(dot(N, H), 0.0), shininess);
-                float sparkle = pow(max(dot(N, H), 0.0), 9000.0) * smoothstep(0.2, 1.0, dn.y);
+                float sparkleExp = mix(700.0, 9000.0, aa);
+                float sparkle = pow(max(dot(N, H), 0.0), sparkleExp) * smoothstep(0.2, 1.0, dn.y) * mix(0.35, 1.0, aa);
                 color += _SunColor * _SunIntensity * (spec * _Specular + sparkle * _Specular * 1.5);
 
                 // Interaction with non-directional light sources.
@@ -612,23 +714,29 @@ Shader "Zarin/Water"
                 float ft = _Time * _DetailSpeed;
                 // Turbulent, scrolling foam texture (two fbm octaves) plus a
                 // finer octave used to erode the edges into churned wisps.
-                float foamTex = fbm(dc * 1.6 + vec2(ft * 0.10, -ft * 0.07));
-                foamTex = foamTex * 0.6 + 0.4 * fbm(dc * 4.2 - vec2(ft * 0.06, ft * 0.11));
-                float fine = fbm(dc * 7.0 + vec2(-ft * 0.2, ft * 0.15));
+                float foamTex = fbm(dc * 1.6 + vec2(ft * 0.10, -ft * 0.07), 4);
+                foamTex = foamTex * 0.6 + 0.4 * fbm(dc * 4.2 - vec2(ft * 0.06, ft * 0.11), 4);
+                float fine = fbm(dc * 7.0 + vec2(-ft * 0.2, ft * 0.15), 3);
                 foamTex = clamp(foamTex, 0.0, 1.0);
                 fine = clamp(fine, 0.0, 1.0);
 
-                // Crest foam: a broken band riding the steep wave crests.
-                float crestAmt = smoothstep(0.1, 0.85, v_crest * v_chop);
-                float crest_foam = crestAmt * smoothstep(0.40, 0.80, foamTex);
+                // Crest foam: driven by actual wave-crest folding (the
+                // Jacobian mask from the vertex stage), not just raw wave
+                // height -- so foam sits where the surface genuinely breaks
+                // instead of coating every tall-but-smooth swell.
+                // Whitecap coverage follows a Monahan-style curve (roughly
+                // wind^3): negligible below ~7 m/s, growing fast only once
+                // the sea is genuinely stormy, instead of blanketing the
+                // ocean at any moderate breeze.
+                float crestAmt = smoothstep(0.25, 1.1, v_foamMask);
+                float coverage = pow(clamp((_WindSpeed - 7.0) / 40.0, 0.0, 1.0), 2.4);
+                float whitecap = smoothstep(0.6, 1.6, v_foamMask) * coverage;
+                float crest_foam = crestAmt * smoothstep(0.35, 0.75, foamTex) + whitecap * (0.7 + 0.3 * foamTex);
 
                 // Shoreline foam from scene depth.
                 float shore_foam = 0.0;
                 if (useScene) {
-                    float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
-                    float water_d = linearize_depth(gl_FragCoord.z);
-                    float diff = scene_d - water_d;
-                    float shoreMask = 1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0);
+                    float shoreMask = 1.0 - clamp(depthDist / max(_ShoreFade, 0.001), 0.0, 1.0);
                     shore_foam = shoreMask * smoothstep(0.35, 0.75, foamTex);
                 }
 
@@ -643,7 +751,7 @@ Shader "Zarin/Water"
                     // Thick foam is bright white; thin rims stay cool/translucent.
                     foamCol *= 0.82 + 0.25 * foamTex;
                     // Glossy sun glint on the broken surface.
-                    float foamSpec = pow(max(dot(N, H), 0.0), mix(140.0, 600.0, _Smoothness)) * _Specular;
+                    float foamSpec = pow(max(dot(N, H), 0.0), mix(140.0, 600.0, _Smoothness) * mix(0.3, 1.0, aa)) * _Specular;
                     foamCol += _SunColor * _SunIntensity * foamSpec * 0.6;
                     // Trapped-air bubble sparkle.
                     float bubbles = smoothstep(0.6, 0.95, vnoise(dc * 11.0 + ft * 0.6));
