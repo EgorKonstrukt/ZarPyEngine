@@ -48,6 +48,10 @@ class SceneCamera:
         self._right_mouse: bool = False
         self._middle_mouse: bool = False
         self._alt_left: bool = False
+        self._render_scale: float = 1.0
+        self._resolution_mode: str = "native"
+        self._resolution_w: int = 1920
+        self._resolution_h: int = 1080
         self._last_mx: int = 0
         self._last_my: int = 0
         self._vel: Vec3 = Vec3.zero()
@@ -107,6 +111,10 @@ class SceneCamera:
         self._speed_boost_enabled = config.get("camera.speed_boost_enabled", True)
         self._speed_boost_mult = config.get("camera.speed_boost_mult", self.SPEED_BOOST_MULT)
         self._speed_boost_ramp_time = config.get("camera.speed_boost_ramp_time", self.SPEED_BOOST_RAMP_TIME)
+        self._render_scale = float(config.get("camera.render_scale", 1.0))
+        self._resolution_mode = config.get("camera.resolution_mode", "native")
+        self._resolution_w = int(config.get("camera.resolution_w", 1920))
+        self._resolution_h = int(config.get("camera.resolution_h", 1080))
     @property
     def forward(self) -> Vec3: return self._forward()
     @property
@@ -194,6 +202,12 @@ class SceneCamera:
     def set_viewport_size(self, w: int, h: int):
         self._viewport_w = w
         self._viewport_h = h
+
+    def compute_render_size(self, display_w: int, display_h: int) -> tuple[int, int]:
+        if self._resolution_mode == "custom":
+            return max(1, int(self._resolution_w)), max(1, int(self._resolution_h))
+        scale = max(0.05, min(1.0, self._render_scale))
+        return max(1, int(round(display_w * scale))), max(1, int(round(display_h * scale)))
 
     @staticmethod
     def _ease_in_out_cubic(t: float) -> float:

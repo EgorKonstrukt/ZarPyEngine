@@ -98,11 +98,12 @@ class PlayViewport(QOpenGLWidget):
             self._ctx.clear(*cc[:3], 1.0)
             dpr = self.devicePixelRatio()
             pw, ph = int(self.width() * dpr), int(self.height() * dpr)
-            aspect = pw / max(1, ph)
+            rw, rh = cam.compute_render_size(pw, ph)
+            aspect = rw / max(1, rh)
             view = cam.get_view_matrix()
             proj = cam.get_projection_matrix(aspect)
             self._renderer.show_grid = False
-            self._renderer.render_scene(scene, view, proj, tr.position, pw, ph, self._screen_fbo)
+            self._renderer.render_scene(scene, view, proj, tr.position, rw, rh, self._screen_fbo, display_w=pw, display_h=ph)
             if self._overlay_canvas and self._overlay_canvas.edit_mode:
                 from PyQt6.QtGui import QPainter
                 qp = QPainter(self)

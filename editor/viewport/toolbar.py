@@ -87,6 +87,8 @@ def setup_toolbar(vp):
     vp._depth_spin.valueChanged.connect(vp._on_depth_changed)
     vp._depth_spin.installEventFilter(vp)
 
+    toolbar_layout.addLayout(cam_row)
+
     prefab_row = QHBoxLayout()
     prefab_row.setContentsMargins(0, 0, 0, 0)
     prefab_row.setSpacing(4)

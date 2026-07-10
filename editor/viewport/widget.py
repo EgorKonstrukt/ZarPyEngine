@@ -619,15 +619,17 @@ class SceneViewport(QOpenGLWidget):
                 prof.stop("gl_setup")
             if scene:
                 fw, fh = self._get_physical_dims()
-                aspect = fw / max(1, fh)
+                rw, rh = self._cam.compute_render_size(fw, fh)
+                aspect = rw / max(1, rh)
                 view = self._cam.get_view_matrix()
                 proj = self._cam.get_projection_matrix(aspect)
                 cam_pos = self._cam.position
                 self._renderer.grid_2d_mode = self._cam.is_2d_mode
                 self._renderer.grid_zoom_distance = self._cam._ortho_zoom_distance
                 t0 = time.perf_counter()
-                self._renderer.render_scene(scene, view, proj, cam_pos, fw, fh, self._screen_fbo,
-                                            set(self._selected_entities), self._cam.near, self._cam.far, self._cam.fov)
+                self._renderer.render_scene(scene, view, proj, cam_pos, rw, rh, self._screen_fbo,
+                                            set(self._selected_entities), self._cam.near, self._cam.far, self._cam.fov,
+                                            display_w=fw, display_h=fh)
                 render_ms = (time.perf_counter() - t0) * 1000.0
                 self._last_render_ms = render_ms
                 eng.set_profiler_data("render_ms", render_ms)

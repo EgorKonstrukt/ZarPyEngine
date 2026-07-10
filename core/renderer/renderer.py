@@ -511,6 +511,7 @@ void main() {
             return
         self._release_scene_fbo()
         self._scene_color_tex = self._ctx.texture((w, h), 4, dtype='f1')
+        self._scene_color_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._scene_depth_tex = self._ctx.depth_texture((w, h))
         self._scene_fbo = self._ctx.framebuffer(self._scene_color_tex, self._scene_depth_tex)
         self._scene_fbo_size = (w, h)
@@ -532,10 +533,12 @@ void main() {
             return
         self._release_pp_fbo()
         self._pp_color_tex_a = self._ctx.texture((w, h), 4, dtype='f1')
+        self._pp_color_tex_a.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._pp_color_tex_a.repeat_x = False
         self._pp_color_tex_a.repeat_y = False
         self._pp_fbo_a = self._ctx.framebuffer(self._pp_color_tex_a)
         self._pp_color_tex_b = self._ctx.texture((w, h), 4, dtype='f1')
+        self._pp_color_tex_b.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._pp_color_tex_b.repeat_x = False
         self._pp_color_tex_b.repeat_y = False
         self._pp_fbo_b = self._ctx.framebuffer(self._pp_color_tex_b)
@@ -939,7 +942,8 @@ void main() {
     def render_scene(self, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                      viewport_w: int, viewport_h: int, fbo=None,
                      selected_entities: Optional[set] = None,
-                     cam_near: float = 0.01, cam_far: float = 1000.0, cam_fov: float = 60.0):
+                     cam_near: float = 0.01, cam_far: float = 1000.0, cam_fov: float = 60.0,
+                     display_w: int = None, display_h: int = None):
         if not self._initialized:
             return
         _render_t0 = time.perf_counter()
@@ -1418,6 +1422,7 @@ void main() {
                                   **extra)
                 except Exception as e:
                     Logger.error(f"GraphicsEffect.render error: {e}")
+            composite_src = self._scene_color_tex
             if screen_effects:
                 self._ensure_pp_fbo(viewport_w, viewport_h)
                 self._ctx.disable(moderngl.BLEND)
@@ -1457,17 +1462,21 @@ void main() {
                         Logger.error(f"GraphicsEffect.render error: {e}")
                     src_fbo, dst_fbo = dst_fbo, src_fbo
                     src_tex = src_fbo.color_attachments[0]
-                self._ctx.disable(moderngl.BLEND)
-                if fbo is not None:
-                    fbo.use()
-                    fbo.viewport = (0, 0, viewport_w, viewport_h)
-                elif self._ctx.screen is not None:
-                    self._ctx.screen.use()
-                self._pp_copy_prog["u_input_tex"] = 0
-                src_tex.use(0)
-                self._pp_copy_vao.render()
-                self._ctx.enable(moderngl.BLEND)
-                self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+                composite_src = src_tex
+            disp_w = display_w if display_w else viewport_w
+            disp_h = display_h if display_h else viewport_h
+            self._ctx.disable(moderngl.BLEND)
+            if fbo is not None:
+                fbo.use()
+                fbo.viewport = (0, 0, disp_w, disp_h)
+            elif self._ctx.screen is not None:
+                self._ctx.screen.use()
+                self._ctx.viewport = (0, 0, disp_w, disp_h)
+            self._pp_copy_prog["u_input_tex"] = 0
+            composite_src.use(0)
+            self._pp_copy_vao.render()
+            self._ctx.enable(moderngl.BLEND)
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             if prof:
                 prof.stop("render_graphics_effects")
 

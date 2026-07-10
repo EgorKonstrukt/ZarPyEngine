@@ -13,6 +13,10 @@ from core.components.inspector_meta import FieldType, InspectorField, ComponentI
 class CameraProjection(Enum):
     PERSPECTIVE = "perspective"
     ORTHOGRAPHIC = "orthographic"
+
+class CameraResolutionMode(Enum):
+    NATIVE = "native"
+    CUSTOM = "custom"
 @ComponentRegistry.register
 class Camera(Component):
     _icon = "Camera.png"
@@ -27,6 +31,10 @@ class Camera(Component):
             InspectorField("projection", "Projection", FieldType.ENUM, enum_class=CameraProjection),
             InspectorField("ortho_size", "Ortho Size", FieldType.FLOAT, min_val=0.001, max_val=1000.0),
             InspectorField("depth", "Depth", FieldType.INT, min_val=-100, max_val=100),
+            InspectorField("render_scale", "Render Resolution", FieldType.FLOAT, min_val=0.1, max_val=1.0, step=0.05, decimals=2),
+            InspectorField("resolution_mode", "Resolution Mode", FieldType.ENUM, enum_class=CameraResolutionMode),
+            InspectorField("resolution_w", "Viewport Width", FieldType.INT, min_val=1, max_val=16384, step=1),
+            InspectorField("resolution_h", "Viewport Height", FieldType.INT, min_val=1, max_val=16384, step=1),
         ]
 
     def __init__(self):
@@ -38,6 +46,10 @@ class Camera(Component):
         self.ortho_size: float = 5.0
         self.clear_color: list[float] = [0.15, 0.15, 0.15, 1.0]
         self.depth: int = 0
+        self.render_scale: float = 1.0
+        self.resolution_mode: CameraResolutionMode = CameraResolutionMode.NATIVE
+        self.resolution_w: int = 1920
+        self.resolution_h: int = 1080
     def get_projection_matrix(self, aspect: float) -> Mat4:
         if self.projection == CameraProjection.PERSPECTIVE:
             return Mat4.perspective(self.fov, aspect, self.near, self.far)
@@ -51,12 +63,20 @@ class Camera(Component):
         fwd = t.forward
         up = t.up
         return Mat4.look_at(pos, pos + fwd, up)
+    def compute_render_size(self, display_w: int, display_h: int) -> tuple[int, int]:
+        if self.resolution_mode == CameraResolutionMode.CUSTOM:
+            return max(1, int(self.resolution_w)), max(1, int(self.resolution_h))
+        scale = max(0.05, min(1.0, self.render_scale))
+        return max(1, int(round(display_w * scale))), max(1, int(round(display_h * scale)))
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
             "fov": self.fov, "near": self.near, "far": self.far,
             "projection": self.projection.value, "ortho_size": self.ortho_size,
-            "clear_color": self.clear_color, "depth": self.depth
+            "clear_color": self.clear_color, "depth": self.depth,
+            "render_scale": self.render_scale,
+            "resolution_mode": self.resolution_mode.value,
+            "resolution_w": self.resolution_w, "resolution_h": self.resolution_h,
         })
         return d
     @classmethod
@@ -70,6 +90,10 @@ class Camera(Component):
         c.ortho_size = data.get("ortho_size", 5.0)
         c.clear_color = data.get("clear_color", [0.15, 0.15, 0.15, 1.0])
         c.depth = data.get("depth", 0)
+        c.render_scale = float(data.get("render_scale", 1.0))
+        c.resolution_mode = CameraResolutionMode(data.get("resolution_mode", "native"))
+        c.resolution_w = int(data.get("resolution_w", 1920))
+        c.resolution_h = int(data.get("resolution_h", 1080))
         return c
 
     def gizmo_lines(self) -> list[tuple[Vec3, Vec3, list[float]]]:
