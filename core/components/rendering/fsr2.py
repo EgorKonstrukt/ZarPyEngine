@@ -26,6 +26,7 @@ void main() {
 EASU_FRAG = """
 #version 460 core
 uniform sampler2D u_src;
+uniform sampler2D u_depth;
 uniform vec2 u_src_size;
 uniform vec2 u_src_pixel;
 uniform float u_sharpness;
@@ -81,13 +82,29 @@ void main() {
 
     float gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
     float gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
-    float edge = clamp(length(vec2(gx, gy)), 0.0, 1.0);
+    float lumaEdge = clamp(length(vec2(gx, gy)), 0.0, 1.0);
+
+    float d00 = texture(u_depth, v_uv + vec2(-1.0, -1.0) * u_src_pixel).r;
+    float d10 = texture(u_depth, v_uv + vec2(0.0, -1.0) * u_src_pixel).r;
+    float d20 = texture(u_depth, v_uv + vec2(1.0, -1.0) * u_src_pixel).r;
+    float d01 = texture(u_depth, v_uv + vec2(-1.0, 0.0) * u_src_pixel).r;
+    float d11 = texture(u_depth, v_uv).r;
+    float d21 = texture(u_depth, v_uv + vec2(1.0, 0.0) * u_src_pixel).r;
+    float d02 = texture(u_depth, v_uv + vec2(-1.0, 1.0) * u_src_pixel).r;
+    float d12 = texture(u_depth, v_uv + vec2(0.0, 1.0) * u_src_pixel).r;
+    float d22 = texture(u_depth, v_uv + vec2(1.0, 1.0) * u_src_pixel).r;
+    float dMin = min(min(min(d00, d10), min(d20, d01)), min(min(d11, d21), min(d02, min(d12, d22))));
+    float dMax = max(max(max(d00, d10), max(d20, d01)), max(max(d11, d21), max(d02, max(d12, d22))));
+    float depthEdge = clamp((dMax - dMin) / max(dMax, 1e-4), 0.0, 1.0);
+    depthEdge = smoothstep(0.02, 0.35, depthEdge);
+
+    float edge = max(lumaEdge, depthEdge);
 
     vec3 blurAvg = (c00 + c10 + c20 + c01 + c11 + c21 + c02 + c12 + c22) / 9.0;
     vec3 mn = min(min(min(c00, c10), min(c20, c01)), min(min(c11, c21), min(c02, min(c12, c22))));
     vec3 mx = max(max(max(c00, c10), max(c20, c01)), max(max(c11, c21), max(c02, max(c12, c22))));
 
-    vec3 sharpened = base + (base - blurAvg) * (edge * u_sharpness * 2.0);
+    vec3 sharpened = base + (base - blurAvg) * (lumaEdge * u_sharpness * 2.0);
     sharpened = clamp(sharpened, mn, mx);
 
     frag_color = vec4(mix(base, sharpened, edge), 1.0);
@@ -100,13 +117,14 @@ uniform sampler2D u_current;
 uniform sampler2D u_depth;
 uniform sampler2D u_velocity;
 uniform sampler2D u_history;
-uniform sampler2D u_prev_depth;
+uniform sampler2D u_reactive;
 uniform vec2 u_pixel;
 uniform vec2 u_size;
 uniform float u_stability;
 uniform float u_disocclusion;
 uniform float u_variance_gamma;
 uniform float u_has_velocity;
+uniform float u_has_reactive;
 uniform int u_has_history;
 uniform int u_has_reproj;
 uniform mat4 u_inv_view_proj;
@@ -164,16 +182,37 @@ vec3 fsr2_history_catmull_rom(sampler2D tex, vec2 uv, vec2 texSize) {
     return max(result, vec3(0.0));
 }
 
+vec2 fsr2_dilate_velocity(vec2 uv, float curD, out float nearestD) {
+    vec2 bestMotion = texture(u_velocity, uv).rg;
+    nearestD = curD;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            if (x == 0 && y == 0) continue;
+            vec2 suv = uv + vec2(float(x), float(y)) * u_pixel;
+            float d = texture(u_depth, suv).r;
+            if (d < nearestD) {
+                nearestD = d;
+                bestMotion = texture(u_velocity, suv).rg;
+            }
+        }
+    }
+    return bestMotion;
+}
+
 void main() {
     vec3 cur = texture(u_current, v_uv).rgb;
     float curD = texture(u_depth, v_uv).r;
 
     if (u_has_history == 0) {
-        frag_color = vec4(cur, 1.0);
+        frag_color = vec4(cur, curD);
         return;
     }
 
-    vec2 motion = u_has_velocity > 0.5 ? texture(u_velocity, v_uv).rg : vec2(0.0);
+    vec2 motion = vec2(0.0);
+    if (u_has_velocity > 0.5) {
+        float dummyD;
+        motion = fsr2_dilate_velocity(v_uv, curD, dummyD);
+    }
     if (u_has_reproj == 1 && dot(motion, motion) < 1e-10) {
         vec4 clipPos = vec4(v_uv * 2.0 - 1.0, curD * 2.0 - 1.0, 1.0);
         vec4 worldPos = u_inv_view_proj * clipPos;
@@ -187,6 +226,9 @@ void main() {
         }
     }
     vec2 prev_uv = v_uv - motion;
+
+    float velPx = length(motion) / max(u_pixel.x, u_pixel.y);
+    float velConfidence = clamp(velPx / 40.0, 0.0, 1.0);
 
     vec3 mn = cur;
     vec3 mx = cur;
@@ -206,7 +248,8 @@ void main() {
     vec3 yMean = ySum / 9.0;
     vec3 yVar = max(ySqSum / 9.0 - yMean * yMean, vec3(0.0));
     vec3 yStd = sqrt(yVar);
-    vec3 yExtents = max(yStd * u_variance_gamma, vec3(1e-4));
+    float adaptiveGamma = u_variance_gamma * mix(1.0, 0.5, velConfidence);
+    vec3 yExtents = max(yStd * adaptiveGamma, vec3(1e-4));
 
     vec3 hist = fsr2_history_catmull_rom(u_history, prev_uv, u_size);
     vec3 histY = fsr2_rgb_to_ycocg(hist);
@@ -219,27 +262,38 @@ void main() {
     if (any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)))) {
         blend = 0.0;
     } else {
-        float prevD = texture(u_prev_depth, prev_uv).r;
+        float prevD = texture(u_history, prev_uv).a;
         float ddepth = abs(curD - prevD);
         float diso = smoothstep(0.0, max(u_disocclusion, 1e-4), ddepth);
+
+        if (diso > 0.02) {
+            float spatialConfidence = 0.0;
+            for (int x = -1; x <= 1; x++) {
+                for (int y = -1; y <= 1; y++) {
+                    if (x == 0 && y == 0) continue;
+                    vec2 nuv = prev_uv + vec2(float(x), float(y)) * u_pixel;
+                    float nd = texture(u_history, nuv).a;
+                    float ndiso = smoothstep(0.0, max(u_disocclusion, 1e-4), abs(curD - nd));
+                    spatialConfidence = max(spatialConfidence, 1.0 - ndiso);
+                }
+            }
+            diso *= (1.0 - spatialConfidence * 0.6);
+        }
+
         blend = mix(u_stability, 0.0, diso);
-        float velPx = length(motion) / max(u_pixel.x, u_pixel.y);
         blend = mix(blend, blend * 0.5, clamp(velPx / 200.0, 0.0, 1.0));
         blend = mix(blend, blend * 0.35, clamp(clipDist * 0.5, 0.0, 1.0));
+        if (u_has_reactive > 0.5) {
+            float reactive = texture(u_reactive, v_uv).r;
+            blend *= (1.0 - reactive * 0.85);
+        }
     }
 
     vec3 result = mix(cur, histClipped, clamp(blend, 0.0, 1.0));
-    frag_color = vec4(result, 1.0);
-}
-"""
-
-COPY_DEPTH_FRAG = """
-#version 460 core
-uniform sampler2D u_depth;
-in vec2 v_uv;
-out vec4 frag_color;
-void main() {
-    frag_color = vec4(texture(u_depth, v_uv).r, 0.0, 0.0, 1.0);
+    if (any(isnan(result)) || any(isinf(result))) {
+        result = cur;
+    }
+    frag_color = vec4(result, curD);
 }
 """
 
@@ -327,11 +381,9 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._ctx: Optional[moderngl.Context] = None
         self._easu_prog: Optional[moderngl.Program] = None
         self._temporal_prog: Optional[moderngl.Program] = None
-        self._copy_depth_prog: Optional[moderngl.Program] = None
         self._rcas_prog: Optional[moderngl.Program] = None
         self._vao_easu: Optional[moderngl.VertexArray] = None
         self._vao_temporal: Optional[moderngl.VertexArray] = None
-        self._vao_copy_depth: Optional[moderngl.VertexArray] = None
         self._vao_rcas: Optional[moderngl.VertexArray] = None
         self._vbo: Optional[moderngl.Buffer] = None
         self._ibo: Optional[moderngl.Buffer] = None
@@ -339,8 +391,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._easu_fbo: Optional[moderngl.Framebuffer] = None
         self._recon: list = [None, None]
         self._recon_fbo: list = [None, None]
-        self._prev_depth: Optional[moderngl.Texture] = None
-        self._prev_depth_fbo: Optional[moderngl.Framebuffer] = None
         self._buf_w: int = 0
         self._buf_h: int = 0
         self._cur_index: int = 0
@@ -378,11 +428,9 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         inst._ctx = None
         inst._easu_prog = None
         inst._temporal_prog = None
-        inst._copy_depth_prog = None
         inst._rcas_prog = None
         inst._vao_easu = None
         inst._vao_temporal = None
-        inst._vao_copy_depth = None
         inst._vao_rcas = None
         inst._vbo = None
         inst._ibo = None
@@ -390,8 +438,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         inst._easu_fbo = None
         inst._recon = [None, None]
         inst._recon_fbo = [None, None]
-        inst._prev_depth = None
-        inst._prev_depth_fbo = None
         inst._buf_w = 0
         inst._buf_h = 0
         inst._cur_index = 0
@@ -407,11 +453,9 @@ class FidelityFXSuperResolution2(GraphicsEffect):
             self._ctx = ctx
             self._easu_prog = cached['_easu_prog']
             self._temporal_prog = cached['_temporal_prog']
-            self._copy_depth_prog = cached['_copy_depth_prog']
             self._rcas_prog = cached['_rcas_prog']
             self._vao_easu = cached['_vao_easu']
             self._vao_temporal = cached['_vao_temporal']
-            self._vao_copy_depth = cached['_vao_copy_depth']
             self._vao_rcas = cached['_vao_rcas']
             self._vbo = cached['_vbo']
             self._ibo = cached['_ibo']
@@ -419,7 +463,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._ctx = ctx
         self._easu_prog = ctx.program(vertex_shader=FSR2_VERT, fragment_shader=EASU_FRAG)
         self._temporal_prog = ctx.program(vertex_shader=FSR2_VERT, fragment_shader=TEMPORAL_FRAG)
-        self._copy_depth_prog = ctx.program(vertex_shader=FSR2_VERT, fragment_shader=COPY_DEPTH_FRAG)
         self._rcas_prog = ctx.program(vertex_shader=FSR2_VERT, fragment_shader=RCAS_FRAG)
         verts = np.array([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0], dtype=np.float32)
         indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.int32)
@@ -427,16 +470,13 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._ibo = ctx.buffer(indices.tobytes())
         self._vao_easu = ctx.vertex_array(self._easu_prog, [(self._vbo, '2f', 'in_position')], self._ibo)
         self._vao_temporal = ctx.vertex_array(self._temporal_prog, [(self._vbo, '2f', 'in_position')], self._ibo)
-        self._vao_copy_depth = ctx.vertex_array(self._copy_depth_prog, [(self._vbo, '2f', 'in_position')], self._ibo)
         self._vao_rcas = ctx.vertex_array(self._rcas_prog, [(self._vbo, '2f', 'in_position')], self._ibo)
         self._res_cache[ctx_id] = {
             '_easu_prog': self._easu_prog,
             '_temporal_prog': self._temporal_prog,
-            '_copy_depth_prog': self._copy_depth_prog,
             '_rcas_prog': self._rcas_prog,
             '_vao_easu': self._vao_easu,
             '_vao_temporal': self._vao_temporal,
-            '_vao_copy_depth': self._vao_copy_depth,
             '_vao_rcas': self._vao_rcas,
             '_vbo': self._vbo,
             '_ibo': self._ibo,
@@ -472,16 +512,12 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._easu_tex.repeat_x = False
         self._easu_tex.repeat_y = False
         self._easu_fbo = ctx.framebuffer(self._easu_tex)
-        self._prev_depth = ctx.texture((w, h), 4, dtype='f2')
-        self._prev_depth.repeat_x = False
-        self._prev_depth.repeat_y = False
-        self._prev_depth_fbo = ctx.framebuffer(self._prev_depth)
         self._history_valid = False
         self._cur_index = 0
 
     def _release_buffers(self):
         for obj in (self._recon[0], self._recon[1], self._recon_fbo[0], self._recon_fbo[1],
-                    self._easu_tex, self._easu_fbo, self._prev_depth, self._prev_depth_fbo):
+                    self._easu_tex, self._easu_fbo):
             if obj is not None:
                 try:
                     obj.release()
@@ -491,8 +527,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
         self._recon_fbo = [None, None]
         self._easu_tex = None
         self._easu_fbo = None
-        self._prev_depth = None
-        self._prev_depth_fbo = None
         self._buf_w = 0
         self._buf_h = 0
         self._history_valid = False
@@ -519,6 +553,8 @@ class FidelityFXSuperResolution2(GraphicsEffect):
             self._easu_fbo.viewport = (0, 0, viewport_w, viewport_h)
             self._easu_prog["u_src"] = 0
             scene_color_tex.use(0)
+            self._easu_prog["u_depth"] = 1
+            scene_depth_tex.use(1)
             self._easu_prog["u_src_size"].value = (float(render_w), float(render_h))
             self._easu_prog["u_src_pixel"].value = (1.0 / max(1, render_w), 1.0 / max(1, render_h))
             self._easu_prog["u_sharpness"].value = float(self._easu_sharpness)
@@ -541,8 +577,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
             self._temporal_prog["u_has_velocity"] = 0.0
         self._temporal_prog["u_history"] = 3
         self._recon[prev].use(3)
-        self._temporal_prog["u_prev_depth"] = 4
-        self._prev_depth.use(4)
         self._temporal_prog["u_pixel"].value = (1.0 / viewport_w, 1.0 / viewport_h)
         self._temporal_prog["u_size"].value = (float(viewport_w), float(viewport_h))
         self._temporal_prog["u_stability"].value = self._stability
@@ -565,12 +599,6 @@ class FidelityFXSuperResolution2(GraphicsEffect):
 
         self._vao_temporal.render()
 
-        self._prev_depth_fbo.use()
-        self._prev_depth_fbo.viewport = (0, 0, viewport_w, viewport_h)
-        self._copy_depth_prog["u_depth"] = 0
-        scene_depth_tex.use(0)
-        self._vao_copy_depth.render()
-
         if output_fbo is not None:
             output_fbo.use()
             output_fbo.viewport = (0, 0, viewport_w, viewport_h)
@@ -591,8 +619,8 @@ class FidelityFXSuperResolution2(GraphicsEffect):
 
     def _release_gl(self):
         self._release_buffers()
-        for obj in (self._easu_prog, self._temporal_prog, self._copy_depth_prog, self._rcas_prog,
-                    self._vao_easu, self._vao_temporal, self._vao_copy_depth, self._vao_rcas,
+        for obj in (self._easu_prog, self._temporal_prog, self._rcas_prog,
+                    self._vao_easu, self._vao_temporal, self._vao_rcas,
                     self._vbo, self._ibo):
             if obj is not None:
                 try:
@@ -601,11 +629,9 @@ class FidelityFXSuperResolution2(GraphicsEffect):
                     pass
         self._easu_prog = None
         self._temporal_prog = None
-        self._copy_depth_prog = None
         self._rcas_prog = None
         self._vao_easu = None
         self._vao_temporal = None
-        self._vao_copy_depth = None
         self._vao_rcas = None
         self._vbo = None
         self._ibo = None
