@@ -163,6 +163,7 @@ class FidelityFXSuperResolution2(GraphicsEffect):
     _gizmo_icon_label = "FS2"
     render_type = "screen"
     _use_velocity = True
+    _is_upscaler = True
 
     def __init__(self):
         super().__init__()

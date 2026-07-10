@@ -230,4 +230,28 @@ def create_camera_menu(vp):
     rot_spin_action.setDefaultWidget(rot_widget)
     menu.addAction(rot_spin_action)
 
+    res_label_w = QWidget()
+    res_label_layout = QHBoxLayout(res_label_w)
+    res_label_layout.setContentsMargins(4, 1, 4, 1)
+    res_label_layout.addWidget(QLabel("Render Resolution"))
+    res_label_layout.addStretch()
+    res_label_action = QWidgetAction(menu)
+    res_label_action.setDefaultWidget(res_label_w)
+    menu.addAction(res_label_action)
+
+    vp._render_scale_spin = QSpinBox()
+    vp._render_scale_spin.setRange(5, 100)
+    vp._render_scale_spin.setValue(int(round((vp._cam._render_scale if hasattr(vp._cam, '_render_scale') else 1.0) * 100)))
+    vp._render_scale_spin.setSingleStep(5)
+    vp._render_scale_spin.setSuffix("%")
+    vp._render_scale_spin.setMinimumWidth(60)
+    res_widget = QWidget()
+    res_layout = QHBoxLayout(res_widget)
+    res_layout.setContentsMargins(4, 1, 4, 1)
+    res_layout.addWidget(vp._render_scale_spin)
+    vp._render_scale_spin.valueChanged.connect(vp._on_render_scale_changed)
+    res_spin_action = QWidgetAction(menu)
+    res_spin_action.setDefaultWidget(res_widget)
+    menu.addAction(res_spin_action)
+
     return menu

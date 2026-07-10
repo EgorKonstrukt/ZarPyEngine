@@ -331,6 +331,10 @@ class SceneViewport(QOpenGLWidget):
     def _on_rotate_speed_changed(self, value: float):
         self._cam._rotate_speed = value
 
+    def _on_render_scale_changed(self, value: int):
+        self._cam._render_scale = max(0.05, min(1.0, value / 100.0))
+        self.update()
+
     def _on_depth_changed(self, value: int):
         fmt = QSurfaceFormat()
         fmt.setDepthBufferSize(value)

@@ -55,6 +55,20 @@ from core.renderer.culling import cpu_frustum_cull
 from core.renderer.gpu_culling import GpuStorage, GpuCulling
 
 
+def _halton(index: int, base: int) -> float:
+    f = 1.0
+    r = 0.0
+    i = index
+    while i > 0:
+        f /= base
+        r += f * (i % base)
+        i //= base
+    return r
+
+
+_TAAU_JITTER = [(_halton(i, 2) - 0.5, _halton(i, 3) - 0.5) for i in range(1, 9)]
+
+
 class _SpriteItem:
     __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'texture_path')
     def __init__(self, world_matrix, color, flip_x, flip_y, texture_path):
@@ -216,6 +230,12 @@ class Renderer:
         self._pp_fbo_size: tuple = (0, 0)
         self._pp_copy_prog: Optional[moderngl.Program] = None
         self._pp_copy_vao: Optional[moderngl.VertexArray] = None
+
+        self._se_fbo_a: Optional[moderngl.Framebuffer] = None
+        self._se_fbo_b: Optional[moderngl.Framebuffer] = None
+        self._se_color_tex_a: Optional[moderngl.Texture] = None
+        self._se_color_tex_b: Optional[moderngl.Texture] = None
+        self._se_fbo_size: tuple = (0, 0)
 
         self._velocity_tex: Optional[moderngl.Texture] = None
         self._velocity_fbo: Optional[moderngl.Framebuffer] = None
@@ -556,6 +576,35 @@ void main() {
         self._pp_fbo_b = None
         self._pp_color_tex_b = None
         self._pp_fbo_size = (0, 0)
+
+    def _ensure_se_fbo(self, w: int, h: int):
+        if self._se_fbo_size == (w, h) and self._se_fbo_a:
+            return
+        self._release_se_fbo()
+        self._se_color_tex_a = self._ctx.texture((w, h), 4, dtype='f1')
+        self._se_color_tex_a.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._se_color_tex_a.repeat_x = False
+        self._se_color_tex_a.repeat_y = False
+        self._se_fbo_a = self._ctx.framebuffer(self._se_color_tex_a)
+        self._se_color_tex_b = self._ctx.texture((w, h), 4, dtype='f1')
+        self._se_color_tex_b.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._se_color_tex_b.repeat_x = False
+        self._se_color_tex_b.repeat_y = False
+        self._se_fbo_b = self._ctx.framebuffer(self._se_color_tex_b)
+        self._se_fbo_size = (w, h)
+
+    def _release_se_fbo(self):
+        for obj in [self._se_fbo_a, self._se_color_tex_a, self._se_fbo_b, self._se_color_tex_b]:
+            if obj:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self._se_fbo_a = None
+        self._se_color_tex_a = None
+        self._se_fbo_b = None
+        self._se_color_tex_b = None
+        self._se_fbo_size = (0, 0)
 
     def _ensure_water_fbo(self, w: int, h: int):
         if self._water_fbo_size == (w, h) and self._water_fbo:
@@ -990,6 +1039,20 @@ void main() {
             prog = self._default_prog
             fill_mode = moderngl.TRIANGLES
             use_polygon_mode = False
+        unjit_proj = proj_mat
+        jitter_active = (not self._effects_disabled) and (display_w and display_h) and any(
+            getattr(e, '_is_upscaler', False) and e.enabled and e.entity and e.entity.active
+            for e in GraphicsEffect._registry
+        )
+        if jitter_active:
+            self._jitter_index = (getattr(self, '_jitter_index', 0) + 1) % len(_TAAU_JITTER)
+            hx, hy = _TAAU_JITTER[self._jitter_index]
+            jx = hx * 2.0 / max(1, viewport_w)
+            jy = hy * 2.0 / max(1, viewport_h)
+            jd = proj_mat._d.copy()
+            jd[:, 0] += jx * jd[:, 3]
+            jd[:, 1] += jy * jd[:, 3]
+            proj_mat = Mat4(jd)
         view_f32 = view_mat.to_f32()
         proj_f32 = proj_mat.to_f32()
         if prof:
@@ -1295,12 +1358,14 @@ void main() {
                 prof.stop("render_underwater")
         if prof:
             prof.start("render_overlay")
+        dw = display_w if display_w else viewport_w
+        dh = display_h if display_h else viewport_h
         if fbo is not None:
             fbo.use()
-            fbo.viewport = (0, 0, viewport_w, viewport_h)
+            fbo.viewport = (0, 0, dw, dh)
         else:
             self._ctx.screen.use()
-        self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+        self._ctx.viewport = (0, 0, dw, dh)
         self._ctx.disable(moderngl.DEPTH_TEST)
         self._pp_copy_prog["u_input_tex"] = 0
         self._scene_color_tex.use(0)
@@ -1352,7 +1417,7 @@ void main() {
             prof.stop("render_stats")
         _pv_key = id(fbo) if fbo is not None else 0
         prev_view_proj = self._prev_view_proj_by_target.get(_pv_key)
-        self._prev_view_proj_by_target[_pv_key] = proj_mat @ view_mat
+        self._prev_view_proj_by_target[_pv_key] = unjit_proj @ view_mat
         if GraphicsEffect._registry and not self._effects_disabled:
             GraphicsEffect.increment_frame()
             if prof:
@@ -1373,7 +1438,7 @@ void main() {
                     self._ctx.enable(moderngl.DEPTH_TEST)
                     self._ctx.enable(moderngl.CULL_FACE)
                     self._ctx.cull_face = 'back'
-                    cur_vp = proj_mat @ view_mat
+                    cur_vp = unjit_proj @ view_mat
                     prog = self._velocity_geom_prog
                     prog["u_view_proj"].write(cur_vp.to_f32().tobytes())
                     prog["u_prev_view_proj"].write(prev_view_proj.to_f32().tobytes())
@@ -1422,27 +1487,32 @@ void main() {
                                   **extra)
                 except Exception as e:
                     Logger.error(f"GraphicsEffect.render error: {e}")
+            disp_w = display_w if display_w else viewport_w
+            disp_h = display_h if display_h else viewport_h
             composite_src = self._scene_color_tex
             if screen_effects:
-                self._ensure_pp_fbo(viewport_w, viewport_h)
+                has_upscaler = any(getattr(e, '_is_upscaler', False) for e in screen_effects)
+                pipe_w = disp_w if has_upscaler else viewport_w
+                pipe_h = disp_h if has_upscaler else viewport_h
+                self._ensure_se_fbo(pipe_w, pipe_h)
                 self._ctx.disable(moderngl.BLEND)
-                self._pp_fbo_a.use()
-                self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
-                self._pp_fbo_a.clear(0.0, 0.0, 0.0, 0.0, 1.0)
-                self._pp_fbo_b.use()
-                self._pp_fbo_b.viewport = (0, 0, viewport_w, viewport_h)
-                self._pp_fbo_b.clear(0.0, 0.0, 0.0, 0.0, 1.0)
-                self._pp_fbo_a.use()
-                self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
+                self._se_fbo_a.use()
+                self._se_fbo_a.viewport = (0, 0, pipe_w, pipe_h)
+                self._se_fbo_a.clear(0.0, 0.0, 0.0, 0.0, 1.0)
+                self._se_fbo_b.use()
+                self._se_fbo_b.viewport = (0, 0, pipe_w, pipe_h)
+                self._se_fbo_b.clear(0.0, 0.0, 0.0, 0.0, 1.0)
+                self._se_fbo_a.use()
+                self._se_fbo_a.viewport = (0, 0, pipe_w, pipe_h)
                 self._pp_copy_prog["u_input_tex"] = 0
                 self._scene_color_tex.use(0)
                 self._pp_copy_vao.render()
-                src_fbo = self._pp_fbo_a
-                dst_fbo = self._pp_fbo_b
-                src_tex = self._pp_color_tex_a
+                src_fbo = self._se_fbo_a
+                dst_fbo = self._se_fbo_b
+                src_tex = self._se_color_tex_a
                 for effect in screen_effects:
                     dst_fbo.use()
-                    dst_fbo.viewport = (0, 0, viewport_w, viewport_h)
+                    dst_fbo.viewport = (0, 0, pipe_w, pipe_h)
                     try:
                         if prof:
                             prof.start(f"effect_{effect.__class__.__name__}")
@@ -1451,8 +1521,9 @@ void main() {
                             extra['velocity_tex'] = velocity_tex
                             extra['prev_view_proj'] = prev_view_proj
                         effect.render(self._ctx, self._scene_color_tex, self._scene_depth_tex,
-                                      view_mat, proj_mat, cam_pos, viewport_w, viewport_h,
+                                      view_mat, proj_mat, cam_pos, pipe_w, pipe_h,
                                       input_tex=src_tex, output_fbo=dst_fbo,
+                                      render_w=viewport_w, render_h=viewport_h,
                                       **extra)
                         if prof:
                             time_elapsed = prof.stop(f"effect_{effect.__class__.__name__}")
@@ -1463,8 +1534,6 @@ void main() {
                     src_fbo, dst_fbo = dst_fbo, src_fbo
                     src_tex = src_fbo.color_attachments[0]
                 composite_src = src_tex
-            disp_w = display_w if display_w else viewport_w
-            disp_h = display_h if display_h else viewport_h
             self._ctx.disable(moderngl.BLEND)
             if fbo is not None:
                 fbo.use()
@@ -1867,6 +1936,7 @@ void main() {
         self._prev_view_proj_by_target.clear()
         self._release_scene_fbo()
         self._release_pp_fbo()
+        self._release_se_fbo()
         self._release_water_fbo()
         if self._batcher:
             self._batcher.release()
