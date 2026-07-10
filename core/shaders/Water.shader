@@ -111,9 +111,10 @@ Shader "Zarin/Water"
             const float G = 9.81;
 
             vec2 domain_warp(vec2 p, float t) {
+                const float TAU = 6.2831853;
                 vec2 w;
-                w.x = sin(p.x * 0.017 + t * 0.05) + sin(p.y * 0.023 - t * 0.041);
-                w.y = cos(p.y * 0.019 + t * 0.045) + cos(p.x * 0.027 + t * 0.033);
+                w.x = sin(mod(p.x * 0.017 + t * 0.05, TAU)) + sin(mod(p.y * 0.023 - t * 0.041, TAU));
+                w.y = cos(mod(p.y * 0.019 + t * 0.045, TAU)) + cos(mod(p.x * 0.027 + t * 0.033, TAU));
                 return w * _WarpAmount;
             }
 
@@ -139,6 +140,7 @@ Shader "Zarin/Water"
                     float k = 6.2831853 / wlen;
                     float c = sqrt(G / k);
                     float f = k * (dot(d, wp) - c * speed * _Time);
+                    f = mod(f, 6.2831853);
                     float a = amp;
                     float q = steep / (k * a * float(_WaveCount) + 1e-4);
                     float cosf = cos(f);
@@ -168,6 +170,7 @@ Shader "Zarin/Water"
 
             #version 460 core
             #define MAX_WAVES 8
+            #define MAX_LIGHTS 16
             in vec3 v_world_pos;
             in vec3 v_normal;
             in vec2 v_screen_uv;
@@ -183,6 +186,13 @@ Shader "Zarin/Water"
             uniform vec3 _SunDirection;
             uniform vec3 _SunColor;
             uniform float _SunIntensity;
+            uniform int _LightCount;
+            uniform vec3 _LightPos[MAX_LIGHTS];
+            uniform vec3 _LightColor[MAX_LIGHTS];
+            uniform float _LightIntensity[MAX_LIGHTS];
+            uniform float _LightRange[MAX_LIGHTS];
+            uniform vec3 _LightDir[MAX_LIGHTS];
+            uniform float _LightSpotCos[MAX_LIGHTS];
             uniform vec2 _WindDir;
             uniform float _WindSpeed;
             uniform float _WindGust;
@@ -281,14 +291,27 @@ Shader "Zarin/Water"
             }
 
             void main() {
+                // Wrap the detail coordinate to keep noise precise far from the origin
+                // while staying fixed in world space (no camera-relative swimming).
+                vec2 dc = mod(v_detail_coord + 2048.0, 4096.0) - 2048.0;
+
                 vec3 N = normalize(v_normal);
-                vec3 dn = detail_normal(v_detail_coord * _WaveTiling, _Time * _DetailSpeed);
+                vec3 dn = detail_normal(dc * _WaveTiling, _Time * _DetailSpeed);
                 N = normalize(N + vec3(dn.x, 0.0, dn.z));
 
                 vec3 V = normalize(u_camera_pos - v_world_pos);
+                bool backface = dot(V, N) < 0.0;
+
+                if (backface) N = -N;
+
                 float ndv = max(dot(N, V), 0.0);
                 float F0 = 0.02;
-                float fres = F0 + (1.0 - F0) * pow(1.0 - ndv, _FresnelPower);
+                float fres;
+                if (backface) {
+                    fres = F0 + (1.0 - F0) * pow(1.0 - ndv, _FresnelPower) * 0.2;
+                } else {
+                    fres = F0 + (1.0 - F0) * pow(1.0 - ndv, _FresnelPower);
+                }
 
                 float dist = length(u_camera_pos.xz - v_world_pos.xz);
                 float detailFade = 1.0 - smoothstep(120.0, 600.0, dist);
@@ -305,11 +328,7 @@ Shader "Zarin/Water"
                 vec3 color;
                 if (_HasScene == 1) {
                     vec2 refr_uv = clamp(v_screen_uv + N.xz * _Distortion, 0.001, 0.999);
-                    float ca = _Distortion * 0.45 * (1.0 - detailFade * 0.5);
-                    vec3 refr;
-                    refr.r = texture(_SceneColor, clamp(refr_uv + N.xz * ca, 0.001, 0.999)).r;
-                    refr.g = texture(_SceneColor, refr_uv).g;
-                    refr.b = texture(_SceneColor, clamp(refr_uv - N.xz * ca, 0.001, 0.999)).b;
+                    vec3 refr = texture(_SceneColor, refr_uv).rgb;
                     refr = mix(refr, waterBody, _RefractStrength * (0.4 + 0.6 * depthT));
 
                     vec3 R = reflect(-V, N);
@@ -334,11 +353,12 @@ Shader "Zarin/Water"
                 vec3 L = normalize(_SunDirection);
                 float sssAmount = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0);
                 vec3 sss = _SSSColor * sssAmount * (0.35 + 0.85 * crest) * _SunIntensity;
+                if (backface) sss *= 1.8;
                 color += sss * 0.6;
 
                 // Caustics shimmer on shallow water (no scene needed, purely analytic).
                 if (_Caustics > 0.0) {
-                    float caus = fbm(v_detail_coord * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
+                    float caus = fbm(dc * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
                     caus = pow(caus, 3.0) * (1.0 - depthT) * _Caustics;
                     color += _SSSColor * caus * 0.25;
                 }
@@ -351,8 +371,28 @@ Shader "Zarin/Water"
                 float sparkle = pow(max(dot(N, H), 0.0), 9000.0) * smoothstep(0.2, 1.0, dn.y);
                 color += _SunColor * _SunIntensity * (spec * _Specular + sparkle * _Specular * 1.5);
 
+                // Interaction with non-directional light sources (point / spot). Each light
+                // adds an attenuated specular glint plus a faint colored glow on the surface.
+                for (int i = 0; i < MAX_LIGHTS; i++) {
+                    if (i >= _LightCount) break;
+                    vec3 Lv = _LightPos[i] - v_world_pos;
+                    float d = length(Lv);
+                    if (d < 1e-3) continue;
+                    vec3 Ll = Lv / d;
+                    float range = max(_LightRange[i], 0.001);
+                    float att = clamp(1.0 - d / range, 0.0, 1.0);
+                    att *= att;
+                    float spot = 1.0;
+                    if (_LightSpotCos[i] > -0.999) {
+                        spot = smoothstep(_LightSpotCos[i], mix(_LightSpotCos[i], 1.0, 0.15), dot(-Ll, normalize(_LightDir[i])));
+                        if (spot <= 0.0) continue;
+                    }
+                    float lspec = pow(max(dot(N, normalize(V + Ll)), 0.0), shininess);
+                    color += _LightColor[i] * _LightIntensity[i] * att * spot * (lspec * _Specular * 1.2 + 0.04);
+                }
+
                 // Foam: crest (noise-broken) + shoreline
-                float fn = fbm(v_detail_coord * 0.7 + vec2(_Time * 0.1, -_Time * 0.08));
+                float fn = fbm(dc * 0.7 + vec2(_Time * 0.1, -_Time * 0.08));
                 float crest_foam = smoothstep(0.45, 1.1, v_crest * v_chop) * smoothstep(0.55, 0.95, fn);
                 float shore_foam = 0.0;
                 if (_HasScene == 1) {
@@ -367,8 +407,14 @@ Shader "Zarin/Water"
                 // Distance fade to horizon (for infinite ocean)
                 float fade = clamp(dist / 1100.0, 0.0, 1.0);
                 color = mix(color, _HorizonColor, fade * fade);
-                float alpha = mix(0.93, 0.99, fres);
-                alpha = mix(alpha, 1.0, foam);
+                float alpha;
+                if (backface) {
+                    alpha = mix(0.2, 0.55, fres);
+                    alpha = mix(alpha, 1.0, foam);
+                } else {
+                    alpha = mix(0.93, 0.99, fres);
+                    alpha = mix(alpha, 1.0, foam);
+                }
 
                 frag_color = vec4(color, alpha);
             }

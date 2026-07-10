@@ -148,7 +148,7 @@ class Water(Component):
 
     def render_water(self, ctx, shaders, view_mat, proj_mat, dir_light, cam_pos,
                       water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far,
-                      wind_zones=None):
+                      wind_zones=None, lights=None, chunk_models=None):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
@@ -177,16 +177,17 @@ class Water(Component):
 
         tr = self.transform
         water_y = tr.position.y if tr else 0.0
-        if self.infinite_ocean and self.surface_type == "Ocean":
-            model = Mat4.scale(Vec3(self.ocean_size, 1.0, self.ocean_size)) * \
-                    Mat4.translation(Vec3(cam_pos.x, water_y, cam_pos.z))
+        if chunk_models:
+            models = list(chunk_models)
+            water_wx, water_wz = cam_pos.x, cam_pos.z
+        elif self.infinite_ocean and self.surface_type == "Ocean":
+            models = [Mat4.scale(Vec3(self.ocean_size, 1.0, self.ocean_size)) * \
+                      Mat4.translation(Vec3(cam_pos.x, water_y, cam_pos.z))]
             water_wx, water_wz = cam_pos.x, cam_pos.z
         else:
-            model = tr.world_matrix if tr else Mat4.identity()
+            models = [tr.world_matrix if tr else Mat4.identity()]
             water_wx = tr.position.x if tr else 0.0
             water_wz = tr.position.z if tr else 0.0
-        if "u_model" in prog:
-            prog["u_model"].write(model.to_f32().tobytes())
         if "u_view" in prog:
             prog["u_view"].write(view_mat.to_f32().tobytes())
         if "u_proj" in prog:
@@ -232,6 +233,43 @@ class Water(Component):
         _set_float(prog, "_Choppiness", self.choppiness)
         _set_float(prog, "_Caustics", self.caustics)
 
+        if "_LightCount" in prog:
+            from core.components.lighting import LightType
+            lpos = np.zeros((16, 3), dtype=np.float32)
+            lcol = np.zeros((16, 3), dtype=np.float32)
+            lint = np.zeros(16, dtype=np.float32)
+            lrange = np.zeros(16, dtype=np.float32)
+            ldir = np.zeros((16, 3), dtype=np.float32)
+            lspot = np.full(16, -1.0, dtype=np.float32)
+            count = 0
+            if lights:
+                for l, lt in lights:
+                    if not l or not l.enabled or lt is None:
+                        continue
+                    if l.light_type == LightType.DIRECTIONAL:
+                        continue
+                    if count >= 16:
+                        break
+                    pos = lt.position
+                    lpos[count] = [pos.x, pos.y, pos.z]
+                    col = l.color if isinstance(l.color, (list, tuple)) else [1.0, 1.0, 1.0]
+                    lcol[count] = [float(col[0]), float(col[1]), float(col[2])]
+                    lint[count] = float(l.intensity)
+                    lrange[count] = max(float(l.range), 0.001)
+                    if l.light_type == LightType.SPOT:
+                        fwd = lt.forward
+                        ldir[count] = [fwd.x, fwd.y, fwd.z]
+                        half = math.radians(max(float(l.spot_angle), 1.0)) * 0.5
+                        lspot[count] = math.cos(half)
+                    count += 1
+            prog["_LightCount"].value = count
+            prog["_LightPos"].write(lpos.tobytes())
+            prog["_LightColor"].write(lcol.tobytes())
+            prog["_LightIntensity"].write(lint.tobytes())
+            prog["_LightRange"].write(lrange.tobytes())
+            prog["_LightDir"].write(ldir.tobytes())
+            prog["_LightSpotCos"].write(lspot.tobytes())
+
         _set_vec3(prog, "_DeepColor", self.deep_color)
         _set_vec3(prog, "_ShallowColor", self.shallow_color)
         _set_vec3(prog, "_FoamColor", self.foam_color)
@@ -270,7 +308,10 @@ class Water(Component):
         ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         ctx.disable(moderngl.CULL_FACE)
         try:
-            water_mesh.render(prog)
+            for model in models:
+                if "u_model" in prog:
+                    prog["u_model"].write(model.to_f32().tobytes())
+                water_mesh.render(prog)
         finally:
             ctx.enable(moderngl.CULL_FACE)
             ctx.disable(moderngl.BLEND)

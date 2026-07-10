@@ -361,6 +361,21 @@ void main() {
                 [(self._quad_vbo, '2f', 'in_position')],
                 self._quad_ibo
             )
+            try:
+                self._underwater_prog = self._ctx.program(
+                    vertex_shader=read_shader("shadow_overlay.vert"),
+                    fragment_shader=read_shader("underwater.frag")
+                )
+            except Exception:
+                self._underwater_prog = None
+            if self._underwater_prog is not None:
+                self._underwater_vao = self._ctx.vertex_array(
+                    self._underwater_prog,
+                    [(self._quad_vbo, '2f', 'in_position')],
+                    self._quad_ibo
+                )
+            else:
+                self._underwater_vao = None
             VELOCITY_FRAG = """
 #version 460 core
 uniform sampler2D u_depth_tex;
@@ -460,6 +475,8 @@ void main() {
             self._cloud_plane.build_gl(self._ctx, self._default_prog)
             self._water_plane = make_water_plane(1.0, 200)
             self._water_plane.build_gl(self._ctx, self._default_prog)
+            self._water_chunk_mesh = make_water_plane(1.0, 32)
+            self._water_chunk_mesh.build_gl(self._ctx, self._default_prog)
             self._particles = ParticleRenderer(self._ctx, self._particle_prog)
             self._particles.load_compute_shader(
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "particle.compute")
@@ -557,6 +574,75 @@ void main() {
         self._water_color_tex = None
         self._water_depth_rb = None
         self._water_fbo_size = (0, 0)
+
+    def _compute_water_chunk_models(self, cam_pos, water_y, ocean_size, chunk_size=200):
+        from core.math3d import Mat4, Vec3
+        grid_radius = max(1, int(round(ocean_size / (2.0 * chunk_size))))
+        gcx = round(cam_pos.x / chunk_size) * chunk_size
+        gcz = round(cam_pos.z / chunk_size) * chunk_size
+        models = []
+        for i in range(-grid_radius, grid_radius + 1):
+            for j in range(-grid_radius, grid_radius + 1):
+                cx = gcx + i * chunk_size
+                cz = gcz + j * chunk_size
+                model = Mat4.scale(Vec3(chunk_size, 1.0, chunk_size)) * Mat4.translation(Vec3(cx, water_y, cz))
+                models.append(model)
+        return models
+
+    def _render_underwater_pass(self, w, h, view_f32, proj_f32, cam_pos,
+                                sun_dir, sun_color, sun_intensity,
+                                fog_color, caustic_color, depth_below,
+                                cam_near, cam_far):
+        if self._underwater_prog is None or self._underwater_vao is None:
+            return
+        self._ensure_pp_fbo(w, h)
+        self._ctx.copy_framebuffer(self._pp_fbo_a, self._scene_fbo)
+        self._scene_fbo.use()
+        self._scene_fbo.viewport = (0, 0, w, h)
+        self._ctx.viewport = (0, 0, w, h)
+        old_mask = self._ctx.depth_mask
+        self._ctx.disable(moderngl.DEPTH_TEST)
+        self._ctx.depth_mask = False
+        prog = self._underwater_prog
+        if "u_scene" in prog:
+            self._pp_color_tex_a.use(0)
+            prog["u_scene"] = 0
+        if "u_depth" in prog:
+            self._scene_depth_tex.use(1)
+            prog["u_depth"] = 1
+        if "u_time" in prog:
+            prog["u_time"].value = time.time()
+        if "u_resolution" in prog:
+            prog["u_resolution"].value = (float(w), float(h))
+        if "u_cam_pos" in prog:
+            prog["u_cam_pos"].write(np.array([cam_pos.x, cam_pos.y, cam_pos.z], dtype=np.float32).tobytes())
+        if "u_sun_dir" in prog:
+            prog["u_sun_dir"].write(np.array([sun_dir.x, sun_dir.y, sun_dir.z], dtype=np.float32).tobytes())
+        if "u_sun_color" in prog:
+            prog["u_sun_color"].write(np.array(sun_color, dtype=np.float32).tobytes())
+        if "u_sun_intensity" in prog:
+            prog["u_sun_intensity"].value = float(sun_intensity)
+        if "u_fog_color" in prog:
+            prog["u_fog_color"].write(np.array(fog_color, dtype=np.float32).tobytes())
+        if "u_caustic_color" in prog:
+            prog["u_caustic_color"].write(np.array(caustic_color, dtype=np.float32).tobytes())
+        if "u_depth_below" in prog:
+            prog["u_depth_below"].value = float(depth_below)
+        if "u_cam_near" in prog:
+            prog["u_cam_near"].value = float(cam_near)
+        if "u_cam_far" in prog:
+            prog["u_cam_far"].value = float(cam_far)
+        if "u_view" in prog:
+            prog["u_view"].write(view_f32)
+        if "u_proj" in prog:
+            prog["u_proj"].write(proj_f32)
+        if "u_fog_density" in prog:
+            prog["u_fog_density"].value = 0.045
+        try:
+            self._underwater_vao.render()
+        finally:
+            self._ctx.enable(moderngl.DEPTH_TEST)
+            self._ctx.depth_mask = old_mask
 
     def _ensure_velocity_fbo(self, w: int, h: int):
         if self._velocity_fbo_size == (w, h) and self._velocity_fbo:
@@ -1083,11 +1169,21 @@ void main() {
             self._ctx.enable(moderngl.CULL_FACE)
             self._ctx.cull_face = 'back'
             for water_component in water_components:
-                water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
-                                             dir_light, cam_pos, self._water_plane,
-                                             self._scene_color_tex, self._scene_depth_tex,
-                                             (viewport_w, viewport_h), cam_near, cam_far,
-                                             snap.wind_zones)
+                if water_component.infinite_ocean and water_component.surface_type == "Ocean":
+                    tr = water_component.transform
+                    water_y = tr.position.y if tr else 0.0
+                    chunk_models = self._compute_water_chunk_models(cam_pos, water_y, water_component.ocean_size)
+                    water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
+                                                 dir_light, cam_pos, self._water_chunk_mesh,
+                                                 self._scene_color_tex, self._scene_depth_tex,
+                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 snap.wind_zones, snap.lights, chunk_models)
+                else:
+                    water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
+                                                 dir_light, cam_pos, self._water_plane,
+                                                 self._scene_color_tex, self._scene_depth_tex,
+                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 snap.wind_zones, snap.lights, None)
             self._scene_fbo.use()
             self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
             self._ctx.viewport = (0, 0, viewport_w, viewport_h)
@@ -1126,6 +1222,41 @@ void main() {
             self._ctx.enable(moderngl.DEPTH_TEST)
             if prof:
                 prof.stop("render_clouds")
+        underwater_water = None
+        best_depth = float("inf")
+        for wc in water_components:
+            tr = wc.transform
+            surface_y = tr.position.y if tr else 0.0
+            if cam_pos.y < surface_y:
+                depth_below = surface_y - cam_pos.y
+                if depth_below < best_depth:
+                    best_depth = depth_below
+                    underwater_water = wc
+        if underwater_water is not None and self._scene_depth_tex is not None:
+            if prof:
+                prof.start("render_underwater")
+            sun_dir = Vec3(0.0, 1.0, 0.0)
+            sun_color = [1.0, 1.0, 1.0]
+            sun_intensity = 1.0
+            if dir_light:
+                dl, dt = dir_light
+                sun_dir = -dt.forward
+                if dl.procedural_sky_lighting:
+                    sc, si = Light.compute_sun_light(-dt.forward)
+                    sun_color = sc
+                    sun_intensity = si
+                else:
+                    sun_color = dl.color
+                    sun_intensity = dl.intensity
+            fog_color = getattr(underwater_water, "deep_color", [0.02, 0.18, 0.28])
+            caustic_color = getattr(underwater_water, "sss_color", [0.0, 0.55, 0.45])
+            self._render_underwater_pass(
+                viewport_w, viewport_h, view_f32, proj_f32, cam_pos,
+                sun_dir, sun_color, sun_intensity, fog_color, caustic_color,
+                best_depth, cam_near, cam_far
+            )
+            if prof:
+                prof.stop("render_underwater")
         if prof:
             prof.start("render_overlay")
         if fbo is not None:
