@@ -335,6 +335,17 @@ Shader "Zarin/Water"
                 float d = hash(i + vec2(1.0, 1.0));
                 return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
             }
+            float fbm(vec2 p) {
+                float v = 0.0;
+                float amp = 0.5;
+                mat2 rot = mat2(0.83, -0.56, 0.56, 0.83);
+                for (int i = 0; i < 6; i++) {
+                    v += amp * vnoise(p);
+                    p = rot * p * 2.03 + 7.3 + float(i) * 1.7;
+                    amp *= 0.5;
+                }
+                return v;
+            }
             // Multi-octave detail normal. Each octave uses an incommensurate
             // frequency (1.93x) and an independent time scroll + phase, so the
             // micro-surface never tiles into a recognisable pattern even when
@@ -420,16 +431,18 @@ Shader "Zarin/Water"
                     vec3 L = normalize(_SunDirection);
                     float sssAmt = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0);
                     vec3 sss = _SSSColor * sssAmt * (0.3 + 0.6 * h) * _SunIntensity;
-                    // Caustic shimmer on the glass walls.
+                    // Caustic shimmer on the glass walls / floor. Strongest
+                    // near the floor where the focused light lands.
                     float caus1 = vnoise(dc * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
                     float caus2 = vnoise(dc * 3.1 - vec2(_Time * 0.13, _Time * 0.17));
                     float caustic = pow(caus1, 3.0) * 0.6 + pow(caus2, 4.0) * 0.4;
+                    caustic *= (0.6 + 0.4 * _Caustics);
                     // Sky/environment reflection.
                     vec3 R = reflect(-V, Nv);
                     vec3 sky = sky_tint(R);
-                    // Combine: base water color + SSS + caustic tint, then
-                    // blend toward sky at glancing angles via fresnel.
-                    vec3 col = waterBody + sss * 0.5 + _SSSColor * caustic * 0.12;
+                    // Combine: base water color + SSS + caustic tint (brighter
+                    // toward the floor), then blend toward sky via fresnel.
+                    vec3 col = waterBody + sss * 0.5 + _SSSColor * caustic * (0.22 + 0.3 * _Caustics) * (1.2 - h);
                     col = mix(col, sky, fr * 0.45);
                     // Sun specular on the glass surface.
                     vec3 Hh = normalize(V + L);
@@ -463,7 +476,10 @@ Shader "Zarin/Water"
 
                 // Water body color from depth (shallow -> deep)
                 float depthT = 1.0;
-                bool useScene = (_HasScene == 1) && (_IsBox != 1);
+                // The top surface (v_face < 0.5) refracts the scene behind /
+                // below it for both ocean and pond; the side walls / floor use
+                // the volume path instead.
+                bool useScene = (_HasScene == 1) && (v_face < 0.5);
                 if (useScene) {
                     float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
                     float water_d = linearize_depth(gl_FragCoord.z);
@@ -473,7 +489,10 @@ Shader "Zarin/Water"
 
                 vec3 color;
                 if (useScene) {
-                    vec2 refr_uv = clamp(v_screen_uv + N.xz * _Distortion, 0.001, 0.999);
+                    // Drive the refraction warp from the ripple detail normal
+                    // (dn), which always varies, instead of the wave normal N
+                    // that is near-flat for calm water and produced no warp.
+                    vec2 refr_uv = clamp(v_screen_uv + (N.xz * 0.4 + dn.xz) * _Distortion, 0.001, 0.999);
                     vec3 refr = texture(_SceneColor, refr_uv).rgb;
                     refr = mix(refr, waterBody, _RefractStrength * (0.4 + 0.6 * depthT));
 
@@ -502,11 +521,14 @@ Shader "Zarin/Water"
                 if (backface) sss *= 1.8;
                 color += sss * 0.6;
 
-                // Caustics shimmer on shallow water / pond floor.
+                // Caustics shimmer on shallow water / pond floor. For the pond
+                // (box) there is no scene depth, so fall back to a fixed
+                // shallow factor so caustics are always visible.
                 if (_Caustics > 0.0) {
                     float caus = vnoise(dc * 1.6 + vec2(_Time * 0.2, -_Time * 0.15));
-                    caus = pow(caus, 3.0) * (1.0 - depthT) * _Caustics;
-                    color += _SSSColor * caus * 0.25;
+                    float causDepth = (_IsBox == 1) ? 0.6 : (1.0 - depthT);
+                    caus = pow(caus, 3.0) * causDepth * _Caustics;
+                    color += _SSSColor * caus * 0.3;
                 }
 
                 // Sun specular highlight (Blinn-Phong), perturbed by the detail
@@ -536,18 +558,46 @@ Shader "Zarin/Water"
                     color += _LightColor[i] * _LightIntensity[i] * att * spot * (lspec * _Specular * 1.2 + 0.04);
                 }
 
-                // Foam: crest (noise-broken) + shoreline.
-                float fn = vnoise(dc * 0.7 + vec2(_Time * 0.1, -_Time * 0.08));
-                float crest_foam = smoothstep(0.45, 1.1, v_crest * v_chop) * smoothstep(0.55, 0.95, fn);
+                // ---- Foam ----
+                // Animated, turbulent field driving churned sea-foam. Two
+                // scrolling octaves of fbm give wispy, fingered boundaries
+                // instead of solid blobs.
+                float ft = _Time * _DetailSpeed;
+                float foamField = fbm(dc * 1.4 + vec2(ft * 0.12, -ft * 0.09));
+                foamField = foamField * 0.7 + 0.3 * fbm(dc * 3.3 - vec2(ft * 0.08, ft * 0.13));
+
+                // Crest foam: where steep wave crests break.
+                float crestMask = smoothstep(0.2, 0.95, v_crest * v_chop);
+                float crest_foam = crestMask * smoothstep(0.30, 0.78, foamField);
+
+                // Shoreline foam from scene depth (only with the scene).
                 float shore_foam = 0.0;
                 if (useScene) {
                     float scene_d = linearize_depth(texture(_SceneDepth, v_screen_uv).r);
                     float water_d = linearize_depth(gl_FragCoord.z);
                     float diff = scene_d - water_d;
-                    shore_foam = (1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0)) * smoothstep(0.4, 0.8, fn);
+                    float shoreMask = 1.0 - clamp(diff / max(_ShoreFade, 0.001), 0.0, 1.0);
+                    shore_foam = shoreMask * smoothstep(0.25, 0.80, foamField);
                 }
-                float foam = clamp((crest_foam + shore_foam) * _FoamStrength, 0.0, 1.0);
-                color = mix(color, _FoamColor, foam);
+
+                float rawFoam = clamp((crest_foam + shore_foam) * _FoamStrength, 0.0, 1.0);
+
+                // High-frequency bubble texture trapped inside the foam.
+                float bubbles = smoothstep(0.58, 0.95, vnoise(dc * 7.0 + ft * 0.4));
+                float foam = clamp(rawFoam, 0.0, 1.0);
+
+                if (foam > 0.001) {
+                    vec3 foamCol = _FoamColor;
+                    // Density shading: dense cores read brighter, thinning
+                    // edges stay slightly cooler — gives volume to the foam.
+                    foamCol *= 0.88 + 0.22 * foamField;
+                    // Foam is glossy: a soft sun glint on the churned surface.
+                    float foamSpec = pow(max(dot(N, H), 0.0), mix(80.0, 400.0, _Smoothness)) * _Specular;
+                    foamCol += _SunColor * _SunIntensity * foamSpec * 0.5;
+                    // Sparkle from the air bubbles catching the light.
+                    foamCol += _SunColor * _SunIntensity * bubbles * foam * 0.45;
+                    color = mix(color, foamCol, foam);
+                }
 
                 // Distance fade to horizon (for infinite ocean only).
                 if (_IsBox != 1) {
