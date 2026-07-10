@@ -74,6 +74,13 @@ class Water(Component):
             InspectorField("foam_strength", "Foam Strength", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.05, decimals=2),
             InspectorField("specular", "Specular", FieldType.SLIDER, min_val=0.0, max_val=4.0, step=0.05, decimals=2),
             InspectorField("shore_fade", "Shore Fade", FieldType.FLOAT, min_val=0.1, max_val=20.0, step=0.1, decimals=2),
+            InspectorField("choppiness", "Choppiness", FieldType.SLIDER, min_val=0.0, max_val=2.0, step=0.01, decimals=3),
+            InspectorField("caustics", "Caustics", FieldType.SLIDER, min_val=0.0, max_val=2.0, step=0.01, decimals=3),
+            InspectorField("wind_direction", "Wind Direction (deg)", FieldType.FLOAT, min_val=0.0, max_val=360.0, step=1.0, decimals=1),
+            InspectorField("wind_speed", "Wind Speed (m/s)", FieldType.FLOAT, min_val=0.0, max_val=60.0, step=0.1, decimals=2),
+            InspectorField("wind_turbulence", "Wind Turbulence", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("wind_influence", "Wind Influence", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("wind_gust", "Wind Gust", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
         ]
 
     def __init__(self):
@@ -98,9 +105,50 @@ class Water(Component):
         self.foam_strength: float = 1.0
         self.specular: float = 1.0
         self.shore_fade: float = 3.0
+        self.choppiness: float = 1.0
+        self.caustics: float = 0.6
+        self.wind_direction: float = 45.0
+        self.wind_speed: float = 8.0
+        self.wind_turbulence: float = 0.4
+        self.wind_influence: float = 0.0
+        self.wind_gust: float = 0.4
+
+    def _resolve_wind(self, wind_zones, wx, wz, t):
+        best = None
+        if wind_zones:
+            for wz_comp in wind_zones:
+                try:
+                    s = wz_comp.sample(wx, wz, t)
+                except Exception:
+                    s = None
+                if not s or s.get("strength", 0.0) <= 0.0:
+                    continue
+                strength = s.get("strength", 1.0)
+                if best is None or strength > best[0]:
+                    best = (strength, s)
+        if best is not None:
+            s = best[1]
+            return {
+                "dir": s.get("dir", (1.0, 0.0)),
+                "speed": s.get("speed", 0.0),
+                "turbulence": s.get("turbulence", 0.0),
+                "gust": s.get("gust", 0.0),
+                "influence": s.get("alignment", self.wind_influence),
+            }
+        ang = math.radians(self.wind_direction)
+        dx, dz = math.cos(ang), math.sin(ang)
+        gust = self.wind_gust * (0.5 + 0.5 * math.sin(2.0 * math.pi * 0.15 * t))
+        return {
+            "dir": (dx, dz),
+            "speed": self.wind_speed,
+            "turbulence": self.wind_turbulence,
+            "gust": max(0.0, gust),
+            "influence": self.wind_influence,
+        }
 
     def render_water(self, ctx, shaders, view_mat, proj_mat, dir_light, cam_pos,
-                     water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far):
+                      water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far,
+                      wind_zones=None):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
@@ -132,8 +180,11 @@ class Water(Component):
         if self.infinite_ocean and self.surface_type == "Ocean":
             model = Mat4.scale(Vec3(self.ocean_size, 1.0, self.ocean_size)) * \
                     Mat4.translation(Vec3(cam_pos.x, water_y, cam_pos.z))
+            water_wx, water_wz = cam_pos.x, cam_pos.z
         else:
             model = tr.world_matrix if tr else Mat4.identity()
+            water_wx = tr.position.x if tr else 0.0
+            water_wz = tr.position.z if tr else 0.0
         if "u_model" in prog:
             prog["u_model"].write(model.to_f32().tobytes())
         if "u_view" in prog:
@@ -143,6 +194,13 @@ class Water(Component):
         if "u_camera_pos" in prog:
             prog["u_camera_pos"].write(np.array([cam_pos.x, cam_pos.y, cam_pos.z], dtype=np.float32).tobytes())
 
+        wind = self._resolve_wind(wind_zones, water_wx, water_wz, t)
+        wdir = wind["dir"]
+        wang = math.atan2(wdir[1], wdir[0])
+        wind_speed = wind["speed"]
+        wind_infl = wind["influence"]
+        wind_amp = 0.4 + 0.6 * min(max(wind_speed / 15.0, 0.0), 2.5)
+
         if "_WaveCount" in prog:
             n = min(len(self.waves), 8)
             prog["_WaveCount"].value = n
@@ -151,15 +209,28 @@ class Water(Component):
             for i in range(n):
                 w = self.waves[i]
                 ang = math.radians(float(w.get("direction", 0.0)))
+                if wind_infl > 0.0:
+                    spread = (i - (n - 1) / 2.0) * (self.wind_turbulence * 0.45)
+                    target = wang + spread
+                    da = (target - ang + math.pi) % (2.0 * math.pi) - math.pi
+                    ang = ang + da * wind_infl
                 dirs[i] = [math.cos(ang), math.sin(ang)]
                 params[i] = [
-                    float(w.get("amplitude", 0.0)),
+                    float(w.get("amplitude", 0.0)) * wind_amp,
                     float(w.get("wavelength", 1.0)),
                     float(w.get("speed", 1.0)),
                     float(w.get("steepness", 0.0)),
                 ]
             prog["_WaveDirection"].write(dirs.tobytes())
             prog["_WaveParams"].write(params.tobytes())
+
+        if "_WindDir" in prog:
+            prog["_WindDir"].write(np.array([float(wdir[0]), float(wdir[1])], dtype=np.float32).tobytes())
+        _set_float(prog, "_WindSpeed", wind_speed)
+        _set_float(prog, "_WindGust", wind["gust"])
+        _set_float(prog, "_WindTurbulence", wind["turbulence"])
+        _set_float(prog, "_Choppiness", self.choppiness)
+        _set_float(prog, "_Caustics", self.caustics)
 
         _set_vec3(prog, "_DeepColor", self.deep_color)
         _set_vec3(prog, "_ShallowColor", self.shallow_color)
@@ -227,6 +298,13 @@ class Water(Component):
             "foam_strength": self.foam_strength,
             "specular": self.specular,
             "shore_fade": self.shore_fade,
+            "choppiness": self.choppiness,
+            "caustics": self.caustics,
+            "wind_direction": self.wind_direction,
+            "wind_speed": self.wind_speed,
+            "wind_turbulence": self.wind_turbulence,
+            "wind_influence": self.wind_influence,
+            "wind_gust": self.wind_gust,
         })
         return d
 
@@ -257,4 +335,11 @@ class Water(Component):
         c.foam_strength = data.get("foam_strength", 1.0)
         c.specular = data.get("specular", 1.0)
         c.shore_fade = data.get("shore_fade", 3.0)
+        c.choppiness = data.get("choppiness", 1.0)
+        c.caustics = data.get("caustics", 0.6)
+        c.wind_direction = data.get("wind_direction", 45.0)
+        c.wind_speed = data.get("wind_speed", 8.0)
+        c.wind_turbulence = data.get("wind_turbulence", 0.4)
+        c.wind_influence = data.get("wind_influence", 0.0)
+        c.wind_gust = data.get("wind_gust", 0.4)
         return c

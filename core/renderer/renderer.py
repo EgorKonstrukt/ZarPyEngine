@@ -40,6 +40,7 @@ from core.renderer.shadows import ShadowRenderer
 from core.components.rendering.sky import Sky
 from core.components.rendering.clouds import Cloud
 from core.components.rendering.water import Water
+from core.components.environment.wind_zone import WindZone
 from core.renderer.particles import ParticleRenderer
 from core.renderer.sprites import SpriteRendererGL
 from core.renderer.svgs import SvgRendererGL
@@ -114,7 +115,7 @@ class _ProjectorItem:
 class _RenderSnapshot:
     __slots__ = (
         'lights', 'dir_light', 'sky_component', 'sky_entity', 'cloud_components',
-        'water_components', 'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
+        'water_components', 'wind_zones', 'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors',
     )
@@ -125,6 +126,7 @@ class _RenderSnapshot:
         self.sky_entity = None
         self.cloud_components: list = []
         self.water_components: list = []
+        self.wind_zones: list = []
         self.renderable: list = []
         self.shadow_renderables: list = []
         self.sprite_items: list = []
@@ -712,6 +714,11 @@ void main() {
                 water = ent.get_component(Water)
                 if water and water.enabled:
                     snap.water_components.append(water)
+        for ent in scene.get_entities_with_component(WindZone):
+            if ent.active:
+                wz = ent.get_component(WindZone)
+                if wz and wz.enabled:
+                    snap.wind_zones.append(wz)
         self._sync_probuilder_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         if not needs_shadow:
@@ -1079,7 +1086,8 @@ void main() {
                 water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                              dir_light, cam_pos, self._water_plane,
                                              self._scene_color_tex, self._scene_depth_tex,
-                                             (viewport_w, viewport_h), cam_near, cam_far)
+                                             (viewport_w, viewport_h), cam_near, cam_far,
+                                             snap.wind_zones)
             self._scene_fbo.use()
             self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
             self._ctx.viewport = (0, 0, viewport_w, viewport_h)
