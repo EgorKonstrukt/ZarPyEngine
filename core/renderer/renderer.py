@@ -33,7 +33,7 @@ from core.math3d import Mat4, Vec3
 
 from core.renderer.types import RenderMode
 from core.renderer.mesh_data import MeshData, read_shader
-from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh, make_water_plane
+from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh, make_water_plane, make_water_box
 from core.renderer.grid import GridRenderer
 from core.renderer.gizmo import GizmoRenderer, FATLINE_VERT, FATLINE_FRAG
 from core.renderer.shadows import ShadowRenderer
@@ -243,6 +243,9 @@ class Renderer:
         self._cloud_quad: Optional[MeshData] = None
         self._cloud_plane: Optional[MeshData] = None
         self._water_plane: Optional[MeshData] = None
+        self._water_chunk_mesh: Optional[MeshData] = None
+        self._water_box_mesh: Optional[MeshData] = None
+        self._water_mesh_cache: dict = {}
         self._water_fbo: Optional[moderngl.Framebuffer] = None
         self._water_color_tex: Optional[moderngl.Texture] = None
         self._water_depth_rb: Optional[moderngl.Renderbuffer] = None
@@ -473,10 +476,9 @@ void main() {
             self._cloud_quad.build_gl(self._ctx, self._default_prog)
             self._cloud_plane = make_plane_mesh(1.0)
             self._cloud_plane.build_gl(self._ctx, self._default_prog)
-            self._water_plane = make_water_plane(1.0, 200)
-            self._water_plane.build_gl(self._ctx, self._default_prog)
-            self._water_chunk_mesh = make_water_plane(1.0, 32)
-            self._water_chunk_mesh.build_gl(self._ctx, self._default_prog)
+            self._water_plane = self._get_water_plane_mesh(200)
+            self._water_chunk_mesh = self._get_water_plane_mesh(32)
+            self._water_box_mesh = self._get_water_box_mesh(128)
             self._particles = ParticleRenderer(self._ctx, self._particle_prog)
             self._particles.load_compute_shader(
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "particle.compute")
@@ -574,6 +576,24 @@ void main() {
         self._water_color_tex = None
         self._water_depth_rb = None
         self._water_fbo_size = (0, 0)
+
+    def _get_water_plane_mesh(self, res: int) -> MeshData:
+        key = ("plane", int(res))
+        m = self._water_mesh_cache.get(key)
+        if m is None:
+            m = make_water_plane(1.0, max(2, int(res)))
+            m.build_gl(self._ctx, self._default_prog)
+            self._water_mesh_cache[key] = m
+        return m
+
+    def _get_water_box_mesh(self, res: int) -> MeshData:
+        key = ("box", int(res))
+        m = self._water_mesh_cache.get(key)
+        if m is None:
+            m = make_water_box(max(2, int(res)), max(2, int(res) // 8), 1.0)
+            m.build_gl(self._ctx, self._default_prog)
+            self._water_mesh_cache[key] = m
+        return m
 
     def _compute_water_chunk_models(self, cam_pos, water_y, ocean_size, chunk_size=200):
         from core.math3d import Mat4, Vec3
@@ -1173,14 +1193,26 @@ void main() {
                     tr = water_component.transform
                     water_y = tr.position.y if tr else 0.0
                     chunk_models = self._compute_water_chunk_models(cam_pos, water_y, water_component.ocean_size)
+                    res = int(getattr(water_component, "mesh_resolution", 32.0))
+                    mesh = self._get_water_plane_mesh(max(2, res))
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
-                                                 dir_light, cam_pos, self._water_chunk_mesh,
+                                                 dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
                                                  (viewport_w, viewport_h), cam_near, cam_far,
                                                  snap.wind_zones, snap.lights, chunk_models)
-                else:
+                elif water_component.surface_type == "Pond":
+                    res = int(getattr(water_component, "mesh_resolution", 128.0))
+                    mesh = self._get_water_box_mesh(res)
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
-                                                 dir_light, cam_pos, self._water_plane,
+                                                 dir_light, cam_pos, mesh,
+                                                 self._scene_color_tex, self._scene_depth_tex,
+                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 snap.wind_zones, snap.lights, None, is_box=True)
+                else:
+                    res = int(getattr(water_component, "mesh_resolution", 200.0))
+                    mesh = self._get_water_plane_mesh(res)
+                    water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
+                                                 dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
                                                  (viewport_w, viewport_h), cam_near, cam_far,
                                                  snap.wind_zones, snap.lights, None)

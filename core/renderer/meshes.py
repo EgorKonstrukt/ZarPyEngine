@@ -133,6 +133,74 @@ def make_water_plane(size: float = 1.0, segments: int = 200) -> MeshData:
     return mesh
 
 
+def make_water_box(top_seg: int = 128, side_seg: int = 16, size: float = 1.0) -> MeshData:
+    """Create a unit water box (XYZ cube) for pond / aquarium rendering.
+
+    The top face (y = +0.5) is heavily tessellated so Gerstner waves can
+    displace it; the four side faces and the bottom are tessellated lightly
+    and rendered as a translucent volume so the container walls stay visible
+    (e.g. fish tanks). Normals encode the face orientation and local Y is
+    recovered in the shader from the untransformed vertex position.
+    """
+    h = size * 0.5
+    verts = []
+    norms = []
+    uvs = []
+    idxs = []
+
+    def add_grid(seg_x, seg_z, fn, normal):
+        base = len(verts) // 3
+        for j in range(seg_z + 1):
+            for i in range(seg_x + 1):
+                p = fn(i, j)
+                verts.append(p[0])
+                verts.append(p[1])
+                verts.append(p[2])
+                norms.extend(normal)
+                uvs.extend([0.0, 0.0])
+        nx = seg_x + 1
+        for j in range(seg_z):
+            for i in range(seg_x):
+                a = base + j * nx + i
+                b = base + j * nx + (i + 1)
+                c = base + (j + 1) * nx + (i + 1)
+                d = base + (j + 1) * nx + i
+                idxs.append(a)
+                idxs.append(b)
+                idxs.append(c)
+                idxs.append(a)
+                idxs.append(c)
+                idxs.append(d)
+
+    step_t = size / max(1, top_seg)
+    add_grid(top_seg, top_seg,
+             lambda i, j: (-h + i * step_t, h, -h + j * step_t),
+             [0.0, 1.0, 0.0])
+    step_s = size / max(1, side_seg)
+    add_grid(side_seg, side_seg,
+             lambda i, j: (h, h - j * step_s, -h + i * step_s),
+             [1.0, 0.0, 0.0])
+    add_grid(side_seg, side_seg,
+             lambda i, j: (-h, h - j * step_s, h - i * step_s),
+             [-1.0, 0.0, 0.0])
+    add_grid(side_seg, side_seg,
+             lambda i, j: (h - i * step_s, h - j * step_s, h),
+             [0.0, 0.0, 1.0])
+    add_grid(side_seg, side_seg,
+             lambda i, j: (-h + i * step_s, h - j * step_s, -h),
+             [0.0, 0.0, -1.0])
+    add_grid(side_seg, side_seg,
+             lambda i, j: (-h + i * step_s, -h, -h + j * step_s),
+             [0.0, -1.0, 0.0])
+
+    mesh = MeshData()
+    mesh.vertices = np.array(verts, dtype=np.float32)
+    mesh.normals = np.array(norms, dtype=np.float32)
+    mesh.uvs = np.array(uvs, dtype=np.float32)
+    mesh.indices = np.array(idxs, dtype=np.uint32)
+    return mesh
+
+
 def make_quad_mesh(size: float = 1.0) -> MeshData:
     """Create a screen-aligned quad facing +Z."""
     h = size * 0.5

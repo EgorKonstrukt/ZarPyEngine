@@ -81,6 +81,12 @@ class Water(Component):
             InspectorField("wind_turbulence", "Wind Turbulence", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("wind_influence", "Wind Influence", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("wind_gust", "Wind Gust", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("mesh_resolution", "Mesh Resolution", FieldType.SLIDER, min_val=2.0, max_val=400.0, step=1.0, decimals=0),
+            InspectorField("chaos", "Chaos", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("macro_wave", "Macro Waves", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.01, decimals=3),
+            InspectorField("detail_scale", "Detail Scale", FieldType.SLIDER, min_val=0.1, max_val=4.0, step=0.01, decimals=3),
+            InspectorField("detail_octaves", "Detail Octaves", FieldType.SLIDER, min_val=1.0, max_val=12.0, step=1.0, decimals=0),
+            InspectorField("detail_fade", "Detail Fade Dist", FieldType.FLOAT, min_val=20.0, max_val=2000.0, step=10.0, decimals=0),
         ]
 
     def __init__(self):
@@ -112,6 +118,12 @@ class Water(Component):
         self.wind_turbulence: float = 0.4
         self.wind_influence: float = 0.0
         self.wind_gust: float = 0.4
+        self.mesh_resolution: float = 128.0
+        self.chaos: float = 0.5
+        self.macro_wave: float = 0.5
+        self.detail_scale: float = 1.0
+        self.detail_octaves: float = 6.0
+        self.detail_fade: float = 350.0
 
     def _resolve_wind(self, wind_zones, wx, wz, t):
         best = None
@@ -148,7 +160,7 @@ class Water(Component):
 
     def render_water(self, ctx, shaders, view_mat, proj_mat, dir_light, cam_pos,
                       water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far,
-                      wind_zones=None, lights=None, chunk_models=None):
+                      wind_zones=None, lights=None, chunk_models=None, is_box=False):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
@@ -232,6 +244,13 @@ class Water(Component):
         _set_float(prog, "_WindTurbulence", wind["turbulence"])
         _set_float(prog, "_Choppiness", self.choppiness)
         _set_float(prog, "_Caustics", self.caustics)
+        _set_float(prog, "_MacroWave", self.macro_wave)
+        _set_float(prog, "_Chaos", self.chaos)
+        _set_float(prog, "_DetailScale", self.detail_scale)
+        _set_float(prog, "_DetailOctaves", self.detail_octaves)
+        _set_float(prog, "_DetailFade", self.detail_fade)
+        if "_IsBox" in prog:
+            prog["_IsBox"].value = 1 if is_box else 0
 
         if "_LightCount" in prog:
             from core.components.lighting import LightType
@@ -346,6 +365,12 @@ class Water(Component):
             "wind_turbulence": self.wind_turbulence,
             "wind_influence": self.wind_influence,
             "wind_gust": self.wind_gust,
+            "mesh_resolution": self.mesh_resolution,
+            "chaos": self.chaos,
+            "macro_wave": self.macro_wave,
+            "detail_scale": self.detail_scale,
+            "detail_octaves": self.detail_octaves,
+            "detail_fade": self.detail_fade,
         })
         return d
 
@@ -383,4 +408,10 @@ class Water(Component):
         c.wind_turbulence = data.get("wind_turbulence", 0.4)
         c.wind_influence = data.get("wind_influence", 0.0)
         c.wind_gust = data.get("wind_gust", 0.4)
+        c.mesh_resolution = data.get("mesh_resolution", 128.0)
+        c.chaos = data.get("chaos", 0.5)
+        c.macro_wave = data.get("macro_wave", 0.5)
+        c.detail_scale = data.get("detail_scale", 1.0)
+        c.detail_octaves = data.get("detail_octaves", 6.0)
+        c.detail_fade = data.get("detail_fade", 350.0)
         return c
