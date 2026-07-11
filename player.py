@@ -41,7 +41,7 @@ def _log(msg: str):
 
 
 def excepthook(exc_type, exc_value, exc_traceback):
-    from core.logger import Logger
+    from core.foundation.logger import Logger
     tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     Logger.error(f"Unhandled exception: {exc_value}\n{tb_str}")
     _log(f"Unhandled exception: {exc_value}")
@@ -123,13 +123,13 @@ def main():
     fmt.setDepthBufferSize(24)
     fmt.setVersion(4, 6)
     fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     _cfg = get_global_config()
     fmt.setSwapInterval(0 if not _cfg.get("rendering.vsync", True) else 1)
     QSurfaceFormat.setDefaultFormat(fmt)
 
-    from core.engine import Engine
-    from core.game_viewport import GameViewport
+    from core.engine.engine import Engine
+    from core.engine.game_viewport import GameViewport
     from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout
     from PyQt6.QtCore import QTimer
 
@@ -143,7 +143,7 @@ def main():
     engine = Engine()
     engine._project_path = project_root
     engine.initialize()
-    from core.audio_system import AudioSystem
+    from core.audio.audio_system import AudioSystem
     audio = AudioSystem.instance()
     if audio:
         audio.apply_project_audio_config()

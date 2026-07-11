@@ -44,7 +44,7 @@ def _ensure_extensions():
 
 _ensure_extensions()
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 if (
     "wayland" in os.environ.get("XDG_SESSION_TYPE", "").lower()
@@ -66,7 +66,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
 os.chdir(_SCRIPT_DIR)
 def excepthook(exc_type, exc_value, exc_traceback):
-    from core.logger import Logger
+    from core.foundation.logger import Logger
     tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     Logger.error(f"Unhandled exception: {exc_value}\n{tb_str}")
     print(f"[Zarin Engine] Unhandled exception:\n{tb_str}", file=sys.stderr)
@@ -81,7 +81,7 @@ def run_headless_mcp():
     _os.dup2(2, 1)
     sys.stdout = sys.stderr
     try:
-        from core.engine import Engine
+        from core.engine.engine import Engine
         engine = Engine()
         engine._mcp_mode = "stdio"
         engine.initialize()
@@ -120,7 +120,7 @@ def main():
     fmt.setDepthBufferSize(24)
     fmt.setVersion(4, 6)
     fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     _cfg = get_global_config()
     fmt.setSwapInterval(0 if not _cfg.get("rendering.vsync", True) else 1)
     QSurfaceFormat.setDefaultFormat(fmt)
@@ -136,7 +136,7 @@ def main():
     splash.set_total_steps(8)
     splash.show()
     app.processEvents()
-    from core.engine import Engine
+    from core.engine.engine import Engine
     splash.advance("Initializing engine core...")
     engine = Engine()
     splash.advance("Running engine subsystems...")

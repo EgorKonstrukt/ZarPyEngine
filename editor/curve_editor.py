@@ -18,7 +18,7 @@ from PyQt6.QtGui import (
     QFontMetrics, QTransform
 )
 import numpy as np
-from core.curve import Curve, CurveKey, TangentMode
+from core.foundation.curve import Curve, CurveKey, TangentMode
 
 
 class CurvePreview(QWidget):

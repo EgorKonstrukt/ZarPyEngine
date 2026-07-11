@@ -8,17 +8,17 @@ from __future__ import annotations
 import math
 import os
 from typing import TYPE_CHECKING
-from core.plugin_manager import PluginBase
-from core.logger import Logger
+from core.foundation.plugin_manager import PluginBase
+from core.foundation.logger import Logger
 from core.physics import PhysicsProcess, PhysicsScene
 from core.physics.shared_buffer import MAX_ENTITIES
 from core.physics.physics_solver import IPhysicsSolver
-from core.math3d import Vec2, Vec3
+from core.math.math3d import Vec2, Vec3
 from core.physics.shape_utils import find_shape_info
-from core.config import get_project_config
+from core.config.config import get_project_config
 
 if TYPE_CHECKING:
-    from core.ecs import Entity
+    from core.ecs.ecs import Entity
 
 _RAD = math.radians
 _DEG = math.degrees
@@ -238,7 +238,7 @@ class PhysicsPlugin(PluginBase):
         return False
 
     def on_play_start(self):
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         Logger.info(f"[PhysicsPlugin] on_play_start called, mode={self._simulation_mode}")
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1

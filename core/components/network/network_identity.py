@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 @ComponentRegistry.register
 class NetworkIdentity(Component):

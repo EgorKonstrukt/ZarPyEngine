@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 import enum
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 
 class JointType(enum.Enum):

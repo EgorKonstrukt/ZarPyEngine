@@ -9,10 +9,10 @@ import os
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.engine import Engine
-from core.logger import Logger
-from core.material import Material, MaterialLibrary
-from core.texture_import_settings import TextureImportSettings
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
+from core.assets.material import Material, MaterialLibrary
+from core.assets.texture_import_settings import TextureImportSettings
 
 
 class MaterialManager:
@@ -133,7 +133,7 @@ class MaterialManager:
                 cached_tex.release()
             except Exception:
                 pass
-        from core.asset_importer import _get_thread_pool
+        from core.assets.asset_importer import _get_thread_pool
 
         def _task():
             try:

@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QMessageBox, QComboBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QTextCursor
-from core.editor_scale import scale
+from core.config.editor_scale import scale
 
 ROOT = Path(__file__).resolve().parent.parent
 

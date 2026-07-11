@@ -18,9 +18,9 @@ from PyQt6.QtGui import (QFont, QColor, QPainter, QSyntaxHighlighter,
                           QTextCharFormat, QKeySequence, QTextCursor,
                           QFontMetrics, QPalette)
 if TYPE_CHECKING:
-    from core.engine import Engine
+    from core.engine.engine import Engine
 
-from core.editor_scale import scale
+from core.config.editor_scale import scale
 
 _DARK_STYLE = ""
 

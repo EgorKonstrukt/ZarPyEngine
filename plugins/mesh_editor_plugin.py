@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from core.plugin_manager import PluginBase
+from core.foundation.plugin_manager import PluginBase
 
 
 class MeshEditorPlugin(PluginBase):

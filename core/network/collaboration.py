@@ -13,12 +13,12 @@ import hashlib
 import threading
 import asyncio
 from typing import Optional, Callable
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.network.protocol import MessageType
 from core.network.server import CollabServer
 from core.network.client import CollabClient
-from core.ecs import Scene, Entity, ComponentRegistry
-from core.config import get_global_config
+from core.ecs.ecs import Scene, Entity, ComponentRegistry
+from core.config.config import get_global_config
 
 
 def _compute_hash(path: str) -> str:
@@ -833,7 +833,7 @@ class CollaborationManager:
         r = data.get("r")
         s = data.get("s")
         if p:
-            from core.math3d import Vec3
+            from core.math.math3d import Vec3
             old_local = Vec3(t.local_position.x, t.local_position.y, t.local_position.z)
             t.local_position = p
             pid = data.get("id", "")
@@ -845,7 +845,7 @@ class CollaborationManager:
                 if abs(dx) > 0.0001 or abs(dy) > 0.0001 or abs(dz) > 0.0001:
                     peer.transform_deltas[entity_id] = {"pos": [dx, dy, dz], "time": time.time()}
         if r:
-            from core.math3d import Quat
+            from core.math.math3d import Quat
             t.local_rotation = Quat(r[0], r[1], r[2], r[3])
         if s:
             t.local_scale = s
@@ -897,10 +897,10 @@ class CollaborationManager:
             if hasattr(current, 'from_list') and isinstance(value, list):
                 current.from_list(value)
             elif hasattr(current, 'x') and isinstance(value, (list, tuple)) and len(value) == 3:
-                from core.math3d import Vec3
+                from core.math.math3d import Vec3
                 setattr(comp, prop, Vec3(value[0], value[1], value[2]))
             elif hasattr(current, 'x') and isinstance(value, (list, tuple)) and len(value) == 4:
-                from core.math3d import Quat
+                from core.math.math3d import Quat
                 setattr(comp, prop, Quat(value[0], value[1], value[2], value[3]))
             else:
                 setattr(comp, prop, value)
@@ -917,7 +917,7 @@ class CollaborationManager:
             return
         comp_key = data.get("component_key", "")
         comp_data = data.get("data", {})
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         registry = ComponentRegistry
         comp_cls = registry.get(comp_key)
         if not comp_cls:

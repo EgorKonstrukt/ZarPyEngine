@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from core.input_system import KeyCode
+from core.input.input_system import KeyCode
 
 MOUSE_L = 0
 MOUSE_R = 1

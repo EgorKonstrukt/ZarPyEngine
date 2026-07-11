@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QIcon, QAction
 
 from editor.constants import PROJECTS_DB_PATH
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 
 def _load_projects_db() -> list[dict]:
@@ -36,7 +36,7 @@ def _save_projects_db(projects: list[dict]):
         with open(PROJECTS_DB_PATH, "w") as f:
             json.dump(projects, f, indent=2)
     except Exception as e:
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         Logger.error(f"Failed to save projects db: {e}")
 
 
@@ -67,7 +67,7 @@ def _create_project_directory(path: str, name: str) -> bool:
             json.dump(settings, f, indent=2)
         return True
     except Exception as e:
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         Logger.error(f"Failed to create project: {e}")
         return False
 

@@ -10,7 +10,7 @@ import os
 
 from PyQt6.QtCore import Qt, QTimer
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 from editor.project_manager import _get_recent_projects
 from editor.splash import SplashScreen
 
@@ -19,7 +19,7 @@ def post_init(mw):
     try:
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtGui import QFont
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cfg = get_global_config()
         scale = cfg.get("editor.ui_scale", 75)
         base_size = cfg.get("editor.font_size", 12)
@@ -38,9 +38,9 @@ def post_init(mw):
         SplashScreen.show_message("Creating sample scene...")
         scene = mw._engine.new_scene("SampleScene")
         from core.components import Transform, MeshFilter, MeshRenderer, Light, LightType, Camera
-        from core.components.rendering.sky import Sky
-        from core.components.rendering.clouds import Cloud
-        from core.math3d import Vec3
+        from core.components.rendering.environment.sky import Sky
+        from core.components.rendering.environment.clouds import Cloud
+        from core.math.math3d import Vec3
         dir_light = scene.create_entity("Directional Light")
         t = Transform()
         t.local_euler_angles = Vec3(-45, 45, 0)
@@ -65,7 +65,7 @@ def post_init(mw):
         sky_ent.add_component(Sky())
         mw._hierarchy.refresh()
         QTimer.singleShot(0, lambda: initial_dock_sizes(mw))
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         if mw._viewport.renderer:
             mw._viewport.renderer.load_config(get_global_config())
         else:
@@ -93,6 +93,6 @@ def initial_dock_sizes(mw):
 
 
 def load_renderer_config(mw):
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     if mw._viewport.renderer:
         mw._viewport.renderer.load_config(get_global_config())

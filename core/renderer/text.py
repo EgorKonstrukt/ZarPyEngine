@@ -8,10 +8,10 @@ from __future__ import annotations
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math3d import Mat4
-from core.components.rendering.text_renderer import TextRenderer, TextAlign, TextFilter
+from core.math.math3d import Mat4
+from core.components.rendering.renderers.text_renderer import TextRenderer, TextAlign, TextFilter
 
-from core.font_atlas import FontAtlas
+from core.assets.font_atlas import FontAtlas
 
 
 class TextRendererGL:

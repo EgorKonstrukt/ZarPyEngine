@@ -4,59 +4,12 @@
 #
 # Copyright (c) 2026 Zarrakun
 
-from setuptools import setup, Extension
-from Cython.Build import cythonize
-import numpy
+import os
+import sys
 
-ext_convex_hull = Extension(
-    "core._convex_hull",
-    sources=["core/_convex_hull.pyx"],
-    include_dirs=[numpy.get_include()],
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-ext_bvh = Extension(
-    "core._bvh_build",
-    sources=["core/_bvh_build.pyx"],
-    include_dirs=[numpy.get_include()],
-)
+from core.build_cython import build
 
-ext_raytrace_data = Extension(
-    "core._raytracing_data",
-    sources=["core/_raytracing_data.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-ext_math_helpers = Extension(
-    "core.math_helpers",
-    sources=["core/math_helpers.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-ext_culling = Extension(
-    "core._culling",
-    sources=["core/_culling.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-ext_transform_batch = Extension(
-    "core._transform_batch",
-    sources=["core/_transform_batch.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-ext_render_utils = Extension(
-    "core._render_utils",
-    sources=["core/_render_utils.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-ext_physics_utils = Extension(
-    "core._physics_utils",
-    sources=["core/_physics_utils.pyx"],
-    include_dirs=[numpy.get_include()],
-)
-
-setup(
-    name="ZarinEngine-cython-extensions",
-    ext_modules=cythonize([ext_convex_hull, ext_bvh, ext_raytrace_data, ext_math_helpers, ext_culling, ext_transform_batch, ext_render_utils, ext_physics_utils], language_level="3"),
-)
+if __name__ == "__main__":
+    build()

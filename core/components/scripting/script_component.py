@@ -7,11 +7,11 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Optional, Any, get_type_hints
-from core.ecs import Component, ComponentRegistry
-from core.logger import Logger
+from core.ecs.ecs import Component, ComponentRegistry
+from core.foundation.logger import Logger
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math3d import Vec2, Vec3, Vec4
-from core.input_system import Input, KeyCode
+from core.math.math3d import Vec2, Vec3, Vec4
+from core.input.input_system import Input, KeyCode
 import importlib.util
 import os
 
@@ -83,7 +83,7 @@ class ScriptComponent(Component):
             return
         script_path = self.script_path
         if not os.path.isabs(script_path) and not os.path.exists(script_path):
-            from core.engine import Engine
+            from core.engine.engine import Engine
             eng = Engine.instance()
             if eng is not None:
                 candidate = os.path.normpath(os.path.join(eng.project_root, script_path))

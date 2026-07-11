@@ -13,7 +13,7 @@ import base64
 from PyQt6.QtCore import QByteArray, QRect, QSettings
 from PyQt6.QtGui import QGuiApplication
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 
 def save_state(mw):

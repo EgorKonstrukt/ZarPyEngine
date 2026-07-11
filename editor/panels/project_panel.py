@@ -24,14 +24,14 @@ from PyQt6.QtGui import (QAction, QDrag, QIcon, QWheelEvent, QKeyEvent, QGuiAppl
                           QPen, QBrush, QPixmap, QFontMetrics, QPalette)
 
 if TYPE_CHECKING:
-    from core.engine import Engine
+    from core.engine.engine import Engine
 from editor.resource_picker import _get_thumbnail, _format_size
 
 from editor.constants import MIN_THUMB, MAX_THUMB, VIEW_ICON, VIEW_LIST, VIEW_DETAILS
 from editor.inspector.helpers import _flash_overlay
 
 _ENTITY_MIME = "application/x-zpe-entity"
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 _file_clipboard: list[str] = []
 _clipboard_is_cut: bool = False
@@ -1889,7 +1889,7 @@ class ProjectPanel(QDockWidget):
         eids = [x.strip() for x in raw.split(",") if x.strip()]
         if not eids or not self._engine.scene:
             return
-        from core.prefab import Prefab
+        from core.ecs.prefab import Prefab
         entity = self._engine.scene.get_entity(eids[0])
         if not entity:
             return
@@ -1979,8 +1979,8 @@ class ProjectPanel(QDockWidget):
     def _instantiate_prefab(self, path: str):
         if not self._engine.scene:
             return
-        from core.prefab import Prefab
-        from core.engine import Engine
+        from core.ecs.prefab import Prefab
+        from core.engine.engine import Engine
         pref = Prefab.load(path)
         if pref:
             e = pref.instantiate(self._engine.scene, Engine.instance()._component_registry)
@@ -2143,7 +2143,7 @@ class ProjectPanel(QDockWidget):
         ext = os.path.splitext(path)[1].lower()
         if ext != ".mat":
             path += ".mat"
-        from core.material import Material
+        from core.assets.material import Material
         mat = Material(os.path.splitext(os.path.basename(path))[0])
         mat.save(path, self._engine.project_root)
         self._refresh()
@@ -2177,7 +2177,7 @@ class ProjectPanel(QDockWidget):
         if not path.endswith(".py"):
             path += ".py"
         template = '''from __future__ import annotations
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 @ComponentRegistry.register
 class NewScript(Component):
     def __init__(self):

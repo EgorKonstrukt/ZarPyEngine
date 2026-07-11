@@ -10,7 +10,7 @@ import heapq
 import uuid
 import numpy as np
 from typing import Optional
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 from core.spatial.octree import AABB
 
 _COLLIDER_TYPES = ("BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider")
@@ -393,7 +393,7 @@ class NavWorld:
         elif cname == "MeshCollider":
             if hasattr(comp, 'mesh_path') and comp.mesh_path:
                 try:
-                    from core.engine import Engine
+                    from core.engine.engine import Engine
                     eng = Engine.instance()
                     if eng and hasattr(eng, '_renderer') and eng._renderer:
                         mesh = eng._renderer._meshes.get(comp.mesh_path)

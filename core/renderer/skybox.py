@@ -7,7 +7,7 @@
 from __future__ import annotations
 import numpy as np
 import moderngl
-from core.math3d import Mat4, Vec3
+from core.math.math3d import Mat4, Vec3
 from core.renderer.mesh_data import MeshData
 
 

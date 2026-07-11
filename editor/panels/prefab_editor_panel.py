@@ -13,12 +13,12 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QFrame)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QWheelEvent
-from core.math3d import Vec3
-from core.logger import Logger
+from core.math.math3d import Vec3
+from core.foundation.logger import Logger
 if TYPE_CHECKING:
-    from core.engine import Engine
-    from core.ecs import Scene
-from core.editor_scale import scale, scale_xy
+    from core.engine.engine import Engine
+    from core.ecs.ecs import Scene
+from core.config.editor_scale import scale, scale_xy
 
 class PrefabViewport(QOpenGLWidget):
     def __init__(self, engine: Engine, parent=None):
@@ -177,8 +177,8 @@ class PrefabEditorPanel(QDockWidget):
         pass
 
     def open_prefab(self, path: str):
-        from core.prefab import Prefab
-        from core.ecs import Scene, ComponentRegistry
+        from core.ecs.prefab import Prefab
+        from core.ecs.ecs import Scene, ComponentRegistry
         pref = Prefab.load(path)
         if not pref:
             Logger.warning(f"Cannot load prefab: {path}")
@@ -189,7 +189,7 @@ class PrefabEditorPanel(QDockWidget):
         from core.components import Transform, Camera
         cam_entity = self._edit_scene.create_entity("Prefab Camera")
         cam_entity.add_component(Transform())
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         cam_entity.transform.local_position = Vec3(0, 2, 5)
         cam_entity.add_component(Camera())
         self._engine._plugin_manager.notify_scene_loaded(self._edit_scene)
@@ -203,7 +203,7 @@ class PrefabEditorPanel(QDockWidget):
     def _on_save(self):
         if not self._prefab_path or not self._edit_scene:
             return
-        from core.prefab import Prefab, PrefabLibrary
+        from core.ecs.prefab import Prefab, PrefabLibrary
         pref = Prefab.load(self._prefab_path)
         if not pref:
             return

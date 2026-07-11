@@ -11,7 +11,7 @@ import time
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 
 def render_remote_collaborator_gizmos(vp, vp_mat, cam_pos, fw, fh):
@@ -229,10 +229,10 @@ def send_collab_transforms(vp):
 
 
 def _collab_on_undo(cmd):
-    from core.commands import CreateEntityCommand, DeleteEntityCommand, SetComponentCommand, \
+    from core.foundation.commands import CreateEntityCommand, DeleteEntityCommand, SetComponentCommand, \
         AddComponentCommand, RemoveComponentCommand, CompoundCommand, PasteEntitiesCommand, \
         InstantiatePrefabCommand
-    from core.engine import Engine
+    from core.engine.engine import Engine
     eng = Engine.instance()
     collab = eng.collab_manager if hasattr(eng, 'collab_manager') else None
     if not collab or not collab.connected:
@@ -265,10 +265,10 @@ def _collab_on_undo(cmd):
 
 
 def _collab_on_redo(cmd):
-    from core.commands import CreateEntityCommand, DeleteEntityCommand, SetComponentCommand, \
+    from core.foundation.commands import CreateEntityCommand, DeleteEntityCommand, SetComponentCommand, \
         AddComponentCommand, RemoveComponentCommand, CompoundCommand, PasteEntitiesCommand, \
         InstantiatePrefabCommand
-    from core.engine import Engine
+    from core.engine.engine import Engine
     eng = Engine.instance()
     collab = eng.collab_manager if hasattr(eng, 'collab_manager') else None
     if not collab or not collab.connected:
@@ -311,7 +311,7 @@ def _collab_on_redo(cmd):
 
 
 def setup_collab_undo_redo_hooks(engine):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     history = get_history()
     history.set_on_undo(_collab_on_undo)
     history.set_on_redo(_collab_on_redo)

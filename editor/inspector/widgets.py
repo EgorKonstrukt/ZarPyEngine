@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QDoubleSpinBox, QLabel, QWidget, QVBoxLayout, QHBoxL
     QListWidgetItem, QPushButton, QDialog, QApplication
 from PyQt6.QtCore import Qt, QTimer, QMimeData
 from PyQt6.QtGui import QPixmap, QFont, QColor, QPainter, QBrush, QPen, QFont as QF, QCursor, QIcon
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 from editor.inspector.constants import _accent
 def _get_component_icon_pixmap(cls, size=16):
     from editor.inspector.helpers import get_component_icon_pixmap
@@ -66,7 +66,7 @@ class _DragLabel(QLabel):
             new_val = self._start_val + dx * factor
             if not ctrl_down:
                 try:
-                    from core.engine import Engine
+                    from core.engine.engine import Engine
                     gizmo = Engine.instance().viewport.gizmo
                     if gizmo.snap_enabled and gizmo.snap_translate > 0:
                         snap = gizmo.snap_translate

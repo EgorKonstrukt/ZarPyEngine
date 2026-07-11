@@ -9,7 +9,7 @@ import os
 import re
 import moderngl
 from typing import Optional
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.renderer.mesh_data import SHADER_DIR
 
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -73,7 +73,7 @@ class ShaderManager:
 
     def _compile_shader_file(self, shader_path: str) -> Optional[moderngl.Program]:
         """Compile a .shader file containing GLSLPROGRAM...ENDGLSL blocks."""
-        from core.material import _extract_glsl_from_shader
+        from core.assets.material import _extract_glsl_from_shader
         resolved = _resolve_shader_path(shader_path)
         try:
             with open(resolved, "r", encoding="utf-8") as f:

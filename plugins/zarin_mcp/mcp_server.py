@@ -20,7 +20,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.requests import Request
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 
 class McpServer:

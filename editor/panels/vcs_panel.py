@@ -27,7 +27,7 @@ from PyQt6.QtGui import (
     QFont, QColor, QTextCharFormat, QSyntaxHighlighter,
     QPainter, QPen, QTextDocument,
 )
-from core.editor_scale import scale
+from core.config.editor_scale import scale
 
 
 def _open_url(url: str):
@@ -1417,7 +1417,7 @@ class VcsPanel(QDockWidget):
     def _try_detect(self):
         eng = None
         try:
-            from core.engine import Engine
+            from core.engine.engine import Engine
             eng = Engine.instance()
         except Exception:
             pass
@@ -1453,7 +1453,7 @@ class VcsPanel(QDockWidget):
     def _on_timer(self):
         eng = None
         try:
-            from core.engine import Engine
+            from core.engine.engine import Engine
             eng = Engine.instance()
         except Exception:
             pass

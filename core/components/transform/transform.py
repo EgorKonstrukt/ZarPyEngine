@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 import numpy as np
-from core.ecs import Component, ComponentRegistry
-from core.math3d import Vec3, Quat, Mat4, FLOAT_TYPE
+from core.ecs.ecs import Component, ComponentRegistry
+from core.math.math3d import Vec3, Quat, Mat4, FLOAT_TYPE
 from core.math_helpers import mat4_mul_fast, mat4_from_quaternion, mat4_translation, mat4_scale_mat, mat4_inv_fast
 from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
 @ComponentRegistry.register

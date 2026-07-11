@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 from typing import Callable, Optional, Any
-from core.plugin_manager import PluginBase
-from core.logger import Logger
+from core.foundation.plugin_manager import PluginBase
+from core.foundation.logger import Logger
 class NetworkMessage:
     def __init__(self, msg_type: str, payload: dict, sender_id: int = -1):
         self.msg_type = msg_type

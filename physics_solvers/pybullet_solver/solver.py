@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Optional, Tuple, Dict
 import os
 import numpy as np
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.physics.physics_solver import IPhysicsSolver
 
 
@@ -61,7 +61,7 @@ def _load_mesh_verts(path: str) -> Optional[np.ndarray]:
     if key in _LOADED_MESH_VERTS:
         return _LOADED_MESH_VERTS[key]
     try:
-        from core.asset_importer import load_mesh
+        from core.assets.asset_importer import load_mesh
         data = load_mesh(path)
     except Exception:
         return None

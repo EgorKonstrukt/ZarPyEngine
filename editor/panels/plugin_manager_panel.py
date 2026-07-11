@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QLabel, QCheckBox, QFrame, QDialog,
                               QDialogButtonBox, QComboBox, QLineEdit)
 from PyQt6.QtCore import Qt
-from core.plugin_manager import PluginBase
+from core.foundation.plugin_manager import PluginBase
 from tools.build_plugin import build_plugin
 
 

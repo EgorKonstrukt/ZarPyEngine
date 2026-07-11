@@ -9,7 +9,7 @@ import threading
 from queue import Queue, Empty
 from typing import Optional, Callable
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 
 class PhysicsWorker(threading.Thread):

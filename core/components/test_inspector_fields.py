@@ -1,7 +1,7 @@
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField, ListElementField
-from core.math3d import Vec2, Vec3, Vec4
-from core.curve import Curve
+from core.math.math3d import Vec2, Vec3, Vec4
+from core.foundation.curve import Curve
 
 
 @ComponentRegistry.register

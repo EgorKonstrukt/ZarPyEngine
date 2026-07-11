@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QLabel, QPushButton, QCheckBox,
                              QDoubleSpinBox, QComboBox, QFrame, QWidget,
                              QHBoxLayout, QSizePolicy)
@@ -174,7 +174,7 @@ class RenderToolbar(QToolBar):
         self.camera_projection_changed.emit()
 
     def save_state(self):
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cfg = get_global_config()
         cfg.set("toolbar.grid", self._grid_cb.isChecked())
         cfg.set("toolbar.snap", self._snap_cb.isChecked())
@@ -186,7 +186,7 @@ class RenderToolbar(QToolBar):
         cfg.save()
 
     def load_state(self):
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cfg = get_global_config()
         if cfg.has("toolbar.grid"):
             self._grid_cb.setChecked(cfg.get("toolbar.grid", True))

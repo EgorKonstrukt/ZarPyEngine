@@ -19,8 +19,8 @@ from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
     QDialogButtonBox,
 )
-from core.plugin_manager import PluginBase
-from core.logger import Logger
+from core.foundation.plugin_manager import PluginBase
+from core.foundation.logger import Logger
 from PIL import Image
 
 BSP_LUMP_VERTICES = 3
@@ -556,7 +556,7 @@ class BSPImportPlugin(PluginBase):
                 break
 
     def _on_import_bsp(self, parent_widget):
-        from core.engine import Engine
+        from core.engine.engine import Engine
         engine = Engine.instance()
         if not engine:
             return
@@ -586,7 +586,7 @@ class BSPImportPlugin(PluginBase):
 
     def _import_sync(self, path: str, settings: dict, engine, parent):
         from core.components import Transform, MeshFilter, MeshRenderer
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         from core.renderer.mesh_data import MeshData
 
         Logger.info("[BSPImport] Parsing BSP file...")
@@ -733,7 +733,7 @@ class BSPImportPlugin(PluginBase):
     def _on_import_finished(self, result: dict, engine, parent):
         print("[BSP_DEBUG] _on_import_finished start", flush=True)
         from core.components import Transform, MeshFilter, MeshRenderer
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         from core.renderer.mesh_data import MeshData
 
         bsp_name = result['bsp_name']

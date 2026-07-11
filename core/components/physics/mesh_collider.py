@@ -12,10 +12,10 @@ import math
 import numpy as np
 import os
 from typing import Optional
-from core.math3d import Vec3
-from core.ecs import Component, ComponentRegistry, GizmoPrimitive
+from core.math.math3d import Vec3
+from core.ecs.ecs import Component, ComponentRegistry, GizmoPrimitive
 from core.components.inspector_meta import FieldType, InspectorField
-from core.engine import Engine
+from core.engine.engine import Engine
 
 
 class CollisionMode(Enum):
@@ -81,7 +81,7 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     if cached is not _SENTINEL:
         return cached
     try:
-        from core.asset_importer import load_mesh, load_obj
+        from core.assets.asset_importer import load_mesh, load_obj
         lower_path = resolved.lower()
         if lower_path.endswith(".obj"):
             data = load_obj(resolved)
@@ -153,7 +153,7 @@ def _decimate_verts(verts: np.ndarray, max_vertices: int) -> np.ndarray:
 
 def _compute_hull_edges_np(verts: np.ndarray) -> Optional[np.ndarray]:
     try:
-        from core.convex_hull import convex_hull_simplices
+        from core.math.convex_hull import convex_hull_simplices
         simplices = convex_hull_simplices(verts)
         if len(simplices) == 0:
             return None
@@ -300,7 +300,7 @@ class MeshCollider(Component):
 
     def gizmo(self):
         try:
-            from core.engine import Engine
+            from core.engine.engine import Engine
             from core.components.physics.rigidbody import Rigidbody
             eng = Engine.instance()
             if eng and getattr(eng, 'play_mode', False) and self.entity:

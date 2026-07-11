@@ -15,7 +15,7 @@ import numpy as np
 from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
 
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 try:
     import psutil as _psutil
@@ -234,7 +234,7 @@ def draw_stats_overlay(vp, painter):
     active_sounds = 0
     total_sounds = 0
     try:
-        from core.audio_system import AudioSourceManager
+        from core.audio.audio_system import AudioSourceManager
         mgr = AudioSourceManager.instance()
         if mgr:
             dsp_load = mgr.get_dsp_load()

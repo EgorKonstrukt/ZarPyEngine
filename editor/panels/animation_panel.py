@@ -17,9 +17,9 @@ from PyQt6.QtGui import (
     QPainter, QPen, QColor, QBrush, QFont, QMouseEvent, QWheelEvent,
     QKeyEvent, QAction, QPainterPath, QFontMetrics, QPalette,
 )
-from core.curve import Curve, CurveKey, TangentMode
+from core.foundation.curve import Curve, CurveKey, TangentMode
 from core.components.animation.animation_clip import AnimationClip, AnimationEvent
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 _FPS = 60
 _TIMELINE_HEIGHT = 30

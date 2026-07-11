@@ -12,7 +12,7 @@ import numpy as np
 from enum import Enum
 from typing import Optional, List, Tuple, Dict, Callable, Any
 from dataclasses import dataclass, field
-from core.math3d import Vec3, Mat4
+from core.math.math3d import Vec3, Mat4
 
 
 class GizmoType(Enum):

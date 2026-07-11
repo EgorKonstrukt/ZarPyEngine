@@ -7,7 +7,7 @@
 from __future__ import annotations
 import math
 from typing import Optional
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.animation.animator_controller import (
     AnimatorController,
     AnimatorState,

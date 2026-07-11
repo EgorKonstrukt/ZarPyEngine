@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from core.build_settings import BuildSettings
-from core.logger import Logger
+from core.config.build_settings import BuildSettings
+from core.foundation.logger import Logger
 
 
 class BuildSettingsDialog(QDialog):

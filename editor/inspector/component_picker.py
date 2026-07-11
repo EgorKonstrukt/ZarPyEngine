@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QListW
     QLabel, QStackedWidget, QSizePolicy, QWidget, QListView, QAbstractItemView
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QFont, QPainter, QBrush, QPen
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 from editor.inspector.constants import _accent
 from editor.inspector.helpers import get_component_icon_pixmap
 
@@ -122,8 +122,8 @@ class ComponentPickerDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
     def _load_data(self):
-        from core.ecs import ComponentRegistry
-        from core.engine import Engine
+        from core.ecs.ecs import ComponentRegistry
+        from core.engine.engine import Engine
         all_reg = ComponentRegistry.all()
         self._all_components = []
         self._categories.clear()
@@ -205,7 +205,7 @@ class ComponentPickerDialog(QDialog):
         self._comp_list.clear()
         self._add_btn.setEnabled(False)
         lower = text.lower()
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         for name, cls, already in self._all_components:
             if lower not in name.lower():
                 continue

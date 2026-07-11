@@ -26,7 +26,7 @@ _thumbnail_cache: dict[str, QPixmap] = {}
 _thumbnail_mutex = QMutex()
 
 from editor.constants import THUMB_SIZE, PREVIEW_SIZE
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 _placeholder_icon: Optional[QIcon] = None
 
@@ -98,7 +98,7 @@ class _MeshDataLoader(QThread):
         self._lock.unlock()
 
     def run(self):
-        from core.asset_importer import load_mesh
+        from core.assets.asset_importer import load_mesh
         while not self._cancelled:
             self._lock.lock()
             work = self._queue.pop(0) if self._queue else None
@@ -912,7 +912,7 @@ class ResourcePickerDialog(QDialog):
 def pick_resource(parent, title: str, filter_str: str, current_path: str = "",
                   project_root: str = "") -> Optional[str]:
     if not project_root:
-        from core.engine import Engine
+        from core.engine.engine import Engine
         eng = Engine.instance()
         if eng is not None:
             project_root = eng.project_root

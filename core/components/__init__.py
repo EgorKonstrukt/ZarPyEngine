@@ -11,20 +11,16 @@ import os
 
 _package_dir = os.path.dirname(__file__)
 
-for _module_info in pkgutil.iter_modules([_package_dir]):
-    if _module_info.name.startswith("_"):
+for _finder, _name, _ispkg in pkgutil.walk_packages(
+    path=[_package_dir], prefix=__name__ + "."
+):
+    _leaf = _name.rsplit(".", 1)[-1]
+    if _leaf.startswith("_") or _leaf in ("inspector_meta",):
         continue
-    if _module_info.name in ("inspector_meta",):
-        continue
-    importlib.import_module(f"{__name__}.{_module_info.name}")
-    if _module_info.ispkg:
-        for _sub_info in pkgutil.iter_modules([os.path.join(_package_dir, _module_info.name)]):
-            if _sub_info.name.startswith("_"):
-                continue
-            importlib.import_module(f"{__name__}.{_module_info.name}.{_sub_info.name}")
+    importlib.import_module(_name)
 
-from core.ecs import ComponentRegistry
-from core.components.rendering.camera import CameraProjection
+from core.ecs.ecs import ComponentRegistry
+from core.components.rendering.cameras.camera import CameraProjection
 from core.components.lighting.light import LightType, LightAreaType
 
 __all__ = ["ComponentRegistry", "CameraProjection", "LightType", "LightAreaType"]

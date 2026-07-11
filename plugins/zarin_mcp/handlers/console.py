@@ -31,7 +31,7 @@ def register(registry, engine):
         },
     )
     def console_get_log(level="", max_entries=50):
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         entries = Logger.get_entries()
         if level:
             entries = [e for e in entries if e.level.name == level.upper()]
@@ -56,7 +56,7 @@ def register(registry, engine):
         {"type": "object", "properties": {}},
     )
     def console_clear():
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         Logger.clear()
         return {"message": "Console cleared"}
 
@@ -87,7 +87,7 @@ def register(registry, engine):
             else:
                 loc["engine"] = engine
                 loc["scene"] = engine.scene if engine else None
-                import core.ecs as ecs
+                import core.ecs.ecs as ecs
                 loc["Entity"] = ecs.Entity
                 loc["Component"] = ecs.Component
                 loc["ComponentRegistry"] = ecs.ComponentRegistry

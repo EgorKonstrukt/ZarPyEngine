@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QDockWidget,
                              QSplitter, QFileDialog, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from core.gui import GuiCanvas, GuiApi
-from core.ecs import ComponentRegistry
+from core.ecs.ecs import ComponentRegistry
 from core.gui.widgets import (
     GuiWidget, Panel, Button, Label, Slider, TextInput, Image,
     Toggle, ProgressBar, Dropdown, ScrollPanel, HtmlView,
@@ -23,7 +23,7 @@ from core.gui.system import GuiCanvasSystem
 from core.components.gui import _ensure_component_map
 from editor.gui_editor.gui_toolbar import GuiEditorToolbar
 from editor.gui_editor.widget_palette import WidgetPalette
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 GUI_COMPONENT_MAP = _ensure_component_map()
 
@@ -152,10 +152,10 @@ class GuiEditorViewport(QWidget):
         scene = self._engine.scene
         comp_class = GUI_COMPONENT_MAP.get(widget_type)
         if widget_type in _LAYOUT_ONLY:
-            from core.components.gui.horizontal_layout_component import (
+            from core.components.gui.layout.horizontal_layout_component import (
                 HorizontalLayoutComponent, VerticalLayoutComponent, GridLayoutComponent,
             )
-            from core.components.gui.layout_element_component import LayoutElementComponent
+            from core.components.gui.layout.layout_element_component import LayoutElementComponent
             _LCOMP = {
                 "horizontallayout": HorizontalLayoutComponent,
                 "verticallayout": VerticalLayoutComponent,

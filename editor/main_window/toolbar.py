@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QPushButton, QLabel, QDoubleSpinBox,
                              QWidget, QSizePolicy, QHBoxLayout, QFrame,
                              QToolButton)
@@ -135,5 +135,5 @@ def add_plugin_toolbar_actions(mw, layout):
             act.triggered.connect(callback)
             layout.addWidget(_action_to_toolbutton(act, mw))
         except Exception as e:
-            from core.logger import Logger
+            from core.foundation.logger import Logger
             Logger.error(f"Failed to add plugin toolbar action '{info.get('text', '?')}': {e}")

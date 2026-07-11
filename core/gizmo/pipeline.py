@@ -8,8 +8,8 @@ from __future__ import annotations
 import math
 import numpy as np
 from typing import List, Tuple
-from core.math3d import Vec3
-from core.ecs import GizmoPrimitive, GizmoStyle
+from core.math.math3d import Vec3
+from core.ecs.ecs import GizmoPrimitive, GizmoStyle
 from core.gizmo.api import Gizmos
 
 

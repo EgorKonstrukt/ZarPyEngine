@@ -94,7 +94,7 @@ def register(registry, engine):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
-        from core.ecs import Entity
+        from core.ecs.ecs import Entity
         from core.components.transform.transform import Transform
         e = s.create_entity(name)
         e.add_component(Transform())
@@ -124,7 +124,7 @@ def register(registry, engine):
         if src is None:
             return {"error": "Entity not found"}
         import json, copy
-        from core.ecs import Entity, ComponentRegistry
+        from core.ecs.ecs import Entity, ComponentRegistry
         data = json.loads(json.dumps(src.serialize(), default=str))
         data["id"] = str(__import__("uuid").uuid4())
         data["parent"] = src.parent.id if src.parent else None
@@ -300,7 +300,7 @@ def register(registry, engine):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
@@ -404,10 +404,10 @@ def register(registry, engine):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
-        from core.ecs import Entity
+        from core.ecs.ecs import Entity
         from core.components.transform.transform import Transform
-        from core.components.rendering.mesh_filter import MeshFilter
-        from core.components.rendering.mesh_renderer import MeshRenderer
+        from core.components.rendering.renderers.mesh_filter import MeshFilter
+        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
         e = s.create_entity(name or mesh.capitalize())
         e.add_component(Transform())
         mf = MeshFilter()
@@ -436,7 +436,7 @@ def register(registry, engine):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
-        from core.ecs import Entity
+        from core.ecs.ecs import Entity
         from core.components.transform.transform import Transform
         from core.components.lighting.light import Light, LightType
         name_map = {"directional": "Directional Light", "point": "Point Light", "spot": "Spot Light"}
@@ -459,9 +459,9 @@ def register(registry, engine):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
-        from core.ecs import Entity
+        from core.ecs.ecs import Entity
         from core.components.transform.transform import Transform
-        from core.components.rendering.camera import Camera
+        from core.components.rendering.cameras.camera import Camera
         e = s.create_entity("Camera")
         e.add_component(Transform())
         e.add_component(Camera())

@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 import numpy as np
-from core.ecs import Component, ComponentRegistry, InstancePrimitive
-from core.math3d import Vec2, Vec3
+from core.ecs.ecs import Component, ComponentRegistry, InstancePrimitive
+from core.math.math3d import Vec2, Vec3
 from core.components.inspector_meta import FieldType, InspectorField
 @ComponentRegistry.register
 class BoxCollider2D(Component):

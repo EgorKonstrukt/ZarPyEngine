@@ -8,7 +8,7 @@ from __future__ import annotations
 import threading
 import platform
 from typing import Optional
-from core.input_system import Input, KeyCode
+from core.input.input_system import Input, KeyCode
 
 try:
     from pynput import mouse, keyboard

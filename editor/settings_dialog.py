@@ -13,9 +13,9 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget,
                              QSlider, QStyle, QApplication, QGroupBox,
                              QGridLayout, QComboBox)
 from PyQt6.QtCore import Qt, pyqtSignal
-from core.config import Config
+from core.config.config import Config
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 SECTION_ICONS = {
     "editor": QStyle.StandardPixmap.SP_FileDialogDetailedView,
@@ -715,13 +715,13 @@ class SettingsDialog(QDialog):
             le.setFixedWidth(220)
             le.textChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             hl.addWidget(le)
-            from core.audio_system import AudioSystem
+            from core.audio.audio_system import AudioSystem
             devices = AudioSystem.get_available_devices()
             if devices:
                 detect_btn = QPushButton("Detect")
                 detect_btn.setFixedWidth(scale(56))
                 def _detect(btn=detect_btn, edit=le, k=key):
-                    from core.audio_system import AudioSystem
+                    from core.audio.audio_system import AudioSystem
                     devs = AudioSystem.get_available_devices()
                     if devs:
                         current = edit.text()

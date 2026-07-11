@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 import math
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 @ComponentRegistry.register
 class Projector(Component):
@@ -50,7 +50,7 @@ class Projector(Component):
         tr = self.transform
         if not tr:
             return []
-        from core.ecs import GizmoPrimitive
+        from core.ecs.ecs import GizmoPrimitive
         pos = tr.position
         fwd = tr.forward
         up = tr.up

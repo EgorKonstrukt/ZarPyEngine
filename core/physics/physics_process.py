@@ -55,7 +55,7 @@ class PhysicsProcess:
         self._solver_module = solver_module
         self._solver_class = solver_class
         self._shared.set_num_entities(0)
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         self._process = multiprocessing.Process(
             target=_physics_loop,
             args=(self._cmd_queue, self._result_queue,
@@ -141,7 +141,7 @@ def _physics_loop(
     os.chdir(project_root)
 
     import importlib
-    from core.logger import Logger
+    from core.foundation.logger import Logger
 
     shared = SharedPhysicsBuffer()
     shared.attach(shared_name)

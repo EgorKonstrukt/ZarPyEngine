@@ -73,7 +73,7 @@ def register_dock(mw, dock: QDockWidget, area: Qt.DockWidgetArea) -> QDockWidget
 
 
 def register_default_docks(mw):
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     mw._viewport = SceneViewport(mw._engine, mw)
     mw._engine.viewport = mw._viewport
     mw._viewport.load_config(get_global_config())
@@ -253,7 +253,7 @@ def register_plugin_docks(mw):
             dock = _make_dock(mw, title, widget, obj_name)
             register_dock(mw, dock, area)
         except Exception as e:
-            from core.logger import Logger
+            from core.foundation.logger import Logger
             Logger.error(f"Failed to create plugin dock '{info.get('title', '?')}': {e}")
 
 

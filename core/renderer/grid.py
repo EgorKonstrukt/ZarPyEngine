@@ -9,7 +9,7 @@ import math
 import numpy as np
 import moderngl
 from typing import Optional
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 
 class GridRenderer:

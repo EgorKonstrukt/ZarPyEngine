@@ -7,8 +7,8 @@
 from __future__ import annotations
 import os
 
-from core.plugin_manager import PluginBase
-from core.logger import Logger
+from core.foundation.plugin_manager import PluginBase
+from core.foundation.logger import Logger
 
 from plugins.zarin_mcp.registry import Registry
 from plugins.zarin_mcp.mcp_server import McpServer

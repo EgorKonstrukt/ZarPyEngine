@@ -14,10 +14,10 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtCore import Qt, QTimer, QRectF
 from PyQt6.QtGui import (QFont, QPainter, QColor, QPen, QPainterPath, QFontMetrics)
 
-from core.engine import Engine
-from core.time_travel import (SnapshotRecorder, FrameSnapshot, diff_scenes,
+from core.engine.engine import Engine
+from core.foundation.time_travel import (SnapshotRecorder, FrameSnapshot, diff_scenes,
                               find_entity_frame_changes)
-from core.editor_scale import scale
+from core.config.editor_scale import scale
 
 _C_BG = QColor("#1e1e2e")
 _C_RULER = QColor("#252535")
@@ -641,7 +641,7 @@ class TimeTravelPanel(QDockWidget):
         if self._engine.play_mode:
             self._engine.stop_play()
 
-        from core.ecs import Scene as SceneCls
+        from core.ecs.ecs import Scene as SceneCls
         restored = SceneCls.deserialize(snap.data, self._engine._component_registry)
         old_path = self._engine.scene.path if self._engine.scene else None
         if old_path:
@@ -717,7 +717,7 @@ class TimeTravelPanel(QDockWidget):
 
     def _go_live(self):
         if self._live_data is not None and self._engine.scene is not None:
-            from core.ecs import Scene as SceneCls
+            from core.ecs.ecs import Scene as SceneCls
             live = SceneCls.deserialize(self._live_data, self._engine._component_registry)
             old_path = self._engine.scene.path if self._engine.scene else None
             if old_path:

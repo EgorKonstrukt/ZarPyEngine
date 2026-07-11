@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 import math
-from core.ecs import Component, ComponentRegistry
-from core.math3d import Vec3, Quat, Mat4
+from core.ecs.ecs import Component, ComponentRegistry
+from core.math.math3d import Vec3, Quat, Mat4
 from core.components.inspector_meta import FieldType, InspectorField, ListElementField
 
 

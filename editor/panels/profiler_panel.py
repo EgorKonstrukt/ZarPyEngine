@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QHeaderView, QFrame, QStyledItemDelegate)
 from PyQt6.QtCore import QTimer, Qt, QRectF, QPointF
 from PyQt6.QtGui import QFont, QPainter, QColor, QPen, QBrush, QFontMetrics
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 def _name_to_color(name: str) -> QColor:
     raw = name.replace("_ms", "").replace("_", "").replace(" ", "").strip().lower()
@@ -207,7 +207,7 @@ class HierarchyView(QTreeWidget):
                 break
         unaccounted = max(0.0, frame_time_ms - frame_dur)
         if unaccounted > frame_time_ms * 0.03:
-            from core.engine import ProfileSample
+            from core.engine.engine import ProfileSample
             samples = list(samples) + [ProfileSample("Unaccounted", 0, 0.0, unaccounted, "#555555")]
 
         self._base_frame_ms = frame_time_ms
@@ -699,7 +699,7 @@ class ProfilerPanel(QDockWidget):
                 agg[s.name]["total"] += s.duration_ms
                 agg[s.name]["count"] += 1
 
-        from core.engine import ProfileSample
+        from core.engine.engine import ProfileSample
         start_map: dict[str, float] = {}
         for s in last.samples:
             if s.name not in start_map:

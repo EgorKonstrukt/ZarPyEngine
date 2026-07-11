@@ -7,11 +7,11 @@
 from __future__ import annotations
 import math
 from typing import Optional, TYPE_CHECKING
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.physics.shape_utils import find_shape_info, make_shape_key
 
 if TYPE_CHECKING:
-    from core.ecs import Entity, Scene
+    from core.ecs.ecs import Entity, Scene
     from core.physics.physics_solver import IPhysicsSolver
 
 

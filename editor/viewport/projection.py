@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 
 def screen_to_world(vp, screen_x: int, screen_y: int) -> Vec3:

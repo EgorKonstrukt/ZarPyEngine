@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 from editor.viewport.projection import screen_to_ray, world_to_screen
 
 _font_atlas_cache: dict[tuple[str, int], "FontAtlas"] = {}
@@ -59,9 +59,9 @@ def _ray_aabb_min(ox: float, oy: float, oz: float,
 
 def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
     from core.components.transform import Transform
-    from core.components.rendering.mesh_filter import MeshFilter
-    from core.components.rendering.mesh_renderer import MeshRenderer
-    from core.components.rendering.text_renderer import TextRenderer
+    from core.components.rendering.renderers.mesh_filter import MeshFilter
+    from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+    from core.components.rendering.renderers.text_renderer import TextRenderer
     from core.components.physics.box_collider import BoxCollider
     from core.components.physics.sphere_collider import SphereCollider
     t = entity.transform
@@ -88,7 +88,7 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
             np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
             np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
             expanded = True
-    from core.components.rendering.sprite_renderer import SpriteRenderer
+    from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
     sr = entity.get_component(SpriteRenderer)
     if sr and sr.enabled and sr.texture_path:
         wm = t.world_matrix._d
@@ -99,7 +99,7 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
         np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
         np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
         expanded = True
-    from core.components.rendering.video_renderer import VideoRenderer
+    from core.components.rendering.renderers.video_renderer import VideoRenderer
     vr = entity.get_component(VideoRenderer)
     if vr and vr.enabled and vr.video_path:
         wm = t.world_matrix._d
@@ -110,9 +110,9 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
         np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
         np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
         expanded = True
-    from core.components.rendering.text_renderer import TextRenderer
-    from core.font_atlas import FontAtlas
-    from core.font_atlas import get_default_font_path as get_def_font
+    from core.components.rendering.renderers.text_renderer import TextRenderer
+    from core.assets.font_atlas import FontAtlas
+    from core.assets.font_atlas import get_default_font_path as get_def_font
     tr_comp = entity.get_component(TextRenderer)
     if tr_comp and tr_comp.enabled and tr_comp.text:
         fp = tr_comp.font_path or get_def_font()
@@ -188,7 +188,7 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
 
 
 def _get_mesh_for(entity, mesh_name: str, mesh_path: str):
-    from core.engine import Engine
+    from core.engine.engine import Engine
     engine = Engine.instance()
     if not engine:
         return None
@@ -254,8 +254,8 @@ def _test_mesh_hit(wm, ro, rd, mesh):
 
 def _test_entity_pick(entity, ro, rd, ray_origin, ray_dir):
     from core.components.transform import Transform
-    from core.components.rendering.mesh_filter import MeshFilter
-    from core.components.rendering.mesh_renderer import MeshRenderer
+    from core.components.rendering.renderers.mesh_filter import MeshFilter
+    from core.components.rendering.renderers.mesh_renderer import MeshRenderer
     from core.components.physics.mesh_collider import MeshCollider
     t = entity.transform
     if not t:
@@ -333,12 +333,12 @@ def pick_entity(vp, sx: int, sy: int):
         t = entity.transform
         if not t:
             continue
-        from core.components.rendering.mesh_filter import MeshFilter
-        from core.components.rendering.mesh_renderer import MeshRenderer
+        from core.components.rendering.renderers.mesh_filter import MeshFilter
+        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
         from core.components.physics.mesh_collider import MeshCollider
         from core.components.physics.box_collider import BoxCollider
         from core.components.physics.sphere_collider import SphereCollider
-        from core.components.rendering.sprite_renderer import SpriteRenderer
+        from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
         mf = entity.get_component(MeshFilter)
         mr = entity.get_component(MeshRenderer)
         mc = entity.get_component(MeshCollider)

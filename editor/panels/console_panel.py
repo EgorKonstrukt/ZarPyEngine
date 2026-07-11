@@ -11,10 +11,10 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QListWidgetItem, QFrame, QStyle, QAbstractItemView)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor, QTextCursor, QIcon, QKeyEvent, QKeySequence
-from core.logger import Logger, LogLevel, LogEntry
+from core.foundation.logger import Logger, LogLevel, LogEntry
 import time as _time
 import re
-from core.editor_scale import scale
+from core.config.editor_scale import scale
 
 _NUM_RE = re.compile(r"\d+(\.\d+)?")
 

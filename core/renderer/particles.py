@@ -10,8 +10,8 @@ import time
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math3d import Vec3
-from core.components.rendering.particle_force_field import FORCE_FIELD_DTYPE, FORCE_FIELD_SSBO_SIZE, MAX_FORCE_FIELDS
+from core.math.math3d import Vec3
+from core.components.rendering.particles.particle_force_field import FORCE_FIELD_DTYPE, FORCE_FIELD_SSBO_SIZE, MAX_FORCE_FIELDS
 
 
 class ParticleRenderer:
@@ -47,7 +47,7 @@ class ParticleRenderer:
             self._compute_prog = self._ctx.compute_shader(source)
             return True
         except Exception as e:
-            from core.logger import Logger
+            from core.foundation.logger import Logger
             Logger.error(f"Particle compute shader compile error: {e}")
             return False
 
@@ -215,7 +215,7 @@ class ParticleRenderer:
         try:
             self._vao.render(moderngl.TRIANGLES, vertices=n * 6)
         except Exception as e:
-            from core.logger import Logger
+            from core.foundation.logger import Logger
             Logger.error(f"Particle render error: {e}")
 
     def release(self):

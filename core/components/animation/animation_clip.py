@@ -9,7 +9,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Optional
-from core.curve import Curve
+from core.foundation.curve import Curve
 
 
 @dataclass

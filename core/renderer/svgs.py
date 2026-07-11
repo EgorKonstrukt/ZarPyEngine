@@ -9,10 +9,10 @@ import os
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math3d import Mat4
-from core.components.rendering.svg_renderer import SvgRenderer
+from core.math.math3d import Mat4
+from core.components.rendering.renderers.svg_renderer import SvgRenderer
 
-from core.texture_import_settings import TextureImportSettings
+from core.assets.texture_import_settings import TextureImportSettings
 
 
 class SvgRendererGL:
@@ -69,7 +69,7 @@ class SvgRendererGL:
             if os.path.exists(candidate):
                 abs_path = candidate
             else:
-                from core.engine import Engine
+                from core.engine.engine import Engine
                 eng = Engine.instance()
                 root = eng.project_root if eng and eng.project_root else os.getcwd()
                 candidate = os.path.normpath(os.path.join(root, path))

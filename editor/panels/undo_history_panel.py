@@ -26,14 +26,14 @@ class UndoHistoryPanel(QDockWidget):
         self._refresh_timer.timeout.connect(self._timed_refresh)
         self._refresh_timer.start(500)
     def _timed_refresh(self):
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         h = get_history()
         key = f"{h.undo_count}:{h.redo_count}"
         if key != self._cache_key:
             self._cache_key = key
             self.refresh()
     def refresh(self):
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         h = get_history()
         undo_descs = h.get_undo_descriptions()
         redo_descs = h.get_redo_descriptions()
@@ -69,6 +69,6 @@ class UndoHistoryPanel(QDockWidget):
         target = item.data(Qt.ItemDataRole.UserRole)
         if target is None:
             return
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         get_history().seek(target)
         self.history_navigated.emit()

@@ -10,7 +10,7 @@ from core.gui.canvas import GuiCanvas
 from core.gui.api import GuiApi
 
 if TYPE_CHECKING:
-    from core.ecs import Entity
+    from core.ecs.ecs import Entity
 
 
 _GUI_COMP_NAMES: list[str] = []

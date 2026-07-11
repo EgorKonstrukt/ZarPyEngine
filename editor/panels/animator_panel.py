@@ -29,7 +29,7 @@ from core.components.animation.animator_controller import (
     AnimatorParameter, AnimatorParameterType, AnimatorCondition,
     AnimatorConditionMode,
 )
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 _STATE_WIDTH = 160
 _STATE_HEIGHT = 50

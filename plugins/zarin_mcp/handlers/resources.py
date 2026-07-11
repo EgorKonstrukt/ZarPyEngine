@@ -109,7 +109,7 @@ def register(registry, engine):
         description="Recent console log entries",
     )
     def res_console_log():
-        from core.logger import Logger
+        from core.foundation.logger import Logger
         entries = Logger.get_entries()[-100:]
         return {
             "entries": [
@@ -202,7 +202,7 @@ def register(registry, engine):
         scene = engine.scene
         if scene is None:
             return {"error": "No scene loaded"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}

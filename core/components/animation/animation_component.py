@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 from typing import Optional
-from core.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry
 from core.components.animation.animation_clip import AnimationClip
-from core.curve import Curve
+from core.foundation.curve import Curve
 
 
 @ComponentRegistry.register

@@ -8,10 +8,10 @@ from __future__ import annotations
 import json
 import os
 from typing import Optional, TYPE_CHECKING
-from core.math3d import Vec3
+from core.math.math3d import Vec3
 
 if TYPE_CHECKING:
-    from core.ecs import Entity
+    from core.ecs.ecs import Entity
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 

@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import QMainWindow, QDockWidget, QWidget
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QCloseEvent
 
-from core.engine import Engine
-from core.logger import Logger
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
 
 from editor.main_window.docks import setup_docks
 from editor.main_window.menu import setup_menu
@@ -87,7 +87,7 @@ class EditorMainWindow(QMainWindow):
         if self._engine.scene and self._engine.scene.dirty:
             name = self._engine.scene.name
             self.setWindowTitle(f"Zarin Engine Editor - {name}*")
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         h = get_history()
         self._undo_act.setEnabled(h.can_undo)
         self._undo_act.setText(f"Undo ({h.undo_text.split()[-1] if h.can_undo else ''})" if h.can_undo else "Undo")
@@ -150,7 +150,7 @@ class EditorMainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         if self._engine.play_mode:
             self._engine.stop_play()
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cfg = get_global_config()
         if hasattr(self, '_terminal') and hasattr(self._terminal, 'save_config'):
             self._terminal.save_config(cfg)

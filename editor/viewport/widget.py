@@ -22,13 +22,13 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEvent, QObject
 from PyQt6.QtGui import QMouseEvent, QWheelEvent, QKeyEvent, QSurfaceFormat
 
-from core.math3d import Vec3, Mat4, Quat
-from core.logger import Logger
+from core.math.math3d import Vec3, Mat4, Quat
+from core.foundation.logger import Logger
 from editor.scene_camera import SceneCamera
 from core.gizmo.gizmo import Gizmo, GizmoMode, GizmoSpace
 from core.gizmo.api import GizmosManager, set_gizmos
 from editor.gizmo.pb_scale_gizmo import PbScaleGizmo
-from core.input_system import Input, KeyCode
+from core.input.input_system import Input, KeyCode
 from core.input.input_manager import InputManager
 from core.input.constants import (KEY_Q, KEY_W, KEY_E, KEY_R, KEY_F, KEY_DELETE, KEY_SHIFT, KEY_CTRL, KEY_ALT,
                               KEY_SPACE, KEY_S, KEY_D, KEY_A, MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE,
@@ -48,7 +48,7 @@ from editor.viewport.collaboration import (
 )
 
 if TYPE_CHECKING:
-    from core.ecs import Entity
+    from core.ecs.ecs import Entity
     from core.renderer.renderer import Renderer
 
 
@@ -66,7 +66,7 @@ class _UndoFilter(QObject):
         self._sync_timer.setSingleShot(True)
         self._sync_timer.setInterval(60)
         self._sync_timer.timeout.connect(self._do_sync)
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         self._get_history = get_history
         from editor.main_window.handlers import sync_after_undo
         self._sync_fn = sync_after_undo
@@ -229,7 +229,7 @@ class SceneViewport(QOpenGLWidget):
         self._refresh_no_qt_overlay()
 
     def _init_format(self):
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cfg = get_global_config()
         self._vsync_enabled = cfg.get("rendering.vsync", True)
         self._target_fps = cfg.get("rendering.target_fps", 60)
@@ -286,7 +286,7 @@ class SceneViewport(QOpenGLWidget):
         if not sel_list:
             return
         sel = sel_list[0]
-        from core.components.rendering.mesh_filter import MeshFilter
+        from core.components.rendering.renderers.mesh_filter import MeshFilter
         mf = sel.get_component(MeshFilter)
         if not mf:
             return
@@ -594,7 +594,7 @@ class SceneViewport(QOpenGLWidget):
                     if self._selected_entities and eng.scene:
                         from editor.viewport.collaboration import is_collab_locked
                         if not is_collab_locked(self):
-                            from core.commands import DeleteEntityCommand, get_history
+                            from core.foundation.commands import DeleteEntityCommand, get_history
                             for ent in list(self._selected_entities):
                                 cmd = DeleteEntityCommand(eng.scene, ent.id)
                                 get_history().execute(cmd)
@@ -986,7 +986,7 @@ class SceneViewport(QOpenGLWidget):
             self._pb_scale_gizmo.on_mouse_release()
             self.update()
         if self._multi_entity_initial_transforms:
-            from core.commands import SetComponentCommand, CompoundCommand, get_history
+            from core.foundation.commands import SetComponentCommand, CompoundCommand, get_history
             from core.components import Transform as TransformComponent
             cmds = []
             for ent in self._selected_entities:
@@ -1122,7 +1122,7 @@ class SceneViewport(QOpenGLWidget):
         menu.exec(event.globalPos())
 
     def _emit_create_request(self, obj_type="empty", subtype=None):
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, MeshFilter, MeshRenderer, Light, LightType, Camera, ParticleSystem, Sky, Cloud
         scene = self._engine.scene
         from editor.viewport.collaboration import is_collab_locked
@@ -1223,7 +1223,7 @@ class SceneViewport(QOpenGLWidget):
         from editor.viewport.collaboration import is_collab_locked
         if is_collab_locked(self):
             return
-        from core.commands import DeleteEntityCommand, get_history
+        from core.foundation.commands import DeleteEntityCommand, get_history
         for ent in list(self._selected_entities):
             from editor.viewport.collaboration import send_collab_entity_delete
             send_collab_entity_delete(self, ent.id)
@@ -1267,8 +1267,8 @@ class SceneViewport(QOpenGLWidget):
             self._entity_clipboard.append(data)
 
     def _paste_entities(self):
-        from core.engine import Engine
-        from core.commands import PasteEntitiesCommand, get_history
+        from core.engine.engine import Engine
+        from core.foundation.commands import PasteEntitiesCommand, get_history
         registry = Engine.instance()._component_registry
         if not self._entity_clipboard or not self._engine.scene:
             return
@@ -1309,7 +1309,7 @@ class SceneViewport(QOpenGLWidget):
 
     def _drop_world_pos(self, sx: int, sy: int):
         from editor.viewport.projection import screen_to_ray
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         ray_origin, ray_dir = screen_to_ray(self, sx, sy)
         from editor.viewport.picking import pick_entity
         hit_entity = pick_entity(self, sx, sy)

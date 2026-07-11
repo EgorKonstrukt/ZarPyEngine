@@ -13,7 +13,7 @@ from typing import Optional
 
 import numpy as np
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.physics.physics_solver import IPhysicsSolver
 
 

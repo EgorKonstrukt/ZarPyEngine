@@ -20,9 +20,9 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtCore import Qt, QStringListModel, pyqtSignal, QTimer, QThread
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QKeyEvent, QKeySequence
 
-from core.engine import Engine
-from core.logger import Logger
-from core.editor_scale import scale
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
+from core.config.editor_scale import scale
 
 
 class _ReplInput(QPlainTextEdit):
@@ -412,7 +412,7 @@ class TerminalPanel(QDockWidget):
         ns["sys"] = sys
         ns["json"] = json
         ns["math"] = _time_module
-        from core.math3d import Vec2, Vec3, Vec4, Quat, Mat4
+        from core.math.math3d import Vec2, Vec3, Vec4, Quat, Mat4
         ns["Vec2"] = Vec2
         ns["Vec3"] = Vec3
         ns["Vec4"] = Vec4
@@ -424,7 +424,7 @@ class TerminalPanel(QDockWidget):
         except ImportError:
             pass
         try:
-            from core.ecs import Entity, Component
+            from core.ecs.ecs import Entity, Component
             ns["Entity"] = Entity
             ns["Component"] = Component
         except ImportError:

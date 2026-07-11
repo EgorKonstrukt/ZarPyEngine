@@ -13,8 +13,8 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QFrame, QCheckBox, QSlider, QApplication)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from core.ecs import ComponentRegistry
-from core.commands import AddComponentCommand, RemoveComponentCommand, get_history
+from core.ecs.ecs import ComponentRegistry
+from core.foundation.commands import AddComponentCommand, RemoveComponentCommand, get_history
 from core.components.inspector_meta import FieldType, InspectorField
 from core.components.mesh_editor import (ProBuilderMesh, SelectionMode,
     generate_box, generate_sphere, generate_cylinder, generate_plane,
@@ -22,13 +22,13 @@ from core.components.mesh_editor import (ProBuilderMesh, SelectionMode,
     extrude_faces, bevel_edges, subdivide_faces, weld_vertices,
     flip_normals, collapse_edges, bridge_edges, smart_optimize,
     get_primitive_names)
-from core.components.rendering.mesh_filter import MeshFilter
-from core.components.rendering.mesh_renderer import MeshRenderer
-from core.logger import Logger
+from core.components.rendering.renderers.mesh_filter import MeshFilter
+from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+from core.foundation.logger import Logger
 if TYPE_CHECKING:
-    from core.ecs import Entity
-    from core.engine import Engine
-from core.editor_scale import scale, scale_xy
+    from core.ecs.ecs import Entity
+    from core.engine.engine import Engine
+from core.config.editor_scale import scale, scale_xy
 
 _STYLE_BTN = ("QPushButton { border-radius: 3px; padding: 4px 8px; font-size: 11px; }")
 _STYLE_BTN_ACCENT = ("QPushButton { border-radius: 3px; padding: 4px 8px; font-size: 11px; }")
@@ -307,7 +307,7 @@ class MeshEditorPanel(QDockWidget):
             self._update_sel_buttons()
 
     def _get_selected_entity(self) -> Optional[Entity]:
-        from core.engine import Engine
+        from core.engine.engine import Engine
         eng = Engine.instance()
         if not eng:
             return None
@@ -325,7 +325,7 @@ class MeshEditorPanel(QDockWidget):
         detail_norm = max(4, self._detail_slider.value() * 32 // 50)
         entity = self._get_selected_entity()
         if entity is None:
-            from core.ecs import Entity as EcsEntity
+            from core.ecs.ecs import Entity as EcsEntity
             scene = self._engine.scene
             if not scene:
                 return

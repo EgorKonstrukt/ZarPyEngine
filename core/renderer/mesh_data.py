@@ -10,7 +10,7 @@ import sys
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 # Compute shader directory relative to project root or executable.
 # In a Nuitka build, __file__ may point to the source path (development)

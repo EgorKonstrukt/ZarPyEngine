@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 import math
-from core.ecs import Component, ComponentRegistry
-from core.math3d import Vec3, Vec2
+from core.ecs.ecs import Component, ComponentRegistry
+from core.math.math3d import Vec3, Vec2
 from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
-from core.input_system import Input, KeyCode
+from core.input.input_system import Input, KeyCode
 
 
 # Р‘Р›РЇР”РЎРљРР™ CharacterController: РќР• РРЎРџРћР›Р¬Р—РЈР•Рў Р¤РР—РР§Р•РЎРљРР™ РЎРћР›Р’Р•Р  Р’РћРћР‘Р©Р•.
@@ -168,7 +168,7 @@ class CharacterController(Component):
         total_half = self.capsule_height * 0.5 + self.capsule_radius
         origin = Vec3(pos.x, pos.y, pos.z)
         dist = total_half + self.ground_check_dist
-        from core.engine import Engine
+        from core.engine.engine import Engine
         engine = Engine.instance()
         if not engine or not engine._scene:
             return False, 0.0
@@ -247,11 +247,11 @@ class CharacterController(Component):
         self._eye_height += diff * min(1.0, 10.0 * 0.016)
 
     def _find_camera(self):
-        from core.engine import Engine
+        from core.engine.engine import Engine
         engine = Engine.instance()
         if not engine or not engine._scene:
             return
-        from core.components.rendering.camera import Camera
+        from core.components.rendering.cameras.camera import Camera
         for ent in engine._scene.get_entities_with_component(Camera):
             if ent.active:
                 self._camera_entity_id = ent.id
@@ -367,7 +367,7 @@ class CharacterController(Component):
     def _update_camera(self):
         if self._camera_entity_id is None:
             return
-        from core.engine import Engine
+        from core.engine.engine import Engine
         engine = Engine.instance()
         if not engine or not engine._scene:
             return
@@ -386,7 +386,7 @@ class CharacterController(Component):
         sp = math.sin(half_pitch)
         cy = math.cos(half_yaw)
         sy = math.sin(half_yaw)
-        from core.math3d import Quat
+        from core.math.math3d import Quat
 
         cam_is_child = cam_tr._entity.parent is self._entity if cam_tr._entity else False
 
@@ -417,7 +417,7 @@ class CharacterController(Component):
             half_yaw = math.radians(self._yaw * 0.5)
             cy = math.cos(half_yaw)
             sy = math.sin(half_yaw)
-            from core.math3d import Quat
+            from core.math.math3d import Quat
             tr.local_rotation = Quat(0, sy, 0, cy)
 
     def serialize(self) -> dict:

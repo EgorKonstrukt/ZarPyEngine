@@ -14,10 +14,10 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QPlainTextEdit)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
-from core.editor_scale import scale, scale_xy
-from core.logger import Logger
-from core.commands import SetComponentCommand, CompoundCommand, get_history
-from core.config import get_project_config
+from core.config.editor_scale import scale, scale_xy
+from core.foundation.logger import Logger
+from core.foundation.commands import SetComponentCommand, CompoundCommand, get_history
+from core.config.config import get_project_config
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
 from core.components.animation.animator_controller import (
     AnimatorController, AnimatorState, AnimatorTransition,
@@ -30,8 +30,8 @@ from editor.inspector.component_widget import ComponentWidget
 from editor.inspector.component_picker import ComponentPickerDialog
 
 if TYPE_CHECKING:
-    from core.ecs import Entity, Scene
-    from core.engine import Engine
+    from core.ecs.ecs import Entity, Scene
+    from core.engine.engine import Engine
 
 
 class InspectorPanel(QDockWidget):
@@ -288,7 +288,7 @@ class InspectorPanel(QDockWidget):
 
     def _build_mesh_import_settings(self):
         from editor.model_preview import ModelPreviewWidget
-        from core.asset_importer import load_obj_async, load_mesh_async
+        from core.assets.asset_importer import load_obj_async, load_mesh_async
         preview = ModelPreviewWidget()
         preview.setFixedHeight(200)
         self._add_asset_widget(preview)
@@ -303,7 +303,7 @@ class InspectorPanel(QDockWidget):
             load_obj_async(self._asset_path, _on_mesh_loaded)
         else:
             load_mesh_async(self._asset_path, _on_mesh_loaded)
-        from core.config import get_global_config
+        from core.config.config import get_global_config
         cache_path = self._asset_path + ".import"
         settings = {}
         if os.path.exists(cache_path):
@@ -342,7 +342,7 @@ class InspectorPanel(QDockWidget):
         self._build_labeled_field("Generate UVs", gen_uv)
 
     def _build_texture_import_settings(self):
-        from core.texture_import_settings import DEFAULT_SETTINGS
+        from core.assets.texture_import_settings import DEFAULT_SETTINGS
         cache_path = self._asset_path + ".import"
         settings = dict(DEFAULT_SETTINGS)
         if os.path.exists(cache_path):
@@ -424,7 +424,7 @@ class InspectorPanel(QDockWidget):
         except: pass
 
     def _build_material_editor(self):
-        from core.material import Material
+        from core.assets.material import Material
         from editor.material_preview import MaterialPreviewWidget
         try:
             mat = Material.load(self._asset_path, self._engine.project_root if self._engine else "")
@@ -846,7 +846,7 @@ class InspectorPanel(QDockWidget):
             self._header_widget.setVisible(True)
             self._add_comp_btn.setVisible(True)
             if self._entity.is_prefab_instance:
-                from core.prefab import Prefab, PrefabLibrary
+                from core.ecs.prefab import Prefab, PrefabLibrary
                 prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
                 overrides = Prefab.compute_all_overrides([self._entity])
                 prefab_name = prefab_path.replace("\\", "/").split("/")[-1] if prefab_path else "Prefab"
@@ -943,8 +943,8 @@ class InspectorPanel(QDockWidget):
 
     def _remove_component(self, comp_name: str, comp_key: str = ""):
         if not self._entity: return
-        from core.ecs import ComponentRegistry
-        from core.commands import RemoveComponentCommand
+        from core.ecs.ecs import ComponentRegistry
+        from core.foundation.commands import RemoveComponentCommand
         cls = ComponentRegistry.get(comp_name)
         if cls:
             cmd = RemoveComponentCommand(self._entity, cls, component_key=comp_key)
@@ -994,7 +994,7 @@ class InspectorPanel(QDockWidget):
         collab = self._engine.collab_manager if hasattr(self._engine, 'collab_manager') else None
         if not collab or not collab.connected:
             return
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(comp_name)
         if not cls:
             return
@@ -1022,8 +1022,8 @@ class InspectorPanel(QDockWidget):
 
     def _add_component(self, comp_name: str):
         if not self._entity: return
-        from core.ecs import ComponentRegistry
-        from core.commands import AddComponentCommand
+        from core.ecs.ecs import ComponentRegistry
+        from core.foundation.commands import AddComponentCommand
         cls = ComponentRegistry.get(comp_name)
         if cls:
             can_multiple = getattr(cls, '_allow_multiple', False)
@@ -1037,7 +1037,7 @@ class InspectorPanel(QDockWidget):
     def _add_script_component(self, script_path: str):
         if not self._entity: return
         from core.components.scripting.script_component import ScriptComponent
-        from core.commands import AddComponentCommand
+        from core.foundation.commands import AddComponentCommand
         cmd = AddComponentCommand(self._entity, ScriptComponent)
         get_history().execute(cmd)
         found = self._entity.get_components(ScriptComponent)
@@ -1054,8 +1054,8 @@ class InspectorPanel(QDockWidget):
     def _on_apply_prefab(self):
         if not self._entity or not self._entity.is_prefab_instance:
             return
-        from core.prefab import Prefab, PrefabLibrary
-        from core.logger import Logger
+        from core.ecs.prefab import Prefab, PrefabLibrary
+        from core.foundation.logger import Logger
         prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
         if not prefab_path:
             Logger.warning("Cannot find prefab asset for this instance.")
@@ -1080,8 +1080,8 @@ class InspectorPanel(QDockWidget):
     def _on_revert_prefab(self):
         if not self._entity or not self._entity.is_prefab_instance:
             return
-        from core.commands import RevertPrefabInstanceCommand, get_history
-        from core.prefab import Prefab
+        from core.foundation.commands import RevertPrefabInstanceCommand, get_history
+        from core.ecs.prefab import Prefab
         scene = self._engine.scene if hasattr(self._engine, 'scene') else None
         if not scene:
             return
@@ -1093,7 +1093,7 @@ class InspectorPanel(QDockWidget):
     def _on_select_prefab_asset(self):
         if not self._entity or not self._entity.is_prefab_instance:
             return
-        from core.prefab import PrefabLibrary
+        from core.ecs.prefab import PrefabLibrary
         prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
         if prefab_path:
             self.show_import_settings(prefab_path)
@@ -1101,7 +1101,7 @@ class InspectorPanel(QDockWidget):
     def _on_open_prefab_editor(self):
         if not self._entity or not self._entity.is_prefab_instance:
             return
-        from core.prefab import PrefabLibrary
+        from core.ecs.prefab import PrefabLibrary
         prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
         if prefab_path:
             self.open_prefab_editor.emit(prefab_path)

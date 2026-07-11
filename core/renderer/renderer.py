@@ -17,19 +17,19 @@ from typing import Optional, Any, Callable
 
 from core.components import LightType, LightAreaType
 from core.components.lighting import Light, Projector
-from core.engine import Engine
-from core.logger import Logger
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
 
-from core.components.rendering.mesh_filter import MeshFilter
-from core.components.rendering.mesh_renderer import MeshRenderer
-from core.components.rendering.sprite_renderer import SpriteRenderer
-from core.components.rendering.svg_renderer import SvgRenderer
-from core.components.rendering.particle_system import ParticleSystem
-from core.components.rendering.particle_force_field import ParticleForceField, FORCE_FIELD_DTYPE, MAX_FORCE_FIELDS
+from core.components.rendering.renderers.mesh_filter import MeshFilter
+from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
+from core.components.rendering.renderers.svg_renderer import SvgRenderer
+from core.components.rendering.particles.particle_system import ParticleSystem
+from core.components.rendering.particles.particle_force_field import ParticleForceField, FORCE_FIELD_DTYPE, MAX_FORCE_FIELDS
 from core.components.mesh_editor import ProBuilderMesh
-from core.components.rendering.graphics_effect import GraphicsEffect
-from core.components.rendering.video_renderer import VideoRenderer
-from core.math3d import Mat4, Vec3
+from core.components.rendering.postfx.graphics_effect import GraphicsEffect
+from core.components.rendering.renderers.video_renderer import VideoRenderer
+from core.math.math3d import Mat4, Vec3
 
 from core.renderer.types import RenderMode
 from core.renderer.mesh_data import MeshData, read_shader
@@ -37,9 +37,9 @@ from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_me
 from core.renderer.grid import GridRenderer
 from core.renderer.gizmo import GizmoRenderer, FATLINE_VERT, FATLINE_FRAG
 from core.renderer.shadows import ShadowRenderer
-from core.components.rendering.sky import Sky
-from core.components.rendering.clouds import Cloud
-from core.components.rendering.water import Water
+from core.components.rendering.environment.sky import Sky
+from core.components.rendering.environment.clouds import Cloud
+from core.components.rendering.environment.water import Water
 from core.components.environment.wind_zone import WindZone
 from core.renderer.particles import ParticleRenderer
 from core.renderer.sprites import SpriteRendererGL
@@ -648,7 +648,7 @@ void main() {
         return m
 
     def _compute_water_chunk_models(self, cam_pos, water_y, ocean_size, chunk_size=200):
-        from core.math3d import Mat4, Vec3
+        from core.math.math3d import Mat4, Vec3
         grid_radius = max(1, int(round(ocean_size / (2.0 * chunk_size))))
         gcx = round(cam_pos.x / chunk_size) * chunk_size
         gcz = round(cam_pos.z / chunk_size) * chunk_size
@@ -1375,7 +1375,7 @@ void main() {
             prof.stop("render_overlay")
 
         if scene:
-            from core.components.rendering.raytracing_renderer import RaytracingRenderer
+            from core.components.rendering.renderers.raytracing_renderer import RaytracingRenderer
             for ent in scene.get_entities_with_component(RaytracingRenderer):
                 if not ent.active:
                     continue
@@ -1387,7 +1387,7 @@ void main() {
                     break
 
         if scene:
-            from core.components.rendering.radiance_cascades_gi import RadianceCascadesGI
+            from core.components.rendering.environment.radiance_cascades_gi import RadianceCascadesGI
             for ent in scene.get_entities_with_component(RadianceCascadesGI):
                 if not ent.active:
                     continue
@@ -1695,8 +1695,8 @@ void main() {
     def render_entity_outline(self, entity, model_mat: Mat4, view_mat: Mat4, proj_mat: Mat4, color: list[float]):
         if not self._outline_prog:
             return
-        from core.components.rendering.mesh_filter import MeshFilter
-        from core.components.rendering.mesh_renderer import MeshRenderer
+        from core.components.rendering.renderers.mesh_filter import MeshFilter
+        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
         mf = entity.get_component(MeshFilter)
         mr = entity.get_component(MeshRenderer)
         if not mf or not mr or not mr.enabled:

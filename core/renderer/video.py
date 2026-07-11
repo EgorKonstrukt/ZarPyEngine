@@ -15,9 +15,9 @@ import time
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.engine import Engine
-from core.math3d import Mat4
-from core.components.rendering.video_renderer import VideoRenderer
+from core.engine.engine import Engine
+from core.math.math3d import Mat4
+from core.components.rendering.renderers.video_renderer import VideoRenderer
 
 
 
@@ -144,7 +144,7 @@ class VideoPlayer:
         if not self._audio_available or not self._audio_temp:
             return
         try:
-            from core.audio_system import AudioSourceManager
+            from core.audio.audio_system import AudioSourceManager
             mgr = AudioSourceManager.instance()
             if not mgr:
                 return
@@ -168,7 +168,7 @@ class VideoPlayer:
     def _stop_audio(self):
         if self._audio_source_id:
             try:
-                from core.audio_system import AudioSourceManager
+                from core.audio.audio_system import AudioSourceManager
                 mgr = AudioSourceManager.instance()
                 if mgr:
                     mgr.stop(self._audio_source_id)
@@ -254,7 +254,7 @@ class VideoPlayer:
         self._paused = True
         if self._audio_source_id:
             try:
-                from core.audio_system import AudioSourceManager
+                from core.audio.audio_system import AudioSourceManager
                 mgr = AudioSourceManager.instance()
                 if mgr:
                     mgr.pause(self._audio_source_id)
@@ -265,7 +265,7 @@ class VideoPlayer:
         self._paused = False
         if self._audio_source_id:
             try:
-                from core.audio_system import AudioSourceManager
+                from core.audio.audio_system import AudioSourceManager
                 mgr = AudioSourceManager.instance()
                 if mgr:
                     mgr.resume(self._audio_source_id)
@@ -323,7 +323,7 @@ class VideoPlayer:
         if self._audio_source_id:
             cfg = self._get_audio_config()
             try:
-                from core.audio_system import AudioSourceManager
+                from core.audio.audio_system import AudioSourceManager
                 mgr = AudioSourceManager.instance()
                 if mgr:
                     mgr.update_source(self._audio_source_id, cfg["volume"], 1.0, (0, 0, 0), cfg["spatial_blend"])

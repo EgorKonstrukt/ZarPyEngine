@@ -83,7 +83,7 @@ def register(registry, engine):
         {"type": "object", "properties": {}},
     )
     def editor_undo():
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         history = get_history()
         if history is None:
             return {"error": "No command history"}
@@ -105,7 +105,7 @@ def register(registry, engine):
         {"type": "object", "properties": {}},
     )
     def editor_redo():
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         history = get_history()
         if history is None:
             return {"error": "No command history"}
@@ -127,7 +127,7 @@ def register(registry, engine):
         {"type": "object", "properties": {}},
     )
     def editor_get_undo_history():
-        from core.commands import get_history
+        from core.foundation.commands import get_history
         history = get_history()
         if history is None:
             return {"error": "No command history"}
@@ -180,7 +180,7 @@ def register(registry, engine):
         full = os.path.join(engine.project_root, path) if not os.path.isabs(path) else path
         if not os.path.isfile(full):
             return {"error": f"Prefab not found: {path}"}
-        from core.prefab import Prefab
+        from core.ecs.prefab import Prefab
         try:
             prefab = Prefab.load(full)
             entity = prefab.instantiate(scene)
@@ -210,7 +210,7 @@ def register(registry, engine):
         if e is None:
             return {"error": "Entity not found"}
         full = os.path.join(engine.project_root, save_path) if not os.path.isabs(save_path) else save_path
-        from core.prefab import Prefab
+        from core.ecs.prefab import Prefab
         try:
             os.makedirs(os.path.dirname(full), exist_ok=True)
             prefab = Prefab(e.name)

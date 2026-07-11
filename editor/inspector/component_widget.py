@@ -11,11 +11,11 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButt
     QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
-from core.editor_scale import scale, scale_xy
-from core.math3d import Vec2, Vec3, Vec4, Quat
-from core.logger import Logger
-from core.commands import SetComponentCommand, CompoundCommand, get_history
-from core.curve import Curve
+from core.config.editor_scale import scale, scale_xy
+from core.math.math3d import Vec2, Vec3, Vec4, Quat
+from core.foundation.logger import Logger
+from core.foundation.commands import SetComponentCommand, CompoundCommand, get_history
+from core.foundation.curve import Curve
 from editor.curve_editor import CurvePreview, CurveEditorDialog
 from core.gui.widgets import AnchorPresetSelector
 from core.components.animation.animator_controller import (
@@ -23,7 +23,7 @@ from core.components.animation.animator_controller import (
     AnimatorCondition, AnimatorConditionMode,
 )
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
-from core.config import get_project_config
+from core.config.config import get_project_config
 from editor.inspector.constants import (_FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED,
     _FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS,
     _COMPONENT_MIME, _accent)
@@ -188,7 +188,7 @@ class ComponentWidget(QWidget):
         def _set_and_sync(v):
             get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, getattr(c, prop_name), v))
             try:
-                from core.engine import Engine
+                from core.engine.engine import Engine
                 collab = Engine.instance().collab_manager
                 if collab and collab.connected and self._entity:
                     val = collapse_value(v)
@@ -318,7 +318,7 @@ class ComponentWidget(QWidget):
         from editor.inspector.panel import InspectorPanel
         if InspectorPanel._clipboard is None:
             return
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cb = InspectorPanel._clipboard
         target_type_name = cb["type"]
         target_cls = ComponentRegistry.get(target_type_name)
@@ -600,7 +600,7 @@ class ComponentWidget(QWidget):
             pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter(prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "gameobject":
-            from core.engine import Engine
+            from core.engine.engine import Engine
             scene = Engine.instance().scene
             gw = make_gameobject_picker(value, scene, self._undo_setter(prop_name))
             self._add_field(field.label, gw, prop_name, field.toggle_field)
@@ -707,7 +707,7 @@ class ComponentWidget(QWidget):
                 }}
             """)
             btn.setMinimumHeight(22)
-            from core.engine import Engine
+            from core.engine.engine import Engine
             cfg = get_project_config(Engine.instance().project_root)
             layer_names = cfg.get("physics.layer_names", DEFAULT_LAYER_NAMES) if cfg else DEFAULT_LAYER_NAMES
             menu = QMenu(self)
@@ -970,7 +970,7 @@ class ComponentWidget(QWidget):
             cb.toggled.connect(on_toggle)
             return cb
         elif ef.field_type.value == "gameobject":
-            from core.engine import Engine
+            from core.engine.engine import Engine
             scene = Engine.instance().scene
             eid = val.get(ef.name, "") if isinstance(val, dict) else ""
             def on_entity(eid, idx=index, pn=prop_name, fn=ef.name):

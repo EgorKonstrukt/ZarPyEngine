@@ -9,9 +9,9 @@ import math
 import numpy as np
 from enum import Enum
 from typing import Optional, TYPE_CHECKING
-from core.math3d import Vec3, Mat4, Quat
+from core.math.math3d import Vec3, Mat4, Quat
 if TYPE_CHECKING:
-    from core.ecs import Entity
+    from core.ecs.ecs import Entity
     from editor.scene_camera import SceneCamera
 
 FLOAT_T = np.float32
@@ -881,7 +881,7 @@ class Gizmo:
         if self._dragging and self._entity:
             t = self._entity.transform
             if t:
-                from core.commands import SetComponentCommand, get_history
+                from core.foundation.commands import SetComponentCommand, get_history
                 from core.components import Transform as TransformComponent
                 if self._mode == GizmoMode.TRANSLATE:
                     if not getattr(self, '_multi_undo_active', False):
@@ -999,7 +999,7 @@ class Gizmo:
             pt = entity.parent.transform
             if pt:
                 from core.math_helpers import mat4_inv_fast
-                from core.math3d import FLOAT_TYPE
+                from core.math.math3d import FLOAT_TYPE
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
                 world_arr = np.array([new_world_pos.x, new_world_pos.y, new_world_pos.z, 1.0], dtype=FLOAT_TYPE)

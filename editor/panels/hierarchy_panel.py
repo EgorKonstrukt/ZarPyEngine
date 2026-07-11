@@ -16,13 +16,13 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt6.QtGui import QKeySequence, QAction, QDrag, QColor, QKeyEvent, QBrush, QPixmap, QIcon
 from editor.inspector.helpers import _flash_overlay
 if TYPE_CHECKING:
-    from core.ecs import Entity, Scene
-    from core.engine import Engine
+    from core.ecs.ecs import Entity, Scene
+    from core.engine.engine import Engine
 _ENTITY_MIME = "application/x-zpe-entity"
 _COMPONENT_MIME = "application/x-zpe-component"
 
 import os
-from core.editor_scale import scale, scale_xy
+from core.config.editor_scale import scale, scale_xy
 
 def _get_component_icon_pixmap(cls, size: int = 16) -> QPixmap:
     icon_name = getattr(cls, '_icon', None)
@@ -361,7 +361,7 @@ class HierarchyPanel(QDockWidget):
     def _add_entity_item(self, entity: Entity, parent_item, filter_text: str) -> bool:
         name = entity.name
         if entity.is_prefab_instance:
-            from core.prefab import Prefab
+            from core.ecs.prefab import Prefab
             overrides = Prefab.compute_overrides(entity)
             override_mark = " *" if overrides else ""
             name = f"{name}{override_mark}"
@@ -517,12 +517,12 @@ class HierarchyPanel(QDockWidget):
         comp_data = data.get("component_data", {})
         if not comp_type_name or not comp_data:
             return
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(comp_type_name)
         if not cls:
             return
         can_multiple = getattr(cls, '_allow_multiple', False)
-        from core.commands import MoveComponentCommand, CopyComponentCommand, CompoundCommand, get_history
+        from core.foundation.commands import MoveComponentCommand, CopyComponentCommand, CompoundCommand, get_history
         if is_copy:
             eid_set = {target_eid}
             for item in self._tree.selectedItems():
@@ -590,7 +590,7 @@ class HierarchyPanel(QDockWidget):
                 menu.addAction(create_child_act)
                 menu.addSeparator()
                 if entity.is_prefab_instance:
-                    from core.prefab import Prefab, PrefabLibrary
+                    from core.ecs.prefab import Prefab, PrefabLibrary
                     prefab_path = PrefabLibrary.path_for_guid(entity._prefab_guid)
                     apply_act = QAction("Apply", self)
                     apply_act.triggered.connect(lambda: self._apply_prefab(entity))
@@ -736,7 +736,7 @@ class HierarchyPanel(QDockWidget):
     def _create_entity(self):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         cmd = CreateEntityCommand(self._scene, "GameObject")
         get_history().execute(cmd)
         e = self._scene.get_entity(cmd._entity_id)
@@ -755,7 +755,7 @@ class HierarchyPanel(QDockWidget):
     def _create_child(self, parent: Entity):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         cmd = CreateEntityCommand(self._scene, "GameObject")
         get_history().execute(cmd)
         e = self._scene.get_entity(cmd._entity_id)
@@ -775,7 +775,7 @@ class HierarchyPanel(QDockWidget):
     def _create_primitive(self, mesh_name: str):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, MeshFilter, MeshRenderer
         cmd = CreateEntityCommand(self._scene, mesh_name.capitalize())
         get_history().execute(cmd)
@@ -797,7 +797,7 @@ class HierarchyPanel(QDockWidget):
     def _create_probuilder_primitive(self, name: str):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, MeshFilter, MeshRenderer
         from core.components.mesh_editor import ProBuilderMesh, create_primitive
         cmd = CreateEntityCommand(self._scene, name)
@@ -825,9 +825,9 @@ class HierarchyPanel(QDockWidget):
     def _create_light(self, ltype: str):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, Light, LightType
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         name_map = {"sun": "Sun", "directional": "Directional Light", "point": "Point Light", "spot": "Spot Light"}
         cmd = CreateEntityCommand(self._scene, name_map.get(ltype, "Light"))
         get_history().execute(cmd)
@@ -855,7 +855,7 @@ class HierarchyPanel(QDockWidget):
     def _create_camera(self):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
+        from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, Camera
         cmd = CreateEntityCommand(self._scene, "Camera")
         get_history().execute(cmd)
@@ -881,8 +881,8 @@ class HierarchyPanel(QDockWidget):
         data["parent"] = None
         for comp_data in data.get("components", []):
             pass
-        from core.ecs import Entity as Ent
-        from core.engine import Engine
+        from core.ecs.ecs import Entity as Ent
+        from core.engine.engine import Engine
         new_e = Ent.deserialize(data, Engine.instance()._component_registry)
         self._scene.add_entity(new_e)
         if entity.parent:
@@ -897,8 +897,8 @@ class HierarchyPanel(QDockWidget):
     def _create_from_component(self, name: str, comp_cls_name: str, extra_setup=None):
         if not self._scene:
             return
-        from core.commands import CreateEntityCommand, get_history
-        from core.ecs import ComponentRegistry
+        from core.foundation.commands import CreateEntityCommand, get_history
+        from core.ecs.ecs import ComponentRegistry
         from core.components import Transform
         cls = ComponentRegistry.get(comp_cls_name)
         if not cls:
@@ -922,7 +922,7 @@ class HierarchyPanel(QDockWidget):
     def _delete_entity(self, entity: Entity):
         if not self._scene:
             return
-        from core.commands import DeleteEntityCommand, get_history
+        from core.foundation.commands import DeleteEntityCommand, get_history
         was_selected = (self._selected_entity == entity)
         self._collab_sync_delete(entity.id)
         cmd = DeleteEntityCommand(self._scene, entity.id)
@@ -1031,7 +1031,7 @@ class HierarchyPanel(QDockWidget):
         self._toggle_active_by_ids(eids)
     def _save_prefab(self, entity: Entity):
         from PyQt6.QtWidgets import QFileDialog
-        from core.prefab import Prefab
+        from core.ecs.prefab import Prefab
         path, _ = QFileDialog.getSaveFileName(self, "Save Prefab", "prefabs/", "Prefabs (*.zpep)")
         if path:
             if not path.endswith(".zpep"):
@@ -1040,16 +1040,16 @@ class HierarchyPanel(QDockWidget):
             pref.capture([entity])
             pref.save(path)
     def _apply_prefab(self, entity: Entity):
-        from core.commands import ApplyPrefabOverridesCommand, get_history
-        from core.prefab import Prefab
+        from core.foundation.commands import ApplyPrefabOverridesCommand, get_history
+        from core.ecs.prefab import Prefab
         roots = Prefab.get_prefab_roots([entity])
         get_history().execute(ApplyPrefabOverridesCommand(self._scene, roots))
         self._scene.mark_dirty()
         self._refresh()
 
     def _revert_prefab(self, entity: Entity):
-        from core.commands import RevertPrefabInstanceCommand, get_history
-        from core.prefab import Prefab
+        from core.foundation.commands import RevertPrefabInstanceCommand, get_history
+        from core.ecs.prefab import Prefab
         roots = Prefab.get_prefab_roots([entity])
         cmd = RevertPrefabInstanceCommand(self._scene, roots)
         get_history().execute(cmd)
@@ -1057,8 +1057,8 @@ class HierarchyPanel(QDockWidget):
         self._refresh()
 
     def _unpack_prefab(self, entity: Entity):
-        from core.commands import UnpackPrefabCommand, get_history
-        from core.prefab import Prefab
+        from core.foundation.commands import UnpackPrefabCommand, get_history
+        from core.ecs.prefab import Prefab
         roots = Prefab.get_prefab_roots([entity])
         cmd = UnpackPrefabCommand(self._scene, roots)
         get_history().execute(cmd)

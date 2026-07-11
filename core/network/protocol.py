@@ -9,7 +9,7 @@ import struct
 import msgpack
 from enum import IntEnum
 
-from core.constants import FRAME_HEADER_SIZE
+from core.config.constants import FRAME_HEADER_SIZE
 
 class MessageType(IntEnum):
     JOIN = 1

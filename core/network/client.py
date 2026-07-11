@@ -10,7 +10,7 @@ import struct
 import threading
 from typing import Optional, Callable
 from collections import deque
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.network.protocol import MessageType, make_msg, parse_msg, FRAME_HEADER_SIZE
 
 

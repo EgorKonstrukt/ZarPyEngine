@@ -11,7 +11,7 @@ from typing import Optional
 
 import numpy as np
 
-from core.logger import Logger
+from core.foundation.logger import Logger
 from core.physics.physics_solver import IPhysicsSolver
 
 try:
@@ -119,7 +119,7 @@ def _load_mesh_verts(path: str) -> Optional[np.ndarray]:
     if key in _LOADED_MESH_VERTS:
         return _LOADED_MESH_VERTS[key]
     try:
-        from core.asset_importer import load_mesh
+        from core.assets.asset_importer import load_mesh
         data = load_mesh(path)
     except Exception:
         return None
@@ -371,7 +371,7 @@ class CulverinSolver(IPhysicsSolver):
             if verts is None:
                 return -1
             try:
-                from core.asset_importer import load_mesh
+                from core.assets.asset_importer import load_mesh
                 data = load_mesh(resolved)
                 if data is not None and hasattr(data, 'indices') and len(data.indices) > 0:
                     indices = data.indices.reshape(-1).astype(np.uint32)

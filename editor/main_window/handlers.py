@@ -11,13 +11,13 @@ import os
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from PyQt6.QtCore import Qt, QTimer
 
-from core.math3d import Vec3
-from core.logger import Logger
+from core.math.math3d import Vec3
+from core.foundation.logger import Logger
 from editor.splash import SplashScreen
 
 
 def on_entity_selected(mw, entity):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().set_current_selection(entity)
     mw._hierarchy.set_selected_entity(entity)
     mw._inspector.set_entity(entity)
@@ -29,7 +29,7 @@ def on_entity_selected(mw, entity):
 
 
 def on_entities_selected(mw, entities):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().set_current_selection(list(entities) if entities else None)
     mw._viewport.set_selected_entities(entities)
     if entities:
@@ -39,7 +39,7 @@ def on_entities_selected(mw, entities):
 
 
 def on_entity_selected_from_viewport(mw, entity):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().set_current_selection(entity)
     mw._inspector.set_entity(entity)
     mw._hierarchy.set_selected_entity(entity)
@@ -50,7 +50,7 @@ def on_entity_selected_from_viewport(mw, entity):
 
 
 def on_entities_selected_from_viewport(mw, entities):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().set_current_selection(list(entities) if entities else None)
     if entities:
         mw._inspector.set_selected_entities(entities)
@@ -87,8 +87,8 @@ def on_project_file_double_clicked(mw, path: str):
 
 
 def on_open_prefab_editor(mw, path: str):
-    from core.prefab import Prefab
-    from core.ecs import Scene
+    from core.ecs.prefab import Prefab
+    from core.ecs.ecs import Scene
     pref = Prefab.load(path)
     if not pref:
         Logger.warning(f"Cannot load prefab: {path}")
@@ -103,7 +103,7 @@ def on_open_prefab_editor(mw, path: str):
     mw._engine._emit_event("scene_loaded", edit_scene)
     mw._prefab_mode = True
     mw._viewport._prefab_btns.show()
-    from core.editor_scale import scale
+    from core.config.editor_scale import scale
     mw._viewport._toolbar.setFixedHeight(scale(56))
     _start_prefab_autosave(mw)
 
@@ -149,7 +149,7 @@ def on_return_to_scene(mw):
         mw._prefab_save_timer.stop()
         mw._prefab_save_timer = None
     if mw._prefab_mode:
-        from core.prefab import Prefab, PrefabLibrary
+        from core.ecs.prefab import Prefab, PrefabLibrary
         pref = PrefabLibrary.load(mw._prefab_path) if mw._prefab_path else None
         if pref:
             prefab_guid = pref.guid
@@ -165,14 +165,14 @@ def on_return_to_scene(mw):
     mw._prefab_path = None
     mw._prefab_mode = False
     mw._viewport._prefab_btns.hide()
-    from core.editor_scale import scale
+    from core.config.editor_scale import scale
     mw._viewport._toolbar.setFixedHeight(scale(30))
     mw._hierarchy.refresh()
 
 
 def _refresh_prefab_instances(scene, prefab_guid, registry):
     """Replace all instances of a prefab in the scene with fresh ones from the updated prefab file."""
-    from core.prefab import Prefab, PrefabLibrary
+    from core.ecs.prefab import Prefab, PrefabLibrary
     prefab_path = PrefabLibrary.path_for_guid(prefab_guid)
     if not prefab_path:
         return
@@ -203,20 +203,20 @@ def _refresh_prefab_instances(scene, prefab_guid, registry):
                     new_root.set_parent(parent_ent)
             t = new_root.transform
             if t and data["position"]:
-                from core.math3d import Vec3
+                from core.math.math3d import Vec3
                 t.local_position = Vec3(*data["position"])
             if t and data["rotation"]:
-                from core.math3d import Vec3
+                from core.math.math3d import Vec3
                 t.local_euler_angles = Vec3(*data["rotation"])
             if t and data["scale"]:
-                from core.math3d import Vec3
+                from core.math.math3d import Vec3
                 t.local_scale = Vec3(*data["scale"])
 
 
 def on_save_prefab(mw):
     if not mw._prefab_path or not mw._engine.scene:
         return
-    from core.prefab import Prefab, PrefabLibrary
+    from core.ecs.prefab import Prefab, PrefabLibrary
     pref = Prefab.load(mw._prefab_path)
     if not pref:
         return
@@ -233,8 +233,8 @@ def on_save_prefab(mw):
 def instantiate_prefab(mw, path: str, world_pos=None):
     if not mw._engine.scene:
         return
-    from core.prefab import PrefabLibrary
-    from core.commands import InstantiatePrefabCommand, get_history
+    from core.ecs.prefab import PrefabLibrary
+    from core.foundation.commands import InstantiatePrefabCommand, get_history
     pref = PrefabLibrary.load(path)
     if not pref:
         return
@@ -288,11 +288,11 @@ def on_entity_dropped(mw, path_or_type: str, world_pos, entity_under_cursor=None
 def _apply_material_to_entity(mw, path: str, entity):
     if not entity:
         return
-    from core.components.rendering.mesh_renderer import MeshRenderer
+    from core.components.rendering.renderers.mesh_renderer import MeshRenderer
     mr = entity.get_component(MeshRenderer)
     if not mr:
         return
-    from core.material import MaterialLibrary
+    from core.assets.material import MaterialLibrary
     mat = MaterialLibrary.load(path)
     if mat:
         mr.materials[0]["path"] = path
@@ -318,20 +318,20 @@ def _drop_material_on_scene(mw, path: str, world_pos):
 
 def _drop_image_asset(mw, path: str, world_pos, entity_under_cursor):
     if entity_under_cursor:
-        from core.components.rendering.sprite_renderer import SpriteRenderer
+        from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
         sr = entity_under_cursor.get_component(SpriteRenderer)
         if sr:
             rel = _rel_path(mw, path)
             sr.texture_path = rel or path
             Logger.info(f"Applied texture {path} to {entity_under_cursor.name}")
             return
-        from core.components.rendering.mesh_renderer import MeshRenderer
+        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
         mr = entity_under_cursor.get_component(MeshRenderer)
         if mr:
             _create_material_and_apply(mw, path, entity_under_cursor, mr)
             return
 
-    from core.components.rendering.sprite_renderer import SpriteRenderer
+    from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
     from core.components import Transform
     name = os.path.splitext(os.path.basename(path))[0]
     e = mw._engine.scene.create_entity(name)
@@ -347,7 +347,7 @@ def _drop_image_asset(mw, path: str, world_pos, entity_under_cursor):
 
 
 def _create_material_and_apply(mw, texture_path: str, entity, mr):
-    from core.material import Material
+    from core.assets.material import Material
     from core.components import Transform, MeshFilter
     mat_name = os.path.splitext(os.path.basename(texture_path))[0] + "_mat"
     mat = Material(mat_name)
@@ -555,10 +555,10 @@ def toggle_play_stop(mw):
         mw._engine.stop_play()
         mw._viewport_dock.raise_()
         if mw._scene_snapshot and mw._engine.scene:
-            from core.components.rendering.graphics_effect import GraphicsEffect
+            from core.components.rendering.postfx.graphics_effect import GraphicsEffect
             GraphicsEffect.cleanup_registry()
-            from core.ecs import Scene as S
-            from core.engine import Engine as Eng
+            from core.ecs.ecs import Scene as S
+            from core.engine.engine import Engine as Eng
             restored = S.deserialize(mw._scene_snapshot, Eng.instance()._component_registry)
             restored.path = mw._engine.scene.path
             mw._engine._scene = restored
@@ -582,10 +582,10 @@ def toggle_pause(mw):
     if mw._play_dock:
         mw._play_dock._toggle_pause()
     if mw._scene_snapshot and mw._engine.scene:
-        from core.components.rendering.graphics_effect import GraphicsEffect
+        from core.components.rendering.postfx.graphics_effect import GraphicsEffect
         GraphicsEffect.cleanup_registry()
-        from core.ecs import Scene as S
-        from core.engine import Engine as Eng
+        from core.ecs.ecs import Scene as S
+        from core.engine.engine import Engine as Eng
         restored = S.deserialize(mw._scene_snapshot, Eng.instance()._component_registry)
         restored.path = mw._engine.scene.path
         mw._engine._scene = restored
@@ -661,7 +661,7 @@ def save_scene_as(mw):
 
 
 def sync_after_undo(mw):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     h = get_history()
     sel = h.current_selection if isinstance(getattr(h, 'current_selection', None), list) else (h.last_affected_entity or h.current_selection)
     scene = mw._engine.scene
@@ -708,13 +708,13 @@ def sync_after_undo(mw):
 
 
 def undo(mw):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().undo()
     sync_after_undo(mw)
 
 
 def redo(mw):
-    from core.commands import get_history
+    from core.foundation.commands import get_history
     get_history().redo()
     sync_after_undo(mw)
 
@@ -757,7 +757,7 @@ def open_scene_by_path(mw, path: str):
 
 
 def open_global_settings(mw):
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     from editor.settings_dialog import SettingsDialog
     cfg = get_global_config()
     dlg = SettingsDialog("Global Settings", cfg, mw)
@@ -767,7 +767,7 @@ def open_global_settings(mw):
 
 
 def on_global_config_changed(mw, key: str, value):
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     cfg = get_global_config()
     if key == "editor.ui_scale":
         from PyQt6.QtWidgets import QApplication
@@ -792,7 +792,7 @@ def on_global_config_changed(mw, key: str, value):
 
 
 def open_project_settings(mw):
-    from core.config import get_project_config
+    from core.config.config import get_project_config
     from editor.settings_dialog import SettingsDialog
     path = getattr(mw._engine, "_project_path", ".")
     cfg = get_project_config(path)

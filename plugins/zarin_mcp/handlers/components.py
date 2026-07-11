@@ -17,7 +17,7 @@ def register(registry, engine):
         {"type": "object", "properties": {}},
     )
     def component_list_types():
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         all_comps = ComponentRegistry.all()
         cats = ComponentRegistry.all_categories()
         result = {}
@@ -50,7 +50,7 @@ def register(registry, engine):
         e = get_entity_by_id_or_name(s, entity_id)
         if e is None:
             return {"error": "Entity not found"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
@@ -80,7 +80,7 @@ def register(registry, engine):
         e = get_entity_by_id_or_name(s, entity_id)
         if e is None:
             return {"error": "Entity not found"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
@@ -110,7 +110,7 @@ def register(registry, engine):
         e = get_entity_by_id_or_name(s, entity_id)
         if e is None:
             return {"error": "Entity not found"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
@@ -140,7 +140,7 @@ def register(registry, engine):
         e = get_entity_by_id_or_name(s, entity_id)
         if e is None:
             return {"error": "Entity not found"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
@@ -241,7 +241,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         t.position = Vec3(*position)
         return {"message": f"Set position to {position}"}
 
@@ -273,7 +273,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         t.local_position = Vec3(*position)
         return {"message": f"Set local position to {position}"}
 
@@ -305,7 +305,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         t.local_euler_angles = Vec3(*euler)
         return {"message": f"Set rotation to {euler}"}
 
@@ -337,7 +337,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math3d import Vec3
+        from core.math.math3d import Vec3
         t.local_scale = Vec3(*scale)
         return {"message": f"Set scale to {scale}"}
 
@@ -376,7 +376,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math3d import Vec3, Quat
+        from core.math.math3d import Vec3, Quat
         direction = Vec3(*target) - t.position
         if direction.length() < 1e-10:
             return {"error": "Target is at the same position as entity"}

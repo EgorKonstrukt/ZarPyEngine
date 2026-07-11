@@ -5,7 +5,7 @@ import numpy as np
 import moderngl
 from typing import Any, Optional
 from collections import defaultdict
-from core.math3d import Mat4
+from core.math.math3d import Mat4
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 

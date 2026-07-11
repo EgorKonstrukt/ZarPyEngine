@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from PyQt6.QtCore import Qt, QRectF
-from core.constants import APP_VERSION_DISPLAY
+from core.config.constants import APP_VERSION_DISPLAY
 from core.input.constants import (KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_R, KEY_F,
                                   KEY_SHIFT, KEY_DELETE, KEY_CTRL, KEY_ALT, KEY_SPACE,
                                   MOUSE_L, MOUSE_R, MOUSE_M, MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE)

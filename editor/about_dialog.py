@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QRectF, QTimer
 
 from PyQt6.QtSvg import QSvgRenderer
 
-from core.constants import APP_VERSION, APP_VERSION_DISPLAY
+from core.config.constants import APP_VERSION, APP_VERSION_DISPLAY
 
 MPL_URL = "https://mozilla.org/MPL/2.0/"
 LOGO_W = 256

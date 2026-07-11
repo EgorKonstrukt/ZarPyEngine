@@ -4,8 +4,8 @@
 #
 # Copyright (c) 2026 Zarrakun
 
-from core.plugin_manager import PluginBase
-from core.logger import Logger
+from core.foundation.plugin_manager import PluginBase
+from core.foundation.logger import Logger
 
 class ExamplePlugin(PluginBase):
     NAME = "ExamplePlugin"

@@ -9,11 +9,11 @@ import os
 import numpy as np
 import threading
 from typing import Optional
-from core.engine import Engine
-from core.logger import Logger
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
 from core.renderer.mesh_data import MeshData
 from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh
-from core.pool import asset as _get_asset_pool
+from core.ecs.pool import asset as _get_asset_pool
 
 _MAX_PENDING_PER_FRAME = 6
 
@@ -161,7 +161,7 @@ class MeshLoader:
         if not path:
             Logger.warning(f"Mesh not found: {key}, using error fallback")
             path = _ERROR_MESH_PATH
-        from core.asset_importer import load_obj_future, load_mesh_future
+        from core.assets.asset_importer import load_obj_future, load_mesh_future
         lower_path = path.lower()
 
         def _io_done(fut):
@@ -172,7 +172,7 @@ class MeshLoader:
             is_error = (path == _ERROR_MESH_PATH)
             if not is_error and (import_data is None or len(import_data.vertices) == 0):
                 Logger.warning(f"Failed to load mesh, falling back to error mesh")
-                from core.asset_importer import load_mesh
+                from core.assets.asset_importer import load_mesh
                 import_data = load_mesh(_ERROR_MESH_PATH)
                 is_error = True
             if is_error and import_data is not None and len(import_data.vertices) > 0:

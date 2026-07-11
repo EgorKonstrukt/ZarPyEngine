@@ -192,5 +192,5 @@ def add_plugin_menu_items(mw, mb):
                 act.triggered.connect(item["callback"])
                 parent_menu.addAction(act)
             except Exception as e:
-                from core.logger import Logger
+                from core.foundation.logger import Logger
                 Logger.error(f"Failed to add menu item '{item.get('text', '?')}': {e}")

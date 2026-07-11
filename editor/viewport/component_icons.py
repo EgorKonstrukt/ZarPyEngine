@@ -53,7 +53,7 @@ def render_component_icons_gl(vp):
     if not scene or not vp._gizmo_icons_visible:
         return
     from core.components.transform import Transform
-    from core.config import get_global_config
+    from core.config.config import get_global_config
     cfg = get_global_config()
     if not cfg.get("gizmo.show_icons", True):
         return

@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 import math
-from core.ecs import Component, ComponentRegistry
-from core.math3d import Vec3
+from core.ecs.ecs import Component, ComponentRegistry
+from core.math.math3d import Vec3
 from core.components.inspector_meta import FieldType, InspectorField
-from core.audio_system import AudioSystem, AudioSourceManager
-from core.audio_efx import (
+from core.audio.audio_system import AudioSystem, AudioSourceManager
+from core.audio.audio_efx import (
     efx_available, create_effect, delete_effect, set_effect_type,
     set_effect_param_i, set_effect_param_f,
     create_aux_slot, delete_aux_slot, set_aux_slot_effect, set_aux_slot_gain,
@@ -23,7 +23,7 @@ from core.audio_efx import (
     AL_REVERB_AIR_ABSORPTION_GAINHF, AL_REVERB_ROOM_ROLLOFF_FACTOR,
     AL_REVERB_DECAY_HFLIMIT,
 )
-from core.logger import Logger
+from core.foundation.logger import Logger
 
 
 @ComponentRegistry.register

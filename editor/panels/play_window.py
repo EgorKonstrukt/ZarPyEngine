@@ -13,10 +13,10 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QFrame)
 from PyQt6.QtCore import Qt, QTimer, QEvent, QPoint
 from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QWheelEvent, QCursor, QGuiApplication
-from core.input_system import Input
-from core.logger import Logger
+from core.input.input_system import Input
+from core.foundation.logger import Logger
 if TYPE_CHECKING:
-    from core.engine import Engine
+    from core.engine.engine import Engine
     from core.gui.canvas import GuiCanvas
 
 class PlayViewport(QOpenGLWidget):

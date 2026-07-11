@@ -8,8 +8,8 @@ from __future__ import annotations
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math3d import Mat4
-from core.components.rendering.sprite_renderer import SpriteRenderer
+from core.math.math3d import Mat4
+from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
 
 
 

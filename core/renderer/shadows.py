@@ -10,11 +10,11 @@ import numpy as np
 import moderngl
 from typing import Optional, Any
 from collections import defaultdict
-from core.math3d import Vec3, Mat4
+from core.math.math3d import Vec3, Mat4
 from core.components.lighting.light import Light, LightType, LightAreaType
 
-from core.components.rendering.mesh_filter import MeshFilter
-from core.components.rendering.mesh_renderer import MeshRenderer
+from core.components.rendering.renderers.mesh_filter import MeshFilter
+from core.components.rendering.renderers.mesh_renderer import MeshRenderer
 from core.renderer.mesh_data import MeshData
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")

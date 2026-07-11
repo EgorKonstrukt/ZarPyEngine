@@ -128,7 +128,7 @@ def register(registry, engine):
         full = resolve_path(engine, path)
         if not os.path.isfile(full):
             return {"error": f"File not found: {path}"}
-        from core.asset_importer import load_mesh, load_obj
+        from core.assets.asset_importer import load_mesh, load_obj
         ext = os.path.splitext(full)[1].lower()
         try:
             if ext == ".obj":
@@ -152,7 +152,7 @@ def register(registry, engine):
     )
     def audio_list_clips():
         try:
-            from core.audio_system import AudioSystem, AudioSourceManager
+            from core.audio.audio_system import AudioSystem, AudioSourceManager
             system = AudioSystem.instance()
             if system is None:
                 return {"audio_clips": [], "message": "Audio system not active"}
@@ -182,7 +182,7 @@ def register(registry, engine):
         if not os.path.isfile(full):
             return {"error": f"File not found: {path}"}
         try:
-            from core.audio_system import AudioSystem, AudioSourceManager
+            from core.audio.audio_system import AudioSystem, AudioSourceManager
             system = AudioSystem.instance()
             if system is None:
                 return {"error": "Audio system not active"}
@@ -202,7 +202,7 @@ def register(registry, engine):
     )
     def audio_stop_all():
         try:
-            from core.audio_system import AudioSourceManager
+            from core.audio.audio_system import AudioSourceManager
             mgr = AudioSourceManager.instance()
             if mgr:
                 mgr.stop_all()
@@ -233,7 +233,7 @@ def register(registry, engine):
     )
     def audio_set_volume(channel="master", volume=1.0):
         try:
-            from core.audio_system import AudioSystem
+            from core.audio.audio_system import AudioSystem
             system = AudioSystem.instance()
             if system is None:
                 return {"error": "Audio system not active"}
@@ -241,13 +241,13 @@ def register(registry, engine):
             if channel == "master":
                 system.master_volume = volume
             elif channel == "sfx":
-                from core.config import get_project_config
+                from core.config.config import get_project_config
                 cfg = get_project_config(".", lazy=True)
                 if cfg:
                     cfg.set("audio.sfx_volume", volume)
                     cfg.save()
             elif channel == "music":
-                from core.config import get_project_config
+                from core.config.config import get_project_config
                 cfg = get_project_config(".", lazy=True)
                 if cfg:
                     cfg.set("audio.music_volume", volume)
@@ -265,7 +265,7 @@ def register(registry, engine):
         scene = engine.scene
         if scene is None:
             return {"error": "No scene loaded"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         mat_cls = ComponentRegistry.get("Material")
         if mat_cls is None:
             return {"materials": [], "message": "No Material component registered"}
@@ -295,7 +295,7 @@ def register(registry, engine):
         scene = engine.scene
         if scene is None:
             return {"error": "No scene loaded"}
-        from core.ecs import ComponentRegistry
+        from core.ecs.ecs import ComponentRegistry
         e = scene.get_entity(entity_id)
         if e is None:
             return {"error": "Entity not found"}

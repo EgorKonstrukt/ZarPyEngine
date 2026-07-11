@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import math
 import numpy as np
-from core.math3d import Mat4, Vec3
-from core.config import get_global_config
-from core.ecs import _GIZMO_PASSES, _GIZMO_PASS_ORDER, Component
+from core.math.math3d import Mat4, Vec3
+from core.config.config import get_global_config
+from core.ecs.ecs import _GIZMO_PASSES, _GIZMO_PASS_ORDER, Component
 from core.gizmo.pipeline import GizmoPipeline
 from editor.viewport.picking import _font_atlas_cache
 
@@ -92,11 +92,11 @@ def _render_corner_spheres_np(vp, vp_mat, corners, radius, color):
 
 def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
     from core.components.transform import Transform
-    from core.components.rendering.mesh_filter import MeshFilter
-    from core.components.rendering.mesh_renderer import MeshRenderer
-    from core.components.rendering.sprite_renderer import SpriteRenderer
-    from core.components.rendering.video_renderer import VideoRenderer
-    from core.components.rendering.text_renderer import TextRenderer
+    from core.components.rendering.renderers.mesh_filter import MeshFilter
+    from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+    from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
+    from core.components.rendering.renderers.video_renderer import VideoRenderer
+    from core.components.rendering.renderers.text_renderer import TextRenderer
     from editor.viewport.picking import _get_mesh_for
     bmin_t = None
     bmax_t = None
@@ -159,8 +159,8 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
         if not expanded:
             tr_comp = entity.get_component(TextRenderer)
             if tr_comp and tr_comp.enabled and tr_comp.text:
-                from core.font_atlas import FontAtlas
-                from core.font_atlas import get_default_font_path as get_def_font
+                from core.assets.font_atlas import FontAtlas
+                from core.assets.font_atlas import get_default_font_path as get_def_font
                 fp = tr_comp.font_path or get_def_font()
                 base_size = getattr(tr_comp, "atlas_resolution", 128)
                 ak = (fp, base_size)
