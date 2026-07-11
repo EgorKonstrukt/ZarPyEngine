@@ -111,6 +111,7 @@ def draw_remote_cursors(vp, painter):
     collab = vp._engine.collab_manager
     if not collab or not collab.connected:
         return
+    painter.save()
     for peer_id, peer in collab.peers.items():
         sx, sy = peer.cursor_screen
         if sx <= 0 and sy <= 0:
@@ -125,6 +126,7 @@ def draw_remote_cursors(vp, painter):
         f = QFont("Segoe UI", 8)
         painter.setFont(f)
         painter.drawText(int(sx) + 10, int(sy) - 5, peer.name)
+    painter.restore()
 
 
 def send_collab_cursor(vp, sx, sy):

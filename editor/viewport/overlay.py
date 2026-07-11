@@ -189,6 +189,7 @@ def _draw_val(painter, label, val, fm, cx, cy, line_height):
 
 
 def draw_stats_overlay(vp, painter):
+    painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     font = QFont("Consolas", 9)
@@ -225,25 +226,49 @@ def draw_stats_overlay(vp, painter):
 
     tps = vp._engine.tps if hasattr(vp._engine, 'tps') else 0.0
 
-    ram_mb = _get_ram_mb()
-    vram_used, vram_total = _get_vram_mb()
 
-    gc_gen0, gc_gen1, gc_gen2 = _gc.get_count()
+    _now = time.time()
+    if (not hasattr(vp, '_stats_expensive')
+            or (_now - getattr(vp, '_stats_expensive_t', 0.0)) > 0.25):
+        _ram_mb = _get_ram_mb()
+        _vram_used, _vram_total = _get_vram_mb()
+        _gc0, _gc1, _gc2 = _gc.get_count()
 
-    dsp_load = 0.0
-    active_sounds = 0
-    total_sounds = 0
-    try:
-        from core.audio.audio_system import AudioSourceManager
-        mgr = AudioSourceManager.instance()
-        if mgr:
-            dsp_load = mgr.get_dsp_load()
-            active_sounds = mgr.get_active_sound_count()
-            total_sounds = mgr.get_total_sound_count()
-    except Exception:
-        pass
+        _dsp_load = 0.0
+        _active_sounds = 0
+        _total_sounds = 0
+        try:
+            from core.audio.audio_system import AudioSourceManager
+            mgr = AudioSourceManager.instance()
+            if mgr:
+                _dsp_load = mgr.get_dsp_load()
+                _active_sounds = mgr.get_active_sound_count()
+                _total_sounds = mgr.get_total_sound_count()
+        except Exception:
+            pass
 
-    entities = len(vp._engine.scene.get_all_entities()) if vp._engine.scene else 0
+        _entities = len(vp._engine.scene.get_all_entities()) if vp._engine.scene else 0
+
+        vp._stats_expensive = {
+            'ram_mb': _ram_mb,
+            'vram_used': _vram_used,
+            'vram_total': _vram_total,
+            'gc0': _gc0, 'gc1': _gc1, 'gc2': _gc2,
+            'dsp_load': _dsp_load,
+            'active_sounds': _active_sounds,
+            'total_sounds': _total_sounds,
+            'entities': _entities,
+        }
+        vp._stats_expensive_t = _now
+
+    _exp = vp._stats_expensive
+    ram_mb = _exp['ram_mb']
+    vram_used, vram_total = _exp['vram_used'], _exp['vram_total']
+    gc_gen0, gc_gen1, gc_gen2 = _exp['gc0'], _exp['gc1'], _exp['gc2']
+    dsp_load = _exp['dsp_load']
+    active_sounds, total_sounds = _exp['active_sounds'], _exp['total_sounds']
+    entities = _exp['entities']
+
     triangles = vp._renderer._triangles_drawn if hasattr(vp._renderer, '_triangles_drawn') else 0
     vertices = vp._renderer._vertices_drawn if hasattr(vp._renderer, '_vertices_drawn') else 0
     draw_calls = vp._renderer._draw_calls if hasattr(vp._renderer, '_draw_calls') else 0
@@ -327,7 +352,6 @@ def draw_stats_overlay(vp, painter):
                                  Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, sep)
                 cx += fm.horizontalAdvance(sep)
 
-    # в”Ђв”Ђ frame time bar chart в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     chart_y = y + total_h + 6
     chart_h = 30
     chart_rect = QRect(x, chart_y, int(max_w), chart_h)
@@ -358,7 +382,6 @@ def draw_stats_overlay(vp, painter):
         if ref_y > chart_rect.y() + 2:
             painter.drawLine(chart_rect.x() + 2, ref_y, chart_rect.right() - 2, ref_y)
 
-    # в”Ђв”Ђ last spike detail в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     if _SPIKE_LOG:
         spike_ft, spike_prof = _SPIKE_LOG[-1]
         spike_lines = [f"Spike: {spike_ft:.0f}ms  frame"]
@@ -378,12 +401,14 @@ def draw_stats_overlay(vp, painter):
             painter.setPen(QColor(255, 200, 200))
             painter.drawText(QRect(sx, sy, int(max_w), line_height),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, sline)
+    painter.restore()
 
 
 def draw_delta_label(vp, painter):
     dt = vp._gizmo.delta_text
     if not dt or not vp._gizmo.show_delta_label:
         return
+    painter.save()
     f = QFont("Segoe UI", 12, QFont.Weight.Bold)
     f.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
     painter.setFont(f)
@@ -397,6 +422,7 @@ def draw_delta_label(vp, painter):
     painter.drawRoundedRect(rect, 4, 4)
     painter.setPen(QColor(255, 170, 0, 255))
     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, dt)
+    painter.restore()
 
 
 def get_grid_label_positions(vp):
@@ -476,15 +502,12 @@ def get_grid_label_positions(vp):
     return x_labels[:20], z_labels[:20]
 
 
-def draw_grid_labels(vp, painter=None):
+def draw_grid_labels(vp, painter):
     x_labels, z_labels = get_grid_label_positions(vp)
     if not x_labels and not z_labels:
         return
-    own_painter = False
-    if painter is None:
-        painter = QPainter(vp)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        own_painter = True
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     font = QFont("Segoe UI", 9)
     font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
     painter.setFont(font)
@@ -508,5 +531,4 @@ def draw_grid_labels(vp, painter=None):
         painter.drawRect(rect)
         painter.setPen(text_color)
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-    if own_painter:
-        painter.end()
+    painter.restore()

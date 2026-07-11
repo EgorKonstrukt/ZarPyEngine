@@ -38,9 +38,11 @@ class OverlayWidget(QWidget):
         if vp._area_selecting:
             x1, y1 = vp._area_start
             x2, y2 = vp._area_end
+            qp.save()
             qp.setPen(QPen(QColor(255, 255, 255, 180), 1, Qt.PenStyle.DashLine))
             qp.setBrush(QColor(100, 150, 255, 40))
             qp.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            qp.restore()
         if vp._overlay_canvas and not vp._overlay_canvas.edit_mode:
             vp._overlay_canvas._render_overlay(qp)
         qp.end()
