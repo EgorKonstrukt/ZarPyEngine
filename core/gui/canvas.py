@@ -91,6 +91,10 @@ class GuiCanvas(QWidget):
         for child in self._root.children():
             if isinstance(child, QWidget):
                 child.setEnabled(not v if hasattr(child, 'setEnabled') else True)
+        self._root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not v)
+        self._update_all_anchors(self.width(), self.height())
+        self._apply_z_order()
+        self.update()
 
     @property
     def selected_widget(self) -> Optional[QWidget]:
@@ -213,6 +217,9 @@ class GuiCanvas(QWidget):
         parent = parent_widget or self._root
         widget.setParent(parent)
         widget.setVisible(True)
+        if hasattr(widget, 'update_anchor'):
+            widget.update_anchor(self.width(), self.height())
+        self._apply_z_order()
         self.update()
         return widget
 
@@ -237,11 +244,44 @@ class GuiCanvas(QWidget):
     def get_all_widgets(self) -> list[QWidget]:
         return [c for c in self._root.children() if isinstance(c, QWidget)]
 
+    def _apply_z_order(self):
+        ordered: list[QWidget] = []
+        def _collect(parent):
+            for child in parent.children():
+                if isinstance(child, QWidget):
+                    ordered.append(child)
+                    _collect(child)
+        _collect(self._root)
+        ordered.sort(key=lambda w: getattr(w, '_z_index', 0))
+        for w in ordered:
+            try:
+                w.raise_()
+            except RuntimeError:
+                pass
+
+    def _update_all_anchors(self, vw: float, vh: float):
+        def _walk(parent):
+            for child in parent.children():
+                if not isinstance(child, QWidget):
+                    continue
+                if hasattr(child, 'update_anchor'):
+                    try:
+                        child.update_anchor(vw, vh)
+                    except RuntimeError:
+                        pass
+                _walk(child)
+        _walk(self._root)
+
+    def is_point_over_widget(self, px: float, py: float) -> bool:
+        hit = self.hit_test_widget(px, py)
+        return hit is not None and hit is not self._root
+
     def resize_canvas(self, w: float, h: float):
         pass
 
     def _update_display(self):
         self._update_root_geometry()
+        self._update_all_anchors(self.width(), self.height())
         self.update()
 
     def _update_root_geometry(self):
@@ -250,6 +290,7 @@ class GuiCanvas(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_root_geometry()
+        self._update_all_anchors(self.width(), self.height())
 
     def _snap_value(self, v: float) -> float:
         if self._snap_to_grid and self._grid_size > 0:
@@ -576,6 +617,9 @@ class GuiCanvas(QWidget):
         painter.drawText(ix + 4, iy + ih - 3, info)
 
     def mousePressEvent(self, event: QMouseEvent):
+        if not self._edit_mode:
+            super().mousePressEvent(event)
+            return
         mx, my = event.position().x(), event.position().y()
         if event.button() == Qt.MouseButton.MiddleButton:
             self._is_panning = True
@@ -584,52 +628,47 @@ class GuiCanvas(QWidget):
             self._pan_start_px = self._pan_x
             self._pan_start_py = self._pan_y
             return
-        if self._edit_mode:
-            rx, ry = self._to_root(mx, my)
-            for w in list(self._selected_widgets):
-                handle = self._get_handle_at(rx, ry, w)
-                if handle:
-                    self._drag_widget = w
-                    self._drag_handle = handle
-                    self._drag_start_x = w.x()
-                    self._drag_start_y = w.y()
-                    self._drag_start_w = w.width()
-                    self._drag_start_h = w.height()
-                    self._drag_start_mx = mx
-                    self._drag_start_my = my
-                    self._store_drag_start_positions()
-                    return
-            hit = self.hit_test_widget(mx, my)
-            if hit:
-                sub = self._find_sub_window(hit)
-                target = sub or hit
-                if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    self.toggle_selection(target)
-                else:
-                    self.selected_widget = target
-                self._drag_widget = target
-                self._drag_handle = "move"
-                self._drag_start_x = target.x()
-                self._drag_start_y = target.y()
-                self._drag_start_w = target.width()
-                self._drag_start_h = target.height()
+        rx, ry = self._to_root(mx, my)
+        for w in list(self._selected_widgets):
+            handle = self._get_handle_at(rx, ry, w)
+            if handle:
+                self._drag_widget = w
+                self._drag_handle = handle
+                self._drag_start_x = w.x()
+                self._drag_start_y = w.y()
+                self._drag_start_w = w.width()
+                self._drag_start_h = w.height()
                 self._drag_start_mx = mx
                 self._drag_start_my = my
                 self._store_drag_start_positions()
+                return
+        hit = self.hit_test_widget(mx, my)
+        if hit:
+            sub = self._find_sub_window(hit)
+            target = sub or hit
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.toggle_selection(target)
             else:
-                if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-                    self.selected_widget = None
-                self._selection_box_start = (mx, my)
-                self._is_selecting = True
+                self.selected_widget = target
+            self._drag_widget = target
+            self._drag_handle = "move"
+            self._drag_start_x = target.x()
+            self._drag_start_y = target.y()
+            self._drag_start_w = target.width()
+            self._drag_start_h = target.height()
+            self._drag_start_mx = mx
+            self._drag_start_my = my
+            self._store_drag_start_positions()
         else:
-            local = QPointF(mx, my)
-            child = self.hit_test_widget(mx, my)
-            if child:
-                me = QMouseEvent(event.type(), local, event.globalPosition(),
-                                 event.button(), event.buttons(), event.modifiers())
-                QApplication.sendEvent(child, me)
+            if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                self.selected_widget = None
+            self._selection_box_start = (mx, my)
+            self._is_selecting = True
 
     def mouseMoveEvent(self, event):
+        if not self._edit_mode:
+            super().mouseMoveEvent(event)
+            return
         mx, my = event.position().x(), event.position().y()
         if self._is_panning:
             dx = mx - self._pan_start_mx
@@ -639,56 +678,48 @@ class GuiCanvas(QWidget):
             self._update_root_geometry()
             self.update()
             return
-        if self._edit_mode:
-            if self._is_selecting and self._selection_box_start:
-                sx, sy = self._selection_box_start
-                self._selection_rect = (min(sx, mx), min(sy, my), abs(mx - sx), abs(my - sy))
-                self.update()
-                return
-            if self._drag_widget and self._drag_handle:
-                dx = mx - self._drag_start_mx
-                dy = my - self._drag_start_my
-                if self._drag_handle == "move":
-                    if dx == 0 and dy == 0:
-                        self._guide_lines = []
-                        self.update()
-                        return
-                    for w in list(self._selected_widgets):
-                        try:
-                            sx, sy = self._drag_start_positions[id(w)]
-                        except (KeyError, RuntimeError):
-                            continue
-                        w.move(int(self._snap_value(sx + dx)), int(self._snap_value(sy + dy)))
-                    if self._auto_align and len(self._selected_widgets) == 1:
-                        new_x = self._snap_value(self._drag_start_x + dx)
-                        new_y = self._snap_value(self._drag_start_y + dy)
-                        nx, ny = self._snap_move_widget(self._drag_widget, new_x, new_y)
-                        self._drag_widget.move(int(nx), int(ny))
-                else:
-                    self._resize_from_handle(self._drag_widget, self._drag_handle, dx, dy)
-                self.update()
-            elif self._selected_widget:
-                rx, ry = self._to_root(mx, my)
-                handle = self._get_handle_at(rx, ry, self._selected_widget)
-                cursor_map = {
-                    "nw": Qt.CursorShape.SizeFDiagCursor, "ne": Qt.CursorShape.SizeBDiagCursor,
-                    "sw": Qt.CursorShape.SizeBDiagCursor, "se": Qt.CursorShape.SizeFDiagCursor,
-                    "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
-                    "w": Qt.CursorShape.SizeHorCursor, "e": Qt.CursorShape.SizeHorCursor,
-                }
-                self.setCursor(cursor_map.get(handle, Qt.CursorShape.ArrowCursor))
-        else:
-            local = QPointF(mx, my)
-            child = self.hit_test_widget(mx, my)
-            if child != self._hovered_widget:
-                self._hovered_widget = child
-            if child:
-                me = QMouseEvent(event.type(), local, event.globalPosition(),
-                                 event.button(), event.buttons(), event.modifiers())
-                QApplication.sendEvent(child, me)
+        if self._is_selecting and self._selection_box_start:
+            sx, sy = self._selection_box_start
+            self._selection_rect = (min(sx, mx), min(sy, my), abs(mx - sx), abs(my - sy))
+            self.update()
+            return
+        if self._drag_widget and self._drag_handle:
+            dx = mx - self._drag_start_mx
+            dy = my - self._drag_start_my
+            if self._drag_handle == "move":
+                if dx == 0 and dy == 0:
+                    self._guide_lines = []
+                    self.update()
+                    return
+                for w in list(self._selected_widgets):
+                    try:
+                        sx, sy = self._drag_start_positions[id(w)]
+                    except (KeyError, RuntimeError):
+                        continue
+                    w.move(int(self._snap_value(sx + dx)), int(self._snap_value(sy + dy)))
+                if self._auto_align and len(self._selected_widgets) == 1:
+                    new_x = self._snap_value(self._drag_start_x + dx)
+                    new_y = self._snap_value(self._drag_start_y + dy)
+                    nx, ny = self._snap_move_widget(self._drag_widget, new_x, new_y)
+                    self._drag_widget.move(int(nx), int(ny))
+            else:
+                self._resize_from_handle(self._drag_widget, self._drag_handle, dx, dy)
+            self.update()
+        elif self._selected_widget:
+            rx, ry = self._to_root(mx, my)
+            handle = self._get_handle_at(rx, ry, self._selected_widget)
+            cursor_map = {
+                "nw": Qt.CursorShape.SizeFDiagCursor, "ne": Qt.CursorShape.SizeBDiagCursor,
+                "sw": Qt.CursorShape.SizeBDiagCursor, "se": Qt.CursorShape.SizeFDiagCursor,
+                "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
+                "w": Qt.CursorShape.SizeHorCursor, "e": Qt.CursorShape.SizeHorCursor,
+            }
+            self.setCursor(cursor_map.get(handle, Qt.CursorShape.ArrowCursor))
 
     def enterEvent(self, event: QEnterEvent):
-        self.setFocus()
+        if self._edit_mode:
+            self.setFocus()
+        super().enterEvent(event)
 
     def wheelEvent(self, event: QWheelEvent):
         if self._edit_mode:
@@ -709,104 +740,124 @@ class GuiCanvas(QWidget):
             super().wheelEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if not self._edit_mode:
+            super().mouseReleaseEvent(event)
+            return
         if self._is_panning:
             self._is_panning = False
             return
-        if self._edit_mode:
-            if self._is_selecting and self._selection_box_start:
-                self._is_selecting = False
-                if self._selection_rect:
-                    sx, sy, sw, sh = self._selection_rect
-                    rx1, ry1 = self._to_root(sx, sy)
-                    rx2, ry2 = self._to_root(sx + sw, sy + sh)
-                    self._select_widgets_in_rect(rx1, ry1, rx2, ry2)
-                self._selection_box_start = None
-                self._selection_rect = None
-                self.update()
-                return
-            widget = self._drag_widget
-            self._drag_widget = None
-            self._drag_handle = ""
-            self._drag_start_positions.clear()
-            if self._guide_lines:
-                self._guide_lines.clear()
-                self.update()
-            if widget:
-                self.widget_changed.emit(widget)
-        else:
-            if self._hovered_widget and self._hovered_widget is not self._root:
-                local = QPointF(event.position())
-                me = QMouseEvent(event.type(), local, event.globalPosition(),
-                                 event.button(), event.buttons(), event.modifiers())
-                QApplication.sendEvent(self._hovered_widget, me)
+        if self._is_selecting and self._selection_box_start:
+            self._is_selecting = False
+            if self._selection_rect:
+                sx, sy, sw, sh = self._selection_rect
+                rx1, ry1 = self._to_root(sx, sy)
+                rx2, ry2 = self._to_root(sx + sw, sy + sh)
+                self._select_widgets_in_rect(rx1, ry1, rx2, ry2)
+            self._selection_box_start = None
+            self._selection_rect = None
+            self.update()
+            return
+        widget = self._drag_widget
+        self._drag_widget = None
+        self._drag_handle = ""
+        self._drag_start_positions.clear()
+        if self._guide_lines:
+            self._guide_lines.clear()
+            self.update()
+        if widget:
+            self.widget_changed.emit(widget)
+
+    def mouseDoubleClickEvent(self, event):
+        super().mouseDoubleClickEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if not self._edit_mode:
+            super().keyReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent):
-        if self._edit_mode:
-            key = event.key()
-            mods = event.modifiers()
-            if mods & Qt.KeyboardModifier.ControlModifier:
-                if key == Qt.Key.Key_C and self._selected_widget:
-                    self.copy_requested.emit()
-                    return
-                elif key == Qt.Key.Key_V:
-                    self.paste_requested.emit()
-                    return
-            if not self._selected_widgets:
+        if not self._edit_mode:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        mods = event.modifiers()
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.Key.Key_C and self._selected_widget:
+                self.copy_requested.emit()
                 return
-            step = self._grid_size if self._snap_to_grid else 1
-            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                for w in list(self._selected_widgets):
-                    self.remove_widget(w)
-                self._selected_widgets.clear()
-                self._selected_widget = None
-                self.widget_selected.emit(None)
-                self.update()
-            elif key == Qt.Key.Key_Up:
-                for w in self._selected_widgets:
-                    w.move(w.x(), int(self._snap_value(w.y() - step)))
-                self.update()
-                self.widget_changed.emit(self._selected_widget)
-            elif key == Qt.Key.Key_Down:
-                for w in self._selected_widgets:
-                    w.move(w.x(), int(self._snap_value(w.y() + step)))
-                self.update()
-                self.widget_changed.emit(self._selected_widget)
-            elif key == Qt.Key.Key_Left:
-                for w in self._selected_widgets:
-                    w.move(int(self._snap_value(w.x() - step)), w.y())
-                self.update()
-                self.widget_changed.emit(self._selected_widget)
-            elif key == Qt.Key.Key_Right:
-                for w in self._selected_widgets:
-                    w.move(int(self._snap_value(w.x() + step)), w.y())
-                self.update()
-                self.widget_changed.emit(self._selected_widget)
+            elif key == Qt.Key.Key_V:
+                self.paste_requested.emit()
+                return
+        if not self._selected_widgets:
+            return
+        step = self._grid_size if self._snap_to_grid else 1
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            for w in list(self._selected_widgets):
+                self.remove_widget(w)
+            self._selected_widgets.clear()
+            self._selected_widget = None
+            self.widget_selected.emit(None)
+            self.update()
+        elif key == Qt.Key.Key_Up:
+            for w in self._selected_widgets:
+                w.move(w.x(), int(self._snap_value(w.y() - step)))
+            self.update()
+            self.widget_changed.emit(self._selected_widget)
+        elif key == Qt.Key.Key_Down:
+            for w in self._selected_widgets:
+                w.move(w.x(), int(self._snap_value(w.y() + step)))
+            self.update()
+            self.widget_changed.emit(self._selected_widget)
+        elif key == Qt.Key.Key_Left:
+            for w in self._selected_widgets:
+                w.move(int(self._snap_value(w.x() - step)), w.y())
+            self.update()
+            self.widget_changed.emit(self._selected_widget)
+        elif key == Qt.Key.Key_Right:
+            for w in self._selected_widgets:
+                w.move(int(self._snap_value(w.x() + step)), w.y())
+            self.update()
+            self.widget_changed.emit(self._selected_widget)
 
     def serialize(self) -> dict:
-        children_data = []
-        for child in self._root.children():
-            if isinstance(child, QWidget) and hasattr(child, 'serialize'):
-                children_data.append(child.serialize())
+        children_data = [self._serialize_widget(c) for c in self._root.children()
+                         if isinstance(c, QWidget) and hasattr(c, 'serialize')]
         return {
             "canvas_w": self.width(),
             "canvas_h": self.height(),
             "children": children_data,
         }
 
+    def _serialize_widget(self, widget: QWidget) -> dict:
+        if not hasattr(widget, '_widget_id') or widget._widget_id is None:
+            widget._widget_id = f"w{id(widget)}"
+        data = widget.serialize()
+        data["id"] = widget._widget_id
+        data["children"] = [self._serialize_widget(c) for c in widget.children()
+                             if isinstance(c, QWidget) and hasattr(c, 'serialize')]
+        return data
+
     def deserialize(self, data: dict):
         self.clear()
         vw, vh = self.width(), self.height()
         for cd in data.get("children", []):
-            wtype = cd.get("type", "Button")
-            cls = WIDGET_REGISTRY.get(wtype)
-            if cls and hasattr(cls, 'deserialize'):
-                widget = cls.deserialize(cd)
-                widget.setParent(self._root)
-                widget.setVisible(True)
-                if hasattr(widget, 'update_anchor'):
-                    widget.update_anchor(vw, vh)
+            self._deserialize_widget(cd, self._root, vw, vh)
+        self._apply_z_order()
         self._update_root_geometry()
         self.update()
+
+    def _deserialize_widget(self, cd: dict, parent_widget: QWidget, vw: float, vh: float):
+        wtype = cd.get("type", "Button")
+        cls = WIDGET_REGISTRY.get(wtype)
+        if not cls or not hasattr(cls, 'deserialize'):
+            return
+        widget = cls.deserialize(cd)
+        widget._widget_id = cd.get("id")
+        widget.setParent(parent_widget)
+        widget.setVisible(True)
+        if hasattr(widget, 'update_anchor'):
+            widget.update_anchor(vw, vh)
+        for child_cd in cd.get("children", []):
+            self._deserialize_widget(child_cd, widget, vw, vh)
 
     def save_to_file(self, path: str):
         with open(path, "w") as f:

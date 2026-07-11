@@ -207,11 +207,13 @@ class PlayViewport(QOpenGLWidget):
         container.setObjectName("PlayOverlayContainer")
         container.setGeometry(0, 0, vw, vh)
         container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         container.setStyleSheet("QWidget#PlayOverlayContainer { background: transparent; }")
         container.show()
         root = canvas._root
         root.setParent(container)
         root.setGeometry(0, 0, vw, vh)
+        root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.setVisible(True)
         self._overlay_container = container
 
@@ -219,6 +221,7 @@ class PlayViewport(QOpenGLWidget):
         canvas = self._overlay_canvas
         if canvas and self._overlay_container:
             root = canvas._root
+            root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             root.setParent(canvas)
             canvas._update_root_geometry()
             root.setVisible(True)

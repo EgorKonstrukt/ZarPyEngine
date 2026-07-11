@@ -1230,30 +1230,56 @@ class ComponentWidget(QWidget):
         pass
 
     def _build_transform(self):
-        from editor.inspector.panel import InspectorPanel
-        self._transform_refresh = True
         tr = self._component
-        w_pos, sbs_pos = make_vec3_row("Position", tr.local_position, lambda: None,
+        w_pos, sbs_pos = make_vec3_row("Position", tr.local_position,
+            lambda v: self._update_transform_from_spinboxes("local_position", sbs_pos),
             reset_to=[0.0, 0.0, 0.0])
-        for sb in sbs_pos:
-            sb.valueChanged.connect(lambda v, sbs_box=sbs_pos: self._update_transform_from_spinboxes())
+        self._tr_pos_sbs = sbs_pos
         self._layout.addWidget(w_pos)
-        w_rot, sbs_rot = make_vec3_row("Rotation", tr.local_euler_angles, lambda: None,
+        w_rot, sbs_rot = make_vec3_row("Rotation", tr.local_euler_angles,
+            lambda v: self._update_transform_from_spinboxes("local_euler_angles", sbs_rot),
             reset_to=[0.0, 0.0, 0.0])
-        for sb in sbs_rot:
-            sb.valueChanged.connect(lambda v, sbs_box=sbs_rot: self._update_transform_from_spinboxes())
+        self._tr_rot_sbs = sbs_rot
         self._layout.addWidget(w_rot)
-        w_scale, sbs_scale = make_vec3_row("Scale", tr.local_scale, lambda: None,
+        w_scale, sbs_scale = make_vec3_row("Scale", tr.local_scale,
+            lambda v: self._update_transform_from_spinboxes("local_scale", sbs_scale),
             reset_to=[1.0, 1.0, 1.0])
-        for sb in sbs_scale:
-            sb.valueChanged.connect(lambda v, sbs_box=sbs_scale: self._update_transform_from_spinboxes())
+        self._tr_scale_sbs = sbs_scale
         self._layout.addWidget(w_scale)
 
-    def _update_transform_from_spinboxes(self):
-        from editor.inspector.panel import InspectorPanel
+    def _update_transform_from_spinboxes(self, attr, sbs):
         if self._updating: return
+        tr = self._component
+        new = Vec3(sbs[0].value(), sbs[1].value(), sbs[2].value())
+        old = getattr(tr, attr)
+        get_history().execute(SetComponentCommand(self._entity, type(tr), attr, old, new))
+        self._redraw_viewport()
+
+    def refresh_transform(self):
+        if self._updating: return
+        tr = self._component
+        pos = tr.local_position
+        rot = tr.local_euler_angles
+        scl = tr.local_scale
         self._updating = True
         try:
-            pass
+            self._tr_pos_sbs[0].setValue(float(pos.x))
+            self._tr_pos_sbs[1].setValue(float(pos.y))
+            self._tr_pos_sbs[2].setValue(float(pos.z))
+            self._tr_rot_sbs[0].setValue(float(rot.x))
+            self._tr_rot_sbs[1].setValue(float(rot.y))
+            self._tr_rot_sbs[2].setValue(float(rot.z))
+            self._tr_scale_sbs[0].setValue(float(scl.x))
+            self._tr_scale_sbs[1].setValue(float(scl.y))
+            self._tr_scale_sbs[2].setValue(float(scl.z))
         finally:
             self._updating = False
+
+    def _redraw_viewport(self):
+        try:
+            from core.engine.engine import Engine
+            vp = Engine.instance().viewport
+            if vp is not None:
+                vp.update_scene()
+        except Exception:
+            pass
