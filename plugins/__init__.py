@@ -4,6 +4,6 @@
 #
 # Copyright (c) 2026 Zarrakun
 
-from plugins.physics_plugin import PhysicsPlugin
-from plugins.network_plugin import NetworkPlugin
-__all__ = ["PhysicsPlugin", "NetworkPlugin"]
+# Sub-plugins are intentionally NOT imported here. The engine loads them
+# explicitly (player.py / main.py) from the BuildSettings "build_plugins" list,
+# so unused plugins are never compiled into a build.

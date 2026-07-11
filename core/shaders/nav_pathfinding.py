@@ -154,22 +154,16 @@ class NavGrid:
         if radius <= 0:
             return walkable
         r = walkable.shape[0]
-        try:
-            import scipy.ndimage as ndi
-            blocked = (walkable == 0).astype(np.uint8)
-            dilated = ndi.binary_dilation(blocked, structure=np.ones((2 * radius + 1,) * 2)).astype(np.uint32)
-            return (1 - dilated).astype(np.uint32)
-        except ImportError:
-            dilated = walkable.copy()
-            indices = np.where(dilated == 0)
-            for idx in range(len(indices[0])):
-                gx, gz = indices[0][idx], indices[1][idx]
-                x1 = max(0, gx - radius)
-                x2 = min(r, gx + radius + 1)
-                z1 = max(0, gz - radius)
-                z2 = min(r, gz + radius + 1)
-                dilated[x1:x2, z1:z2] = 0
-            return dilated
+        dilated = walkable.copy()
+        indices = np.where(dilated == 0)
+        for idx in range(len(indices[0])):
+            gx, gz = indices[0][idx], indices[1][idx]
+            x1 = max(0, gx - radius)
+            x2 = min(r, gx + radius + 1)
+            z1 = max(0, gz - radius)
+            z2 = min(r, gz + radius + 1)
+            dilated[x1:x2, z1:z2] = 0
+        return dilated
 
     def build_ground_obstacle_grid(self, agent_height_cells: int, max_climb_cells: int,
                                     max_slope_deg: float = 45.0,
@@ -238,21 +232,17 @@ class NavGrid:
         if radius_cells <= 0:
             return
         self.save_raw()
-        try:
-            import scipy.ndimage as ndi
-            self._grid = ndi.binary_dilation(self._grid, structure=np.ones((2 * radius_cells + 1,) * 3)).astype(np.uint32)
-        except ImportError:
-            simple = self._grid.copy()
-            r = self.resolution
-            d = radius_cells
-            indices = np.where(self._grid > 0)
-            for idx in range(len(indices[0])):
-                x, y, z = indices[0][idx], indices[1][idx], indices[2][idx]
-                x1, x2 = max(0, x - d), min(r, x + d + 1)
-                y1, y2 = max(0, y - d), min(r, y + d + 1)
-                z1, z2 = max(0, z - d), min(r, z + d + 1)
-                simple[x1:x2, y1:y2, z1:z2] = 1
-            self._grid = simple
+        simple = self._grid.copy()
+        r = self.resolution
+        d = radius_cells
+        indices = np.where(self._grid > 0)
+        for idx in range(len(indices[0])):
+            x, y, z = indices[0][idx], indices[1][idx], indices[2][idx]
+            x1, x2 = max(0, x - d), min(r, x + d + 1)
+            y1, y2 = max(0, y - d), min(r, y + d + 1)
+            z1, z2 = max(0, z - d), min(r, z + d + 1)
+            simple[x1:x2, y1:y2, z1:z2] = 1
+        self._grid = simple
         self._dirty = True
 
     @property

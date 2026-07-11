@@ -118,6 +118,33 @@ def _restore_pil():
         print("  PIL restored")
 
 
+def _plugin_include_options(names: list[str]) -> list[str]:
+    """
+    Return Nuitka include options for only the plugins listed in build_plugins.
+    Unlisted (unused) plugins are NOT compiled. Ancestor packages are included
+    as modules (init only) so imports resolve without pulling in siblings.
+    """
+    opts: list[str] = ["--include-module=plugins"]
+    seen: set[str] = {"plugins"}
+    for name in names:
+        full = name if name.startswith("plugins.") else "plugins." + name
+        parts = full.split(".")
+        for i in range(1, len(parts) - 1):
+            pkg = ".".join(parts[:i + 1])
+            if pkg in seen:
+                continue
+            pkg_dir = ROOT / Path(*pkg.split("."))
+            if pkg_dir.is_dir() and (pkg_dir / "__init__.py").exists():
+                opts.append(f"--include-module={pkg}")
+                seen.add(pkg)
+        leaf_dir = ROOT / Path(*parts)
+        if leaf_dir.is_dir() and (leaf_dir / "__init__.py").exists():
+            opts.append(f"--include-package={full}")
+        else:
+            opts.append(f"--include-module={full}")
+    return opts
+
+
 def _load_build_settings() -> dict:
     """Load BuildSettings.json from project root."""
     bs_path = ROOT / "BuildSettings.json"
@@ -308,7 +335,7 @@ def build():
         "--disable-ccache",
         # Core packages (runtime)
         "--include-package=core",
-        "--include-package=plugins",
+        *_plugin_include_options(build_plugins),
         f"--include-package=physics_solvers.{_resolve_physics_solver()}_solver",
         # Data вЂ” use RELATIVE paths (Nuitka resolves relative to CWD which is ROOT)
         "--include-data-file=" + _ASSIMP_SRC + "=" + _ASSIMP_SRC,
