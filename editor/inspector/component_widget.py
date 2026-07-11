@@ -1263,17 +1263,20 @@ class ComponentWidget(QWidget):
         scl = tr.local_scale
         self._updating = True
         try:
-            self._tr_pos_sbs[0].setValue(float(pos.x))
-            self._tr_pos_sbs[1].setValue(float(pos.y))
-            self._tr_pos_sbs[2].setValue(float(pos.z))
-            self._tr_rot_sbs[0].setValue(float(rot.x))
-            self._tr_rot_sbs[1].setValue(float(rot.y))
-            self._tr_rot_sbs[2].setValue(float(rot.z))
-            self._tr_scale_sbs[0].setValue(float(scl.x))
-            self._tr_scale_sbs[1].setValue(float(scl.y))
-            self._tr_scale_sbs[2].setValue(float(scl.z))
+            self._set_transform_sb(self._tr_pos_sbs, pos.x, pos.y, pos.z)
+            self._set_transform_sb(self._tr_rot_sbs, rot.x, rot.y, rot.z)
+            self._set_transform_sb(self._tr_scale_sbs, scl.x, scl.y, scl.z)
         finally:
             self._updating = False
+
+    @staticmethod
+    def _set_transform_sb(sbs, x, y, z):
+        for sb, val in zip(sbs, (x, y, z)):
+            if sb is None:
+                continue
+            if sb.hasFocus() or (sb.lineEdit() is not None and sb.lineEdit().hasFocus()):
+                continue
+            sb.setValue(float(val))
 
     def _redraw_viewport(self):
         try:
