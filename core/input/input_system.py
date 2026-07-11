@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 from typing import Callable
+import os
 import time
 from collections import defaultdict
 
@@ -186,6 +187,7 @@ class InputState:
         self._any_key_down: bool = False
         self._any_key: bool = False
         self._axes: dict[str, InputAxis] = {}
+        self._mouse_axes: set[str] = set()
         self._buttons: dict[str, InputButton] = {}
         self._event_callbacks: dict[str, list[Callable]] = defaultdict(list)
         self._input_enabled: bool = True
@@ -193,12 +195,21 @@ class InputState:
         self._cursor_visible: bool = True
         self._frame_count: int = 0
         self._time: float = 0.0
+        self._last_time: float = time.perf_counter()
+        self._dt: float = 0.0
+        self._mouse_sensitivity: float = 1.0
+        self._invert_mouse_x: bool = False
+        self._invert_mouse_y: bool = False
+        self._control_scheme: str = "fps"
 
     def define_axis(self, name: str, axis: InputAxis):
         self._axes[name] = axis
 
     def define_button(self, name: str, button: InputButton):
         self._buttons[name] = button
+
+    def define_mouse_axis(self, name: str):
+        self._mouse_axes.add(name.lower())
 
     def on_event(self, event_name: str, callback: Callable):
         self._event_callbacks[event_name].append(callback)
@@ -218,18 +229,43 @@ class InputState:
                 pass
 
     def begin_frame(self):
+        now = time.perf_counter()
+        self._dt = max(0.0, min(0.1, now - self._last_time))
+        self._last_time = now
         self._frame_count += 1
-        self._time = time.perf_counter()
+        self._time = now
         self._frame_down = set(self._acc_down)
         self._frame_up = set(self._acc_up)
         self._acc_down.clear()
         self._acc_up.clear()
-        self._scroll_delta = (0.0, 0.0)
         self._any_key_down = False
+        self._any_key = bool(self._held or self._mouse_held or self._frame_down)
+        self._update_axes(self._dt)
         self._fire_event("frame_begin", None)
 
     def end_frame(self):
+        self._scroll_delta = (0.0, 0.0)
+        self._mouse_delta = (0.0, 0.0)
         self._fire_event("frame_end", None)
+
+    def _update_axes(self, dt: float):
+        for axis in self._axes.values():
+            positive = any(self._held.get(k, False) for k in axis.positive) or \
+                       any(self._held.get(k, False) for k in axis.alt_positive)
+            negative = any(self._held.get(k, False) for k in axis.negative) or \
+                       any(self._held.get(k, False) for k in axis.alt_negative)
+            raw = (1.0 if positive else 0.0) - (1.0 if negative else 0.0)
+            axis._raw_value = raw
+            if abs(raw) < axis.dead or (axis.snap and positive and negative):
+                raw = 0.0
+            if raw != 0:
+                axis._value += raw * axis.sensitivity * dt
+                axis._value = max(-1.0, min(1.0, axis._value))
+            else:
+                if axis._value > 0:
+                    axis._value = max(0.0, axis._value - axis.gravity * dt)
+                elif axis._value < 0:
+                    axis._value = min(0.0, axis._value + axis.gravity * dt)
 
     @staticmethod
     def _is_mouse_key(key: int) -> bool:
@@ -244,7 +280,6 @@ class InputState:
             if not self._held.get(key, False):
                 self._acc_down.add(key)
             self._held[key] = True
-        self._any_key = True
         self._any_key_down = True
         self._fire_event("key_down", key)
 
@@ -399,37 +434,35 @@ class Input:
 
     @classmethod
     def GetAxis(cls, name: str) -> float:
-        axis = cls._state._axes.get(name)
-        if not axis or not cls._state._input_enabled:
+        if not cls._state._input_enabled:
             return 0.0
-        positive = any(cls.GetKey(k) for k in axis.positive) or any(cls.GetKey(k) for k in axis.alt_positive)
-        negative = any(cls.GetKey(k) for k in axis.negative) or any(cls.GetKey(k) for k in axis.alt_negative)
-        raw = (1.0 if positive else 0.0) - (1.0 if negative else 0.0)
-        axis._raw_value = raw
-        if abs(raw) < axis.dead or (axis.snap and positive and negative):
-            raw = 0.0
-        dt = 0.016
-        if raw != 0:
-            axis._value += raw * axis.sensitivity * dt
-            axis._value = max(-1.0, min(1.0, axis._value))
-        else:
-            if axis._value > 0:
-                axis._value = max(0.0, axis._value - axis.gravity * dt)
-            elif axis._value < 0:
-                axis._value = min(0.0, axis._value + axis.gravity * dt)
+        if name.lower() in cls._state._mouse_axes:
+            return cls._get_mouse_axis(name)
+        axis = cls._state._axes.get(name)
+        if not axis:
+            return 0.0
         return -axis._value if axis.invert else axis._value
 
     @classmethod
+    def _get_mouse_axis(cls, name: str) -> float:
+        dx, dy = cls._state._mouse_delta
+        sens = cls._state._mouse_sensitivity
+        if name.lower() == "mouse x":
+            v = dx * sens
+            return -v if cls._state._invert_mouse_x else v
+        v = dy * sens
+        return -v if cls._state._invert_mouse_y else v
+
+    @classmethod
     def GetAxisRaw(cls, name: str) -> float:
-        axis = cls._state._axes.get(name)
-        if not axis or not cls._state._input_enabled:
+        if not cls._state._input_enabled:
             return 0.0
-        positive = any(cls.GetKey(k) for k in axis.positive) or any(cls.GetKey(k) for k in axis.alt_positive)
-        negative = any(cls.GetKey(k) for k in axis.negative) or any(cls.GetKey(k) for k in axis.alt_negative)
-        raw = (1.0 if positive else 0.0) - (1.0 if negative else 0.0)
-        if abs(raw) < axis.dead or (axis.snap and positive and negative):
-            raw = 0.0
-        return -raw if axis.invert else raw
+        if name.lower() in cls._state._mouse_axes:
+            return cls._get_mouse_axis(name)
+        axis = cls._state._axes.get(name)
+        if not axis:
+            return 0.0
+        return -axis._raw_value if axis.invert else axis._raw_value
 
     @classmethod
     def DefineAxis(cls, name: str, positive: list[int], negative: list[int],
@@ -438,6 +471,10 @@ class Input:
                    snap: bool = False, invert: bool = False):
         cls._state.define_axis(name, InputAxis(positive, negative, alt_positive, alt_negative,
                                                 gravity, dead, sensitivity, snap, invert))
+
+    @classmethod
+    def DefineMouseAxis(cls, name: str):
+        cls._state.define_mouse_axis(name)
 
     @classmethod
     def DefineButton(cls, name: str, keys: list[int], alt_keys: list[int] = None):
@@ -486,6 +523,159 @@ class Input:
     @classmethod
     def set_cursor_visible(cls, value: bool):
         cls._state._cursor_visible = value
+
+    @classproperty
+    def deltaTime(cls) -> float:
+        return cls._state._dt
+
+    @classproperty
+    def mouseSensitivity(cls) -> float:
+        return cls._state._mouse_sensitivity
+
+    @classmethod
+    def set_mouse_sensitivity(cls, value: float):
+        cls._state._mouse_sensitivity = max(0.0, float(value))
+
+    @classproperty
+    def invertMouseY(cls) -> bool:
+        return cls._state._invert_mouse_y
+
+    @classmethod
+    def set_invert_mouse_y(cls, value: bool):
+        cls._state._invert_mouse_y = bool(value)
+
+    @classproperty
+    def invertMouseX(cls) -> bool:
+        return cls._state._invert_mouse_x
+
+    @classmethod
+    def set_invert_mouse_x(cls, value: bool):
+        cls._state._invert_mouse_x = bool(value)
+
+    @classproperty
+    def controlScheme(cls) -> str:
+        return cls._state._control_scheme
+
+    @classmethod
+    def set_control_scheme(cls, value: str):
+        cls._state._control_scheme = "tps" if str(value).lower() == "tps" else "fps"
+
+    @classmethod
+    def LoadProjectBindings(cls, project_path: str = None):
+        from core.config.config import get_project_config
+        cfg = get_project_config(project_path) if project_path else get_project_config(os.getcwd())
+        inp = cfg.to_dict().get("input", {})
+
+        scheme = str(inp.get("control_scheme", "fps")).lower()
+        cls.set_control_scheme("tps" if scheme == "tps" else "fps")
+        cls.set_mouse_sensitivity(inp.get("mouse_sensitivity", 1.0))
+        cls.set_invert_mouse_y(bool(inp.get("invert_mouse_y", False)))
+        cls.set_invert_mouse_x(bool(inp.get("invert_mouse_x", False)))
+
+        gravity = float(inp.get("axis_gravity", 3.0))
+        sensitivity = float(inp.get("axis_sensitivity", 1.0))
+        dead = float(inp.get("axis_dead", 0.001))
+
+        cls._state._axes.clear()
+        cls._state._buttons.clear()
+        cls._state._mouse_axes.clear()
+
+        axis_map = {
+            "horizontal": ("Horizontal", None),
+            "vertical": ("Vertical", None),
+            "fire_axis": ("Fire", None),
+            "jump_axis": ("Jump", None),
+        }
+        for key, (axis_name, _) in axis_map.items():
+            binding = inp.get(key)
+            if binding:
+                pos, neg = cls._split_axis_binding(binding)
+                if pos or neg:
+                    cls.DefineAxis(axis_name, pos, neg, gravity=gravity, dead=dead, sensitivity=sensitivity)
+
+        for btn_key, btn_name in [("jump", "Jump"), ("fire", "Fire"),
+                                  ("crouch", "Crouch"), ("sprint", "Sprint"),
+                                  ("interact", "Interact"), ("reload", "Reload")]:
+            binding = inp.get(btn_key)
+            if not binding:
+                continue
+            keys, alt = cls._split_button_binding(binding)
+            alt_binding = inp.get("alt_" + btn_key)
+            if alt_binding:
+                _, extra_alt = cls._split_button_binding(alt_binding)
+                alt = alt + extra_alt
+            if keys or alt:
+                cls.DefineButton(btn_name, keys, alt)
+
+        for mkey in ("mouse_axis_x", "mouse_axis_y"):
+            mname = inp.get(mkey)
+            if not mname:
+                mname = "Mouse X" if mkey == "mouse_axis_x" else "Mouse Y"
+            cls.DefineMouseAxis(mname)
+
+    @staticmethod
+    def _resolve_code(part: str):
+        part = part.strip().lower()
+        if part.startswith("mouse"):
+            rest = part[5:].strip()
+            if rest.isdigit():
+                return KeyCode.MOUSE_LEFT + int(rest)
+            named = {"left": KeyCode.MOUSE_LEFT, "right": KeyCode.MOUSE_RIGHT,
+                     "middle": KeyCode.MOUSE_MIDDLE, "back": KeyCode.MOUSE_BACK,
+                     "forward": KeyCode.MOUSE_FORWARD}
+            return named.get(rest, 0)
+        return KeyCode.from_name(part)
+
+    @staticmethod
+    def _split_axis_binding(binding) -> tuple:
+        if isinstance(binding, (list, tuple)):
+            parts = list(binding)
+        else:
+            parts = str(binding).split(",")
+        parts = [p.strip() for p in parts if p.strip()]
+        if not parts:
+            return [], []
+        explicit = any(p.startswith("-") for p in parts)
+        positive, negative = [], []
+        if explicit:
+            for part in parts:
+                if part.startswith("-"):
+                    code = Input._resolve_code(part[1:])
+                    if code:
+                        negative.append(code)
+                else:
+                    code = Input._resolve_code(part)
+                    if code:
+                        positive.append(code)
+        elif len(parts) == 2:
+            neg = Input._resolve_code(parts[0])
+            pos = Input._resolve_code(parts[1])
+            if neg:
+                negative.append(neg)
+            if pos:
+                positive.append(pos)
+        else:
+            for part in parts:
+                code = Input._resolve_code(part)
+                if code:
+                    positive.append(code)
+        return positive, negative
+
+    @staticmethod
+    def _split_button_binding(binding) -> tuple:
+        if isinstance(binding, (list, tuple)):
+            parts = list(binding)
+        else:
+            parts = str(binding).split(",")
+        keys = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            code = Input._resolve_code(part)
+            if code:
+                keys.append(code)
+        return keys, []
 
     @classmethod
     def OnEvent(cls, event_name: str, callback: Callable):

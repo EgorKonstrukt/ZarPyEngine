@@ -256,9 +256,23 @@ def get_project_config(project_path: str) -> Config:
                 "default_scene": ""
             },
             "input": {
+                "control_scheme": "fps",
                 "horizontal": "a,d",
                 "vertical": "w,s",
-                "mouse_sensitivity": 1.0
+                "jump": "space",
+                "fire": "mouse 0",
+                "crouch": "left ctrl",
+                "sprint": "left shift",
+                "interact": "e",
+                "reload": "r",
+                "mouse_axis_x": "mouse x",
+                "mouse_axis_y": "mouse y",
+                "mouse_sensitivity": 1.0,
+                "invert_mouse_x": False,
+                "invert_mouse_y": False,
+                "axis_gravity": 3.0,
+                "axis_sensitivity": 1.0,
+                "axis_dead": 0.001
             },
             "rendering": {
                 "render_pipeline": "forward",

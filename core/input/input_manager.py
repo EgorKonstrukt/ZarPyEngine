@@ -256,7 +256,10 @@ class InputManager:
         Input._state_ref().set_scroll(dx, dy)
 
     def new_frame(self):
-        Input._state_ref()._mouse_delta = (0.0, 0.0)
+        Input.end_frame()
+        st = Input._state_ref()
+        st._mouse_delta = (0.0, 0.0)
+        st._scroll_delta = (0.0, 0.0)
 
         with self._lock:
             pending = self._pending

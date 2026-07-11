@@ -259,6 +259,8 @@ class Engine:
         self._play_mode = True
         self._fixed_accum = 0.0
         self._last_time = time.perf_counter()
+        from core.input.input_system import Input
+        Input.LoadProjectBindings(self.project_root)
         if self._scene: self._scene.start()
         self._plugin_manager.notify_play_start()
         self._emit_event("play_start", None)

@@ -150,9 +150,23 @@ FIELD_TOOLTIPS = {
     "collab.ping_interval": "Collaboration ping interval (seconds)",
     "collab.poll_interval": "Collaboration poll interval (seconds)",
     "undo.max_stack": "Maximum undo history steps",
-    "input.horizontal": "Horizontal input axis bindings",
-    "input.vertical": "Vertical input axis bindings",
-    "input.mouse_sensitivity": "Mouse look sensitivity",
+    "input.control_scheme": "Control scheme: fps = first person, tps = third person",
+    "input.horizontal": "Horizontal movement axis (positive,negative key names, comma separated)",
+    "input.vertical": "Vertical movement axis (positive,negative key names, comma separated)",
+    "input.jump": "Jump button binding",
+    "input.fire": "Fire / primary action button binding",
+    "input.crouch": "Crouch button binding",
+    "input.sprint": "Sprint button binding",
+    "input.interact": "Interact button binding",
+    "input.reload": "Reload button binding",
+    "input.mouse_axis_x": "Name of the mouse X axis (defaults to Mouse X)",
+    "input.mouse_axis_y": "Name of the mouse Y axis (defaults to Mouse Y)",
+    "input.mouse_sensitivity": "Mouse look sensitivity multiplier",
+    "input.invert_mouse_x": "Invert horizontal mouse look",
+    "input.invert_mouse_y": "Invert vertical mouse look",
+    "input.axis_gravity": "Axis return-to-zero speed when released",
+    "input.axis_sensitivity": "Axis ramp-up speed while held",
+    "input.axis_dead": "Axis dead zone threshold",
     "physics.gravity_x": "Global gravity X component",
     "physics.gravity_y": "Global gravity Y component",
     "physics.gravity_z": "Global gravity Z component",
@@ -273,6 +287,9 @@ _FIELD_RANGES = {
     "collab.poll_interval": (1, 120),
     "undo.max_stack": (10, 2000),
     "input.mouse_sensitivity": (0.01, 10.0),
+    "input.axis_gravity": (0.01, 50.0),
+    "input.axis_sensitivity": (0.01, 20.0),
+    "input.axis_dead": (0.0, 1.0),
     "physics.gravity_x": (-100.0, 100.0),
     "physics.gravity_y": (-100.0, 100.0),
     "physics.gravity_z": (-100.0, 100.0),
@@ -676,6 +693,12 @@ class SettingsDialog(QDialog):
                 f"Unregistered: {', '.join(result)}")
 
     def _create_widget(self, key: str, value) -> Optional[QWidget]:
+        if key == "input.control_scheme":
+            cb = QComboBox()
+            cb.addItems(["fps", "tps"])
+            cb.setCurrentText(self._config.get(key, "fps"))
+            cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            return cb
         if key == "physics.simulation_mode":
             container = QWidget()
             vl = QVBoxLayout(container)
