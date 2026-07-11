@@ -120,6 +120,13 @@ class PlayViewport(QOpenGLWidget):
         if self._engine.play_mode and self.isVisible():
             self._sync_cursor()
             self.update()
+            canvas = self._overlay_canvas
+            if canvas is not None:
+                try:
+                    from core.gui.system import GuiCanvasSystem
+                    GuiCanvasSystem.instance().sync_all(self._engine.scene, canvas)
+                except Exception:
+                    pass
 
     def _sync_cursor(self):
         locked = Input.cursorLocked

@@ -140,22 +140,28 @@ class ComponentPickerDialog(QDialog):
         self._all_scripts = []
         eng = Engine.instance()
         project_root = eng.project_root if eng is not None else _PROJECT_ROOT
-        for candidate in (
-            os.path.join(project_root, "assets", "scripts"),
+        bases = [
+            os.path.join(project_root, "assets"),
             os.path.join(project_root, "scripts"),
-        ):
-            scripts_dir = os.path.normpath(candidate)
-            if os.path.isdir(scripts_dir):
-                break
-        else:
-            return
-        for root, dirs, files in os.walk(scripts_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
-            for f in files:
-                if f.endswith(".py") and not f.startswith("__"):
-                    full = os.path.join(root, f)
-                    rel = os.path.relpath(full, scripts_dir)
+        ]
+        seen_paths: set[str] = set()
+        for base in bases:
+            base = os.path.normpath(base)
+            if not os.path.isdir(base):
+                continue
+            for root, dirs, files in os.walk(base):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+                for f in files:
+                    if not f.endswith(".py") or f.startswith("__"):
+                        continue
+                    full = os.path.normpath(os.path.join(root, f))
+                    if full in seen_paths:
+                        continue
+                    seen_paths.add(full)
+                    rel = os.path.relpath(full, base)
                     self._all_scripts.append({"name": rel, "path": full, "type": "script"})
+        if self._all_scripts:
+            self._categories.setdefault("Scripts", [])
     def _show_categories(self):
         self._search.setText("")
         self._back_btn.hide()
@@ -168,7 +174,10 @@ class ComponentPickerDialog(QDialog):
             icon_w = _CategoryIconWidget(cat, 48)
             item = QListWidgetItem(QIcon(icon_w.pixmap()), cat)
             item.setData(Qt.ItemDataRole.UserRole, cat)
-            item.setToolTip(f"{len(self._categories[cat])} components")
+            if cat == "Scripts":
+                item.setToolTip(f"{len(self._all_scripts)} scripts")
+            else:
+                item.setToolTip(f"{len(self._categories[cat])} components")
             self._cat_list.addItem(item)
     def _on_category_clicked(self, item):
         cat = item.data(Qt.ItemDataRole.UserRole)
@@ -187,10 +196,14 @@ class ComponentPickerDialog(QDialog):
             else:
                 item.setToolTip(f"Add {name} component")
             self._comp_list.addItem(item)
-        scripts_in_cat = [s for s in self._all_scripts if category.lower() in s["name"].lower()]
+        if category == "Scripts":
+            scripts_in_cat = self._all_scripts
+        else:
+            scripts_in_cat = [s for s in self._all_scripts if category.lower() in s["name"].lower()]
         if scripts_in_cat:
             for s in scripts_in_cat:
-                item = QListWidgetItem(f"  {s['name']}")
+                label = os.path.splitext(s["name"])[0]
+                item = QListWidgetItem(f"  {label}")
                 item.setData(Qt.ItemDataRole.UserRole, s)
                 item.setToolTip(f"Add script: {s['name']}")
                 self._comp_list.addItem(item)

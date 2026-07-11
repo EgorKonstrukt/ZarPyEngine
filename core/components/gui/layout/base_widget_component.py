@@ -48,6 +48,8 @@ class GuiWidgetComponentBase(Component):
     def __init__(self, **kwargs):
         self._widget_ref = None
         self._sub_window_ref = None
+        self.widget_width = float(self._default_w)
+        self.widget_height = float(self._default_h)
         self._bg_color = None
         self._text_color = None
         self._border_color = None

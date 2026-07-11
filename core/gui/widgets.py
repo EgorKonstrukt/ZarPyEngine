@@ -40,7 +40,7 @@ def _set_widget_bounds(w: QWidget, x: float, y: float, ww: float, h: float):
 
 def _update_anchor(w: QWidget, anchor: int, canvas_w: float, canvas_h: float,
                    offset_x: float, offset_y: float, gw: float, gh: float) -> tuple[float, float, float, float]:
-    x, y, ww, hh = gw, gh, gw, gh
+    x, y, ww, hh = w.x(), w.y(), gw, gh
     if anchor == ANCHOR_TOP_LEFT:
         pass
     elif anchor == ANCHOR_TOP_CENTER:
