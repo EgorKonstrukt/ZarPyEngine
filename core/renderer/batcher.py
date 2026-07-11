@@ -142,38 +142,46 @@ class RenderBatcher:
                       selected_entities: set, outline_queue: list,
                       gpu_storage=None):
         self.reset_stats()
+        scene_done = set()
         for (prog_id, mat_path, mesh_id, receive_shadows, sub_idx), group in groups.items():
             _, _, mesh, _, mat, prog, _, _ = group[0]
             self._stats_batches += 1
             n = len(group)
             group_disable_shadows = disable_shadows or not receive_shadows
+            scene_key = (id(prog), group_disable_shadows)
+            if scene_key not in scene_done:
+                set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
+                                      disable_shadows=group_disable_shadows)
+                scene_done.add(scene_key)
             if n == 1:
                 self._render_single(group[0], prog, mesh, mat,
                                     view_f32, proj_f32, cam_pos, lights,
                                     group_disable_shadows, set_scene_uniforms_fn,
                                     apply_material_fn, normal_cache,
-                                    selected_entities, outline_queue)
+                                    selected_entities, outline_queue,
+                                    set_scene=False)
             elif _supports_instancing(prog):
                 self._render_instanced(group, prog, mesh, mat,
                                        view_f32, proj_f32, cam_pos, lights,
                                        group_disable_shadows, set_scene_uniforms_fn,
                                        apply_material_fn,
                                        selected_entities, outline_queue,
-                                       gpu_storage=gpu_storage)
+                                       gpu_storage=gpu_storage, set_scene=False)
             else:
                 for item in group:
                     self._render_single(item, prog, mesh, mat,
                                         view_f32, proj_f32, cam_pos, lights,
                                         group_disable_shadows, set_scene_uniforms_fn,
                                         apply_material_fn, normal_cache,
-                                        selected_entities, outline_queue)
+                                        selected_entities, outline_queue,
+                                        set_scene=False)
 
     def _render_instanced(self, group, prog, mesh, mat,
                           view_f32, proj_f32, cam_pos, lights,
                           disable_shadows, set_scene_uniforms_fn,
                           apply_material_fn,
                           selected_entities, outline_queue,
-                          gpu_storage=None):
+                          gpu_storage=None, set_scene=True):
         world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
 
         if world_ssbo is not None:
@@ -192,8 +200,9 @@ class RenderBatcher:
 
         vao = self._get_vao(prog, mesh)
 
-        set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
-                              disable_shadows=disable_shadows)
+        if set_scene:
+            set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
+                                  disable_shadows=disable_shadows)
         if mesh.is_error_mesh:
             apply_material_fn(None, prog)
             r = 0.1 + 0.9 * abs(np.sin(time.perf_counter() * 3.0))
@@ -219,16 +228,17 @@ class RenderBatcher:
                     outline_queue.append((mesh, wm))
 
     def _render_single(self, item, prog, mesh, mat,
-                       view_f32, proj_f32, cam_pos, lights,
-                       disable_shadows, set_scene_uniforms_fn,
-                       apply_material_fn, normal_cache,
-                       selected_entities, outline_queue):
+                        view_f32, proj_f32, cam_pos, lights,
+                        disable_shadows, set_scene_uniforms_fn,
+                        apply_material_fn, normal_cache,
+                        selected_entities, outline_queue, set_scene=True):
         self._stats_draw_calls += 1
         ent, tr, _, _, _, _, wm, sub_idx = item
         if "u_use_instancing" in prog:
             prog["u_use_instancing"].value = 0
-        set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
-                              disable_shadows=disable_shadows)
+        if set_scene:
+            set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
+                                  disable_shadows=disable_shadows)
         model = wm
         model_f32 = model.to_f32()
         if "u_model" in prog:
