@@ -98,6 +98,9 @@ class ShadowRenderer:
         self._has_projector_shadow: list[bool] = [False, False]
         self._shadow_vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
         self._shadow_inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
+        self._shadow_groups_cache: Optional[dict] = None
+        self._shadow_groups_key: int = 0
+        self._shadow_groups_ref: Any = None
         self._create_csm_resources()
 
     def _create_csm_resources(self):
@@ -191,9 +194,15 @@ class ShadowRenderer:
         return None
 
     def _build_shadow_groups(self, renderable_shadow: list) -> dict:
+        key = id(renderable_shadow)
+        if key == self._shadow_groups_key and self._shadow_groups_cache is not None:
+            return self._shadow_groups_cache
         groups = defaultdict(list)
         for mesh, model_mat in renderable_shadow:
             groups[id(mesh)].append((mesh, model_mat))
+        self._shadow_groups_cache = groups
+        self._shadow_groups_key = key
+        self._shadow_groups_ref = renderable_shadow
         return groups
 
     def _build_shadow_instance_vbo(self, key: tuple[int, int],

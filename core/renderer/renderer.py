@@ -221,6 +221,8 @@ class Renderer:
         self._clear_color: list = [0.18, 0.18, 0.18]
         self._import_meta_cache: dict[str, tuple] = {}
         self._import_meta_mtime: dict[str, float] = {}
+        self._snap_cache: Optional[_RenderSnapshot] = None
+        self._snap_version: int = -1
         self._normal_cache: dict[int, np.ndarray] = {}
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
@@ -988,8 +990,11 @@ void main() {
             self._shadows.set_uniforms(prog)
 
     def _collect_snapshot(self, scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos) -> _RenderSnapshot:
+        n_updated = scene.flush_transforms()
+        if (n_updated == 0 and self._snap_cache is not None
+                and self._snap_version == scene._render_version):
+            return self._snap_cache
         snap = _RenderSnapshot()
-        scene.flush_transforms()
         if not self._import_meta_cache:
             self._preload_import_meta(scene)
         for ent in scene.get_entities_with_component(Light):
@@ -1131,6 +1136,8 @@ void main() {
             ff = ent.get_component(ParticleForceField)
             if ff and ff.enabled:
                 snap.force_fields.append(ff)
+        self._snap_cache = snap
+        self._snap_version = scene._render_version
         return snap
 
     def render_scene(self, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
@@ -2086,6 +2093,8 @@ void main() {
         self._normal_cache.clear()
         self._import_meta_cache.clear()
         self._import_meta_mtime.clear()
+        self._snap_cache = None
+        self._snap_version = -1
 
     def release_all_caches(self):
         """Clear mesh, material and texture caches. Called when loading a
@@ -2093,6 +2102,8 @@ void main() {
         self._normal_cache.clear()
         self._import_meta_cache.clear()
         self._import_meta_mtime.clear()
+        self._snap_cache = None
+        self._snap_version = -1
         if self._materials:
             self._materials.clear_caches()
         if self._mesh_loader:

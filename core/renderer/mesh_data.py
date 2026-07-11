@@ -47,17 +47,22 @@ class MeshData:
         self._outline_vbo: Optional[Any] = None
         self._ctx: Optional[Any] = None
         self._vao_cache: dict[int, Any] = {}
+        self._bounding_radius: Optional[float] = None
 
     def compute_aabb(self):
         if len(self.vertices) < 3:
+            self._bounding_radius = 0.0
             return
         v = self.vertices.reshape(-1, 3)
         self.aabb_min = v.min(axis=0).astype(np.float32)
         self.aabb_max = v.max(axis=0).astype(np.float32)
+        self._bounding_radius = float(np.linalg.norm(self.aabb_max - self.aabb_min) / 2.0)
 
     @property
     def bounding_radius(self) -> float:
-        return float(np.linalg.norm(self.aabb_max - self.aabb_min) / 2.0)
+        if self._bounding_radius is None:
+            self.compute_aabb()
+        return self._bounding_radius
 
     def build_gl(self, ctx: moderngl.Context, program: moderngl.Program):
         self._ctx = ctx
