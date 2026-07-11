@@ -212,6 +212,7 @@ class GuiWidgetComponentBase(Component):
             self._widget_ref = widget
         self._apply_style_to_widget()
         self.sync_to_widget()
+        self._connect_edit_signals()
 
     def sync_to_widget(self):
         ref = self._widget_ref
@@ -280,6 +281,27 @@ class GuiWidgetComponentBase(Component):
             ref._anchor = self._anchor
             ref.setVisible(self._visible)
 
+    def _connect_edit_signals(self):
+        ref = self._widget_ref
+        if ref is None:
+            return
+        for sig_name in ("textChanged", "valueChanged", "currentTextChanged",
+                          "currentIndexChanged", "toggled", "stateChanged"):
+            sig = getattr(ref, sig_name, None)
+            if sig is not None:
+                try:
+                    sig.connect(lambda *a, r=ref: self._on_widget_edited(r))
+                except Exception:
+                    pass
+
+    def _on_widget_edited(self, ref):
+        if ref is None:
+            return
+        try:
+            self.update_from_widget()
+        except Exception:
+            pass
+
     def update_from_widget(self):
         sub = self._sub_window_ref
         if sub:
@@ -319,9 +341,13 @@ class GuiWidgetComponentBase(Component):
                 except Exception:
                     pass
         if self.transform:
-            self.transform.local_position = (lx, ly, 0)
-        self.widget_width = float(lw)
-        self.widget_height = float(lh)
+            tp = self.transform.local_position
+            if abs(tp.x - lx) > 1e-4 or abs(tp.y - ly) > 1e-4:
+                self.transform.local_position = (lx, ly, 0)
+        if abs(self.widget_width - float(lw)) > 1e-4:
+            self.widget_width = float(lw)
+        if abs(self.widget_height - float(lh)) > 1e-4:
+            self.widget_height = float(lh)
         self._anchor = getattr(ref, '_anchor', 0)
         self._visible = (sub or ref).isVisible()
 

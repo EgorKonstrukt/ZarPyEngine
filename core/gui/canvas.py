@@ -91,7 +91,6 @@ class GuiCanvas(QWidget):
         for child in self._root.children():
             if isinstance(child, QWidget):
                 child.setEnabled(not v if hasattr(child, 'setEnabled') else True)
-        self._root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not v)
         self._update_all_anchors(self.width(), self.height())
         self._apply_z_order()
         self.update()

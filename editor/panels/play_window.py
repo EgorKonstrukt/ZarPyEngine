@@ -29,6 +29,7 @@ class PlayViewport(QOpenGLWidget):
         self._overlay_canvas: Optional[GuiCanvas] = None
         self._overlay_container: Optional[QWidget] = None
         self._mouse_captured: bool = False
+        self._cursor_blank: bool = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
@@ -42,7 +43,9 @@ class PlayViewport(QOpenGLWidget):
         self.setFormat(fmt)
 
     def _on_play_stop(self, _=None):
-        if self._mouse_captured:
+        if self._mouse_captured or self._cursor_blank:
+            Input.set_cursor_visible(True)
+            Input.set_cursor_locked(False)
             self._release_mouse()
 
     def _bind_screen_fbo(self):
@@ -115,29 +118,35 @@ class PlayViewport(QOpenGLWidget):
 
     def _tick(self):
         if self._engine.play_mode and self.isVisible():
+            self._sync_cursor()
             self.update()
 
-    def _capture_mouse(self):
-        if self._mouse_captured:
-            return
-        self._mouse_captured = True
-        self.grabMouse()
-        Input.set_cursor_locked(True)
-        QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
-        self._center_cursor()
-        from core.input.input_manager import InputManager
-        im = InputManager.instance()
-        center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
-        im._mouse_x = center.x()
-        im._mouse_y = center.y()
+    def _sync_cursor(self):
+        locked = Input.cursorLocked
+        visible = Input.cursorVisible
+        want_blank = locked or (not visible)
+        want_grab = locked
+        if want_grab and not self._mouse_captured:
+            self._mouse_captured = True
+            self.grabMouse()
+            self._center_cursor()
+        elif not want_grab and self._mouse_captured:
+            self._mouse_captured = False
+            self.releaseMouse()
+        if want_blank and not self._cursor_blank:
+            QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+            self._cursor_blank = True
+        elif not want_blank and self._cursor_blank:
+            QGuiApplication.restoreOverrideCursor()
+            self._cursor_blank = False
 
     def _release_mouse(self):
-        if not self._mouse_captured:
-            return
-        self._mouse_captured = False
-        Input.set_cursor_locked(False)
-        QGuiApplication.restoreOverrideCursor()
-        self.releaseMouse()
+        if self._mouse_captured:
+            self._mouse_captured = False
+            self.releaseMouse()
+        if self._cursor_blank:
+            QGuiApplication.restoreOverrideCursor()
+            self._cursor_blank = False
 
     def _center_cursor(self):
         center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
@@ -167,8 +176,6 @@ class PlayViewport(QOpenGLWidget):
 
     def mousePressEvent(self, event: QMouseEvent):
         if self._engine.play_mode:
-            if not self._mouse_captured:
-                self._capture_mouse()
             event.accept()
             return
         event.ignore()
@@ -190,7 +197,6 @@ class PlayViewport(QOpenGLWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self._mouse_captured:
-            self.grabMouse()
             event.accept()
             return
         event.ignore()
@@ -207,27 +213,40 @@ class PlayViewport(QOpenGLWidget):
         container.setObjectName("PlayOverlayContainer")
         container.setGeometry(0, 0, vw, vh)
         container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        container.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         container.setStyleSheet("QWidget#PlayOverlayContainer { background: transparent; }")
         container.show()
         root = canvas._root
         root.setParent(container)
         root.setGeometry(0, 0, vw, vh)
-        root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.setVisible(True)
+        root.installEventFilter(self)
+        self._overlay_root = root
         self._overlay_container = container
 
     def hide_overlay(self):
         canvas = self._overlay_canvas
         if canvas and self._overlay_container:
             root = canvas._root
-            root.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            root.removeEventFilter(self)
             root.setParent(canvas)
             canvas._update_root_geometry()
             root.setVisible(True)
             self._overlay_container.deleteLater()
             self._overlay_container = None
+        self._overlay_root = None
         self._overlay_canvas = None
+
+    def eventFilter(self, watched, event):
+        root = getattr(self, "_overlay_root", None)
+        if watched is root and root is not None:
+            et = event.type()
+            if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                      QEvent.Type.MouseMove, QEvent.Type.Wheel):
+                pos = event.position()
+                if root.childAt(int(pos.x()), int(pos.y())) is None:
+                    QGuiApplication.sendEvent(self, event)
+                    return True
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

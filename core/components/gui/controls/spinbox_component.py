@@ -45,7 +45,8 @@ class SpinBoxComponent(GuiWidgetComponentBase):
         if not w:
             return
         w.setRange(self._min_val, self._max_val)
-        w.setValue(self._value)
+        if w.value() != self._value:
+            w.setValue(self._value)
         w.setSingleStep(self._step)
         w.setPrefix(self._prefix)
         w.setSuffix(self._suffix)

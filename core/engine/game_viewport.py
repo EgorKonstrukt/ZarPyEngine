@@ -28,6 +28,7 @@ class GameViewport(QOpenGLWidget):
         self._renderer = None
         self._screen_fbo = None
         self._mouse_captured: bool = False
+        self._cursor_blank: bool = False
         self._input_manager = InputManager.instance()
         from core.config.config import get_global_config
         cfg = get_global_config()
@@ -47,7 +48,9 @@ class GameViewport(QOpenGLWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, False)
 
     def _on_play_stop(self, _=None):
-        if self._mouse_captured:
+        if self._mouse_captured or self._cursor_blank:
+            Input.set_cursor_visible(True)
+            Input.set_cursor_locked(False)
             self._release_mouse()
 
     def _bind_screen_fbo(self):
@@ -141,29 +144,35 @@ class GameViewport(QOpenGLWidget):
             self._input_manager.new_frame()
             with self._engine._scene_lock:
                 self._engine.tick()
+            self._sync_cursor()
             self.update()
 
-    def _capture_mouse(self):
-        if self._mouse_captured:
-            return
-        self._mouse_captured = True
-        self.grabMouse()
-        Input.set_cursor_locked(True)
-        QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
-        self._center_cursor()
-        from core.input.input_manager import InputManager
-        im = InputManager.instance()
-        center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
-        im._mouse_x = center.x()
-        im._mouse_y = center.y()
+    def _sync_cursor(self):
+        locked = Input.cursorLocked
+        visible = Input.cursorVisible
+        want_blank = locked or (not visible)
+        want_grab = locked
+        if want_grab and not self._mouse_captured:
+            self._mouse_captured = True
+            self.grabMouse()
+            self._center_cursor()
+        elif not want_grab and self._mouse_captured:
+            self._mouse_captured = False
+            self.releaseMouse()
+        if want_blank and not self._cursor_blank:
+            QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+            self._cursor_blank = True
+        elif not want_blank and self._cursor_blank:
+            QGuiApplication.restoreOverrideCursor()
+            self._cursor_blank = False
 
     def _release_mouse(self):
-        if not self._mouse_captured:
-            return
-        self._mouse_captured = False
-        Input.set_cursor_locked(False)
-        QGuiApplication.restoreOverrideCursor()
-        self.releaseMouse()
+        if self._mouse_captured:
+            self._mouse_captured = False
+            self.releaseMouse()
+        if self._cursor_blank:
+            QGuiApplication.restoreOverrideCursor()
+            self._cursor_blank = False
 
     def _center_cursor(self):
         center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
@@ -205,8 +214,6 @@ class GameViewport(QOpenGLWidget):
         if self._engine.play_mode:
             btn = self._mouse_button_index(event.button())
             self._input_manager.feed_mouse_button(btn, True)
-            if not self._mouse_captured:
-                self._capture_mouse()
             event.accept()
             return
         event.ignore()
@@ -228,7 +235,6 @@ class GameViewport(QOpenGLWidget):
         if self._mouse_captured:
             btn = self._mouse_button_index(event.button())
             self._input_manager.feed_mouse_button(btn, False)
-            self.grabMouse()
             event.accept()
             return
         event.ignore()

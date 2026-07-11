@@ -689,3 +689,37 @@ class Input:
     @classmethod
     def Reset(cls):
         cls._state.reset_all()
+
+
+class CursorLockMode:
+    NONE = "none"
+    LOCKED = "locked"
+    CONFINED = "confined"
+
+
+class _Cursor:
+    @property
+    def visible(self) -> bool:
+        return Input.cursorVisible
+
+    @visible.setter
+    def visible(self, value):
+        Input.set_cursor_visible(bool(value))
+
+    @property
+    def lockState(self) -> str:
+        if Input.cursorLocked:
+            return CursorLockMode.LOCKED
+        return CursorLockMode.NONE
+
+    @lockState.setter
+    def lockState(self, value):
+        if value == CursorLockMode.LOCKED:
+            Input.set_cursor_locked(True)
+            Input.set_cursor_visible(False)
+        else:
+            Input.set_cursor_locked(False)
+            Input.set_cursor_visible(True)
+
+
+Cursor = _Cursor()

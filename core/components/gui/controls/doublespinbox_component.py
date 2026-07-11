@@ -49,7 +49,8 @@ class DoubleSpinBoxComponent(GuiWidgetComponentBase):
         w.setRange(self._min_val, self._max_val)
         w.setDecimals(self._decimals)
         w.setSingleStep(self._step)
-        w.setValue(self._value)
+        if w.value() != self._value:
+            w.setValue(self._value)
         w.setPrefix(self._prefix)
         w.setSuffix(self._suffix)
         w.setWrapping(self._wrapping)
