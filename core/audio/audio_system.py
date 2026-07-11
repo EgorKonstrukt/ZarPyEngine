@@ -249,7 +249,7 @@ class AudioSystem:
                     pass
             mgr._active_sources.clear()
             mgr._source_info.clear()
-        for clip in list(self._clips.values()):
+        for _, clip in list(self._clips.values()):
             if clip.buffer:
                 try:
                     clip.buffer.destroy()
@@ -267,15 +267,31 @@ class AudioSystem:
     def device_name(self) -> str:
         return self._device_name
 
+    def _import_mtime(self, path: str) -> float:
+        import_path = path + ".import"
+        try:
+            return os.path.getmtime(import_path)
+        except OSError:
+            return 0.0
+
     def load_clip(self, path: str) -> AudioClip:
         abs_path = os.path.abspath(path)
-        if abs_path in self._clips:
-            return self._clips[abs_path]
+        imtime = self._import_mtime(abs_path)
+        cached = self._clips.get(abs_path)
+        if cached is not None:
+            c_mtime, clip = cached
+            if abs(imtime - c_mtime) < 0.001:
+                return clip
+            try:
+                clip.destroy_buffer()
+            except Exception:
+                pass
+            self._clips.pop(abs_path, None)
         clip = AudioClip()
         try:
             clip.load_from_file(abs_path)
             clip.create_buffer()
-            self._clips[abs_path] = clip
+            self._clips[abs_path] = (imtime, clip)
         except Exception as e:
             from core.foundation.logger import Logger
             Logger.error(f"Failed to load audio clip '{path}': {e}")
@@ -283,25 +299,38 @@ class AudioSystem:
 
     def load_clip_async(self, path: str, callback):
         abs_path = os.path.abspath(path)
-        if abs_path in self._clips:
-            callback(self._clips[abs_path])
-            return
+        imtime = self._import_mtime(abs_path)
+        cached = self._clips.get(abs_path)
+        if cached is not None:
+            c_mtime, clip = cached
+            if abs(imtime - c_mtime) < 0.001:
+                callback(clip)
+                return
+            try:
+                clip.destroy_buffer()
+            except Exception:
+                pass
+            self._clips.pop(abs_path, None)
         def _load():
             clip = AudioClip()
             try:
                 clip.load_from_file(abs_path)
                 clip.create_buffer()
-                self._clips[abs_path] = clip
+                self._clips[abs_path] = (imtime, clip)
             except Exception as e:
                 from core.foundation.logger import Logger
                 Logger.error(f"Failed to load audio clip '{path}': {e}")
                 clip = None
+                self._clips.pop(abs_path, None)
             callback(clip)
         _get_audio_pool().submit(_load)
 
     def get_clip(self, path: str) -> Optional[AudioClip]:
         abs_path = os.path.abspath(path)
-        return self._clips.get(abs_path)
+        cached = self._clips.get(abs_path)
+        if cached is not None:
+            return cached[1]
+        return None
 
     def set_listener_position(self, pos: tuple[float, float, float]):
         self._listener_pos = pos

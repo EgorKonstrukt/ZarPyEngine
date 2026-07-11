@@ -898,7 +898,8 @@ void main() {
             scale, cp, fuvs = 1.0, False, False
             mesh_path = mf.mesh_path or ""
             if mesh_path:
-                scale, cp, fuvs = self._sync_import_meta(mesh_path)
+                _meta = self._sync_import_meta(mesh_path)
+                scale, cp, fuvs = _meta[0], _meta[1], _meta[2]
             if not mesh_name and not mesh_path:
                 mesh_name = "cube"
             elif not mesh_name and mesh_path:
@@ -1638,10 +1639,31 @@ void main() {
             self._ctx.wireframe = old_wireframe
             self._ctx.depth_mask = old_depth_mask
 
+    def _resolve_import_meta_path(self, mesh_path: str) -> str:
+        direct = mesh_path + ".import"
+        if os.path.exists(direct):
+            return direct
+        eng = None
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+        except Exception:
+            pass
+        root = (eng.project_root if eng and getattr(eng, "project_root", None) else os.getcwd())
+        base = os.path.basename(mesh_path)
+        candidates = [os.path.join(root, mesh_path + ".import")]
+        for sub in ["", "assets/", "assets/models/", "models/"]:
+            candidates.append(os.path.join(root, sub, mesh_path + ".import"))
+            candidates.append(os.path.join(root, sub, base + ".import"))
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return direct
+
     def _sync_import_meta(self, mesh_path: str) -> tuple:
         if not mesh_path:
-            return (1.0, False, False)
-        import_cache = mesh_path + ".import"
+            return (1.0, False, False, 30.0, True, True)
+        import_cache = self._resolve_import_meta_path(mesh_path)
         try:
             mtime = os.path.getmtime(import_cache) if os.path.exists(import_cache) else -1.0
         except OSError:
@@ -1654,11 +1676,18 @@ void main() {
             try:
                 with open(import_cache) as _f:
                     _s = json.load(_f)
-                meta = (_s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False))
+                meta = (
+                    float(_s.get("scale", 1.0)),
+                    bool(_s.get("center_pivot", False)),
+                    bool(_s.get("flip_uvs", False)),
+                    float(_s.get("smooth_angle", 30.0)),
+                    bool(_s.get("gen_normals", True)),
+                    bool(_s.get("gen_uvs", True)),
+                )
             except Exception:
-                meta = (1.0, False, False)
+                meta = (1.0, False, False, 30.0, True, True)
         else:
-            meta = (1.0, False, False)
+            meta = (1.0, False, False, 30.0, True, True)
         old = self._import_meta_cache.get(mesh_path)
         self._import_meta_cache[mesh_path] = meta
         if old is not None and old != meta and self._mesh_loader is not None:
@@ -1686,7 +1715,8 @@ void main() {
         if mesh:
             return mesh
         if mesh_path:
-            cache_key = f"{mesh_path}|s=1.0|cp=False|fu=False"
+            _meta = self._sync_import_meta(mesh_path)
+            cache_key = f"{mesh_path}|s={_meta[0]}|cp={_meta[1]}|fu={_meta[2]}"
             mesh = meshes.get(cache_key)
             if mesh:
                 return mesh

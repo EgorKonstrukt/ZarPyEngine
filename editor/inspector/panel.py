@@ -288,29 +288,19 @@ class InspectorPanel(QDockWidget):
 
     def _build_mesh_import_settings(self):
         from editor.model_preview import ModelPreviewWidget
-        from core.assets.asset_importer import load_obj_async, load_mesh_async
         preview = ModelPreviewWidget()
         preview.setFixedHeight(200)
         self._add_asset_widget(preview)
+        self._mesh_preview = preview
         from PyQt6.QtCore import QTimer
-        def _on_mesh_loaded(data):
-            if data is not None and len(data.vertices) >= 3 and len(data.indices) >= 3:
-                s = settings.get("scale", 1.0)
-                verts = data.vertices.reshape(-1, 3).astype(np.float32) * s
-                QTimer.singleShot(0, lambda: preview.set_mesh(verts, data.indices, normals=data.normals))
-        ext = os.path.splitext(self._asset_path)[1].lower()
-        if ext == ".obj":
-            load_obj_async(self._asset_path, _on_mesh_loaded)
-        else:
-            load_mesh_async(self._asset_path, _on_mesh_loaded)
-        from core.config.config import get_global_config
         cache_path = self._asset_path + ".import"
         settings = {}
         if os.path.exists(cache_path):
             try:
-                with open(cache_path) as f:
-                    settings = json.load(f)
-            except: pass
+                with open(cache_path) as _f:
+                    settings = json.load(_f)
+            except Exception:
+                pass
         scale_sb = QDoubleSpinBox()
         scale_sb.setRange(0.001, 1000.0)
         scale_sb.setSingleStep(0.1)
@@ -340,6 +330,34 @@ class InspectorPanel(QDockWidget):
         gen_uv.setChecked(settings.get("gen_uvs", True))
         gen_uv.toggled.connect(lambda v: self._save_import_setting("gen_uvs", v))
         self._build_labeled_field("Generate UVs", gen_uv)
+        self._reload_mesh_preview()
+
+    def _reload_mesh_preview(self):
+        preview = getattr(self, "_mesh_preview", None)
+        if preview is None:
+            return
+        from core.assets.asset_importer import load_obj_async, load_mesh_async
+        import numpy as np
+        from PyQt6.QtCore import QTimer
+        cache_path = self._asset_path + ".import"
+        settings = {}
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path) as _f:
+                    settings = json.load(_f)
+            except Exception:
+                pass
+
+        def _on_mesh_loaded(data):
+            if data is not None and len(data.vertices) >= 3 and len(data.indices) >= 3:
+                s = settings.get("scale", 1.0)
+                verts = data.vertices.reshape(-1, 3).astype(np.float32) * s
+                QTimer.singleShot(0, lambda: preview.set_mesh(verts, data.indices, normals=data.normals))
+        ext = os.path.splitext(self._asset_path)[1].lower()
+        if ext == ".obj":
+            load_obj_async(self._asset_path, _on_mesh_loaded)
+        else:
+            load_mesh_async(self._asset_path, _on_mesh_loaded)
 
     def _build_texture_import_settings(self):
         from core.assets.texture_import_settings import DEFAULT_SETTINGS
@@ -422,6 +440,11 @@ class InspectorPanel(QDockWidget):
             with open(cache_path, "w") as f:
                 json.dump(settings, f, indent=2)
         except: pass
+        ext = os.path.splitext(self._asset_path)[1].lower()
+        if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
+            if getattr(self, "_mesh_preview", None) is not None:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, self._reload_mesh_preview)
 
     def _build_material_editor(self):
         from core.assets.material import Material

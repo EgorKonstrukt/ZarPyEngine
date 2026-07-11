@@ -169,7 +169,15 @@ class ShadowRenderer:
                 continue
             if not mr.cast_shadows:
                 continue
-            cache_key = f"{mf.mesh_path or mf.mesh_name}|s=1.0|cp=False|fu=False"
+            mp = mf.mesh_path or mf.mesh_name
+            _imp = mp + ".import"
+            try:
+                with open(_imp) as _f:
+                    _s = json.load(_f)
+                _sk, _scp, _sfu = _s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False)
+            except Exception:
+                _sk, _scp, _sfu = 1.0, False, False
+            cache_key = f"{mp}|s={_sk}|cp={_scp}|fu={_sfu}"
             mesh = None
             if hasattr(self, '_get_mesh'):
                 mesh = self._get_mesh(cache_key)

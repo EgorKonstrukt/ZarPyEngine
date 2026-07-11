@@ -184,7 +184,62 @@ def _collect_meshes(node_ptr, scene, mesh_parts):
             _collect_meshes(child_addr, scene, mesh_parts)
 
 
-def load_mesh(path: str) -> Optional[MeshImportData]:
+def _read_mesh_import(path: str) -> dict:
+    import_path = path + ".import"
+    settings = {
+        "scale": 1.0,
+        "center_pivot": False,
+        "flip_uvs": False,
+        "smooth_angle": 30.0,
+        "gen_normals": True,
+        "gen_uvs": True,
+    }
+    if os.path.exists(import_path):
+        try:
+            with open(import_path) as _f:
+                _data = json.load(_f)
+            for _k in settings:
+                if _k in _data:
+                    settings[_k] = _data[_k]
+        except Exception:
+            pass
+    return settings
+
+
+def _compute_smooth_normals(verts: np.ndarray, indices: np.ndarray) -> np.ndarray:
+    n = len(verts)
+    normals = np.zeros((n, 3), dtype=np.float32)
+    if len(indices) == 0:
+        return normals
+    tri = verts[indices].reshape(-1, 3, 3)
+    f0 = tri[:, 1] - tri[:, 0]
+    f1 = tri[:, 2] - tri[:, 0]
+    face_n = np.cross(f0, f1)
+    lens = np.linalg.norm(face_n, axis=1, keepdims=True)
+    lens[lens == 0] = 1.0
+    face_n = face_n / lens
+    for i in range(0, len(indices), 3):
+        for j in range(3):
+            normals[indices[i + j]] += face_n[i // 3]
+    nl = np.linalg.norm(normals, axis=1, keepdims=True)
+    nl[nl == 0] = 1.0
+    return (normals / nl).astype(np.float32)
+
+
+def _generate_planar_uvs(verts: np.ndarray) -> np.ndarray:
+    if len(verts) == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    mins = verts.min(axis=0)
+    maxs = verts.max(axis=0)
+    span = (maxs - mins)
+    span[span == 0] = 1.0
+    uvs = (verts - mins) / span
+    uvs = uvs[:, :2]
+    uvs[:, 1] = 1.0 - uvs[:, 1]
+    return uvs.astype(np.float32)
+
+
+def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
     eng = None
     try:
         from core.engine.engine import Engine
@@ -196,10 +251,12 @@ def load_mesh(path: str) -> Optional[MeshImportData]:
     dll = _get_dll()
     try:
         c_path = ctypes.c_char_p(path.encode('utf-8'))
-        AI_FLIP_UVS = 0x800000
         AI_TRIANGULATE = 0x10000000
         AI_GEN_NORMALS = 0x2
-        flags = AI_GEN_NORMALS | AI_TRIANGULATE | AI_FLIP_UVS
+        _settings = import_settings if import_settings is not None else _read_mesh_import(path)
+        flags = AI_TRIANGULATE
+        if _settings.get("gen_normals", True):
+            flags |= AI_GEN_NORMALS
         scene_ptr = dll.aiImportFile(c_path, ctypes.c_uint32(flags))
         if not scene_ptr:
             if prof: prof.stop("load_mesh")
@@ -265,7 +322,7 @@ class MeshImportData:
         self.sub_mesh_ranges: list[tuple[int, int]] = []
 
 
-def load_obj(path: str) -> Optional[MeshImportData]:
+def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
     eng = None
     try:
         from core.engine.engine import Engine
@@ -348,6 +405,13 @@ def load_obj(path: str) -> Optional[MeshImportData]:
         data.normals = norms_out[:out_idx * 3].copy()
         data.uvs = uvs_out[:out_idx * 2].copy()
     data.indices = idx
+    if out_idx > 0:
+        _v = data.vertices.reshape(-1, 3)
+        _settings = import_settings if import_settings is not None else _read_mesh_import(path)
+        if (not has_nrm or len(data.normals) == 0) and _settings.get("gen_normals", True):
+            data.normals = _compute_smooth_normals(_v, data.indices).ravel()
+        if (not has_uv or len(data.uvs) == 0) and _settings.get("gen_uvs", True):
+            data.uvs = _generate_planar_uvs(_v).ravel()
     if prof: prof.stop("load_obj")
     return data
 
