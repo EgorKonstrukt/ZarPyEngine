@@ -399,6 +399,21 @@ void main() {
                 )
             else:
                 self._underwater_vao = None
+            try:
+                self._caustics_prog = self._ctx.program(
+                    vertex_shader=read_shader("shadow_overlay.vert"),
+                    fragment_shader=read_shader("caustics.frag")
+                )
+            except Exception:
+                self._caustics_prog = None
+            if self._caustics_prog is not None:
+                self._caustics_vao = self._ctx.vertex_array(
+                    self._caustics_prog,
+                    [(self._quad_vbo, '2f', 'in_position')],
+                    self._quad_ibo
+                )
+            else:
+                self._caustics_vao = None
             VELOCITY_FRAG = """
 #version 460 core
 uniform sampler2D u_depth_tex;
@@ -664,7 +679,8 @@ void main() {
     def _render_underwater_pass(self, w, h, view_f32, proj_f32, cam_pos,
                                 sun_dir, sun_color, sun_intensity,
                                 fog_color, caustic_color, depth_below,
-                                cam_near, cam_far):
+                                cam_near, cam_far,
+                                water_component=None, inv_view_proj_f32=None):
         if self._underwater_prog is None or self._underwater_vao is None:
             return
         self._ensure_pp_fbo(w, h)
@@ -682,8 +698,17 @@ void main() {
         if "u_depth" in prog:
             self._scene_depth_tex.use(1)
             prog["u_depth"] = 1
+        # Caustics are driven by the same wave field as the surface, so they
+        # follow the real waves and the sun. Use the water component's own
+        # time origin to stay in phase with the surface displacement.
+        t = time.time()
+        if water_component is not None:
+            try:
+                t = time.time() - water_component._time_origin
+            except Exception:
+                pass
         if "u_time" in prog:
-            prog["u_time"].value = time.time()
+            prog["u_time"].value = t
         if "u_resolution" in prog:
             prog["u_resolution"].value = (float(w), float(h))
         if "u_cam_pos" in prog:
@@ -708,8 +733,42 @@ void main() {
             prog["u_view"].write(view_f32)
         if "u_proj" in prog:
             prog["u_proj"].write(proj_f32)
+        if "u_inv_view_proj" in prog and inv_view_proj_f32 is not None:
+            prog["u_inv_view_proj"].write(inv_view_proj_f32)
         if "u_fog_density" in prog:
             prog["u_fog_density"].value = 0.045
+        # Projected caustics: feed the wave field + water level so the shader
+        # can march the sun ray through the actual surface.
+        if water_component is not None:
+            surface_y = 0.0
+            tr = water_component.transform
+            if tr is not None:
+                surface_y = float(tr.position.y)
+            if "u_surface_y" in prog:
+                prog["u_surface_y"].value = surface_y
+            if "u_caustics_strength" in prog:
+                prog["u_caustics_strength"].value = float(getattr(water_component, "caustics", 0.0))
+            ws = water_component.get_wave_uniforms(t, cam_pos.x, cam_pos.z)
+            if "_WaveCount" in prog:
+                prog["_WaveCount"].value = ws["wave_count"]
+                prog["_WaveDirection"].write(ws["dirs"].tobytes())
+                prog["_WaveParams"].write(ws["params"].tobytes())
+            if "_WindDir" in prog:
+                prog["_WindDir"].write(np.array([ws["wind_dir"][0], ws["wind_dir"][1]], dtype=np.float32).tobytes())
+            if "_WindSpeed" in prog:
+                prog["_WindSpeed"].value = ws["wind_speed"]
+            if "_WindGust" in prog:
+                prog["_WindGust"].value = ws["wind_gust"]
+            if "_WindTurbulence" in prog:
+                prog["_WindTurbulence"].value = ws["wind_turbulence"]
+            if "_WindAlign" in prog:
+                prog["_WindAlign"].value = ws["wind_align"]
+            if "_Choppiness" in prog:
+                prog["_Choppiness"].value = ws["choppiness"]
+            if "_MacroWave" in prog:
+                prog["_MacroWave"].value = ws["macro_wave"]
+            if "_Chaos" in prog:
+                prog["_Chaos"].value = ws["chaos"]
         try:
             self._underwater_vao.render()
         finally:
@@ -738,6 +797,91 @@ void main() {
         self._velocity_tex = None
         self._velocity_depth = None
         self._velocity_fbo_size = (0, 0)
+
+    def _render_caustics_pass(self, w, h, view_f32, proj_f32, cam_pos,
+                              sun_dir, sun_color, sun_intensity,
+                              caustic_color, caustics_strength, surface_y,
+                              water_component, inv_view_proj_f32,
+                              cam_near, cam_far):
+        """Material-independent underwater caustics.
+
+        Projects physically based caustics (see caustics.glsl) onto every
+        submerged pixel of the scene, regardless of the material / shader used
+        by the geometry below the water. Runs from above or below the surface.
+        """
+        if self._caustics_prog is None or self._caustics_vao is None:
+            return
+        if water_component is None or caustics_strength <= 0.0:
+            return
+        self._ensure_pp_fbo(w, h)
+        self._ctx.copy_framebuffer(self._pp_fbo_a, self._scene_fbo)
+        self._scene_fbo.use()
+        self._scene_fbo.viewport = (0, 0, w, h)
+        self._ctx.viewport = (0, 0, w, h)
+        old_mask = self._ctx.depth_mask
+        self._ctx.disable(moderngl.DEPTH_TEST)
+        self._ctx.depth_mask = False
+        prog = self._caustics_prog
+        if "u_scene" in prog:
+            self._pp_color_tex_a.use(0)
+            prog["u_scene"] = 0
+        if "u_depth" in prog:
+            self._scene_depth_tex.use(1)
+            prog["u_depth"] = 1
+        if "u_time" in prog:
+            try:
+                prog["u_time"].value = time.time() - water_component._time_origin
+            except Exception:
+                prog["u_time"].value = time.time()
+        if "u_resolution" in prog:
+            prog["u_resolution"].value = (float(w), float(h))
+        if "u_cam_pos" in prog:
+            prog["u_cam_pos"].write(np.array([cam_pos.x, cam_pos.y, cam_pos.z], dtype=np.float32).tobytes())
+        if "u_sun_dir" in prog:
+            prog["u_sun_dir"].write(np.array([sun_dir.x, sun_dir.y, sun_dir.z], dtype=np.float32).tobytes())
+        if "u_sun_color" in prog:
+            prog["u_sun_color"].write(np.array(sun_color, dtype=np.float32).tobytes())
+        if "u_sun_intensity" in prog:
+            prog["u_sun_intensity"].value = float(sun_intensity)
+        if "u_caustic_tint" in prog:
+            prog["u_caustic_tint"].write(np.array(caustic_color, dtype=np.float32).tobytes())
+        if "u_caustics_strength" in prog:
+            prog["u_caustics_strength"].value = float(caustics_strength)
+        if "u_surface_y" in prog:
+            prog["u_surface_y"].value = float(surface_y)
+        if "u_cam_near" in prog:
+            prog["u_cam_near"].value = float(cam_near)
+        if "u_cam_far" in prog:
+            prog["u_cam_far"].value = float(cam_far)
+        if "u_inv_view_proj" in prog and inv_view_proj_f32 is not None:
+            prog["u_inv_view_proj"].write(inv_view_proj_f32)
+        # Feed the wave field so the caustic focusing matches the real surface.
+        ws = water_component.get_wave_uniforms(time.time() - water_component._time_origin, cam_pos.x, cam_pos.z)
+        if "_WaveCount" in prog:
+            prog["_WaveCount"].value = ws["wave_count"]
+            prog["_WaveDirection"].write(ws["dirs"].tobytes())
+            prog["_WaveParams"].write(ws["params"].tobytes())
+        if "_WindDir" in prog:
+            prog["_WindDir"].write(np.array([ws["wind_dir"][0], ws["wind_dir"][1]], dtype=np.float32).tobytes())
+        if "_WindSpeed" in prog:
+            prog["_WindSpeed"].value = ws["wind_speed"]
+        if "_WindGust" in prog:
+            prog["_WindGust"].value = ws["wind_gust"]
+        if "_WindTurbulence" in prog:
+            prog["_WindTurbulence"].value = ws["wind_turbulence"]
+        if "_WindAlign" in prog:
+            prog["_WindAlign"].value = ws["wind_align"]
+        if "_Choppiness" in prog:
+            prog["_Choppiness"].value = ws["choppiness"]
+        if "_MacroWave" in prog:
+            prog["_MacroWave"].value = ws["macro_wave"]
+        if "_Chaos" in prog:
+            prog["_Chaos"].value = ws["chaos"]
+        try:
+            self._caustics_vao.render()
+        finally:
+            self._ctx.enable(moderngl.DEPTH_TEST)
+            self._ctx.depth_mask = old_mask
 
     def _set_overlay_uniforms(self, overlay_prog, view_f32, inv_vp_f32):
         overlay_prog["u_inv_vp"].write(inv_vp_f32.tobytes())
@@ -1294,6 +1438,52 @@ void main() {
             self._ctx.enable(moderngl.DEPTH_TEST)
             if prof:
                 prof.stop("render_water")
+
+        # Material-independent underwater caustics: project wave/sun-driven
+        # caustics onto every submerged pixel of the scene (works with any
+        # material / shader on the geometry below the water, from above or
+        # below the surface). Uses the topmost water surface as the projector.
+        caustic_water = None
+        caustic_best_y = float("-inf")
+        for wc in water_components:
+            if getattr(wc, "caustics", 0.0) <= 0.0:
+                continue
+            tr = wc.transform
+            sy = tr.position.y if tr else 0.0
+            if sy > caustic_best_y:
+                caustic_best_y = sy
+                caustic_water = wc
+        if caustic_water is not None and self._scene_depth_tex is not None:
+            if prof:
+                prof.start("render_caustics")
+            csun_dir = Vec3(0.0, 1.0, 0.0)
+            csun_color = [1.0, 1.0, 1.0]
+            csun_intensity = 1.0
+            if dir_light:
+                dl, dt = dir_light
+                csun_dir = -dt.forward
+                if dl.procedural_sky_lighting:
+                    sc, si = Light.compute_sun_light(-dt.forward)
+                    csun_color = sc
+                    csun_intensity = si
+                else:
+                    csun_color = dl.color
+                    csun_intensity = dl.intensity
+            c_tint = getattr(caustic_water, "sss_color", [0.0, 0.55, 0.45])
+            c_strength = float(getattr(caustic_water, "caustics", 0.0))
+            c_surface_y = caustic_best_y
+            try:
+                c_inv_vp = (view_mat @ proj_mat).inverted().to_f32()
+            except Exception:
+                c_inv_vp = None
+            self._render_caustics_pass(
+                viewport_w, viewport_h, view_f32, proj_f32, cam_pos,
+                csun_dir, csun_color, csun_intensity,
+                c_tint, c_strength, c_surface_y,
+                caustic_water, c_inv_vp, cam_near, cam_far
+            )
+            if prof:
+                prof.stop("render_caustics")
         if cloud_components and self._cloud_plane and self._skybox_enabled:
             if prof:
                 prof.start("render_cloud_layer")
@@ -1350,10 +1540,15 @@ void main() {
                     sun_intensity = dl.intensity
             fog_color = getattr(underwater_water, "deep_color", [0.02, 0.18, 0.28])
             caustic_color = getattr(underwater_water, "sss_color", [0.0, 0.55, 0.45])
+            try:
+                inv_vp_f32 = (view_mat @ proj_mat).inverted().to_f32()
+            except Exception:
+                inv_vp_f32 = None
             self._render_underwater_pass(
                 viewport_w, viewport_h, view_f32, proj_f32, cam_pos,
                 sun_dir, sun_color, sun_intensity, fog_color, caustic_color,
-                best_depth, cam_near, cam_far
+                best_depth, cam_near, cam_far,
+                water_component=underwater_water, inv_view_proj_f32=inv_vp_f32
             )
             if prof:
                 prof.stop("render_underwater")

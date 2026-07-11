@@ -465,6 +465,12 @@ Shader "Zarin/PBR"
                 return numerator / denominator * clear_coat * 0.25;
             }
 
+            float hash2(vec2 p) {
+                p = fract(p * vec2(123.34, 456.21));
+                p += dot(p, p + 45.32);
+                return fract(p.x * p.y);
+            }
+
             vec3 calc_area_light_pbr(Light light, vec3 N, vec3 V, vec3 albedo, float roughness, float metallic, vec3 F0, vec3 T, vec3 B, float anisotropy, vec3 subsurface_color, float subsurface_amount) {
                 vec3 right = light.right;
                 vec3 up = light.up;

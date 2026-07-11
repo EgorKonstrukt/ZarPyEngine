@@ -162,6 +162,47 @@ class Water(Component):
             "influence": self.wind_influence,
         }
 
+    def get_wave_uniforms(self, t, wx, wz, wind_zones=None):
+        """Shared description of the Gerstner wave field.
+
+        Returns the wave-direction / parameter arrays and the fully resolved
+        wind state for the given world position and time. Both the surface
+        shader and the caustics projection use this so the light focusing
+        matches the actual displaced surface.
+        """
+        wind = self._resolve_wind(wind_zones, wx, wz, t)
+        wdir = wind["dir"]
+        wind_speed = wind["speed"]
+        wind_infl = wind["influence"]
+        wind_norm = min(max(wind_speed / 60.0, 0.0), 1.0)
+        wind_align = min(1.0, wind_infl + wind_norm * 0.8)
+        n = min(len(self.waves), 8)
+        dirs = np.zeros((8, 2), dtype=np.float32)
+        params = np.zeros((8, 4), dtype=np.float32)
+        for i in range(n):
+            w = self.waves[i]
+            ang = math.radians(float(w.get("direction", 0.0)))
+            dirs[i] = [math.cos(ang), math.sin(ang)]
+            params[i] = [
+                float(w.get("amplitude", 0.0)),
+                float(w.get("wavelength", 1.0)),
+                float(w.get("speed", 1.0)),
+                float(w.get("steepness", 0.0)),
+            ]
+        return {
+            "wave_count": n,
+            "dirs": dirs,
+            "params": params,
+            "wind_dir": (float(wdir[0]), float(wdir[1])),
+            "wind_speed": float(wind_speed),
+            "wind_gust": float(wind["gust"]),
+            "wind_turbulence": float(wind["turbulence"]),
+            "wind_align": float(wind_align),
+            "choppiness": float(self.choppiness),
+            "macro_wave": float(self.macro_wave),
+            "chaos": float(self.chaos),
+        }
+
     def render_water(self, ctx, shaders, view_mat, proj_mat, dir_light, cam_pos,
                       water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far,
                       wind_zones=None, lights=None, chunk_models=None, is_box=False):
@@ -211,43 +252,26 @@ class Water(Component):
         if "u_camera_pos" in prog:
             prog["u_camera_pos"].write(np.array([cam_pos.x, cam_pos.y, cam_pos.z], dtype=np.float32).tobytes())
 
-        wind = self._resolve_wind(wind_zones, water_wx, water_wz, t)
-        wdir = wind["dir"]
-        wind_speed = wind["speed"]
-        wind_infl = wind["influence"]
-        # Coherent wind alignment: even without manually setting Wind
-        # Influence, stronger wind steers the waves toward the wind heading.
-        wind_norm = min(max(wind_speed / 60.0, 0.0), 1.0)
-        wind_align = min(1.0, wind_infl + wind_norm * 0.8)
+        # Shared wave-field description used both by the surface and by the
+        # caustics projection (so the light focusing matches the real waves).
+        ws = self.get_wave_uniforms(t, water_wx, water_wz, wind_zones)
 
         if "_WaveCount" in prog:
-            n = min(len(self.waves), 8)
-            prog["_WaveCount"].value = n
-            dirs = np.zeros((8, 2), dtype=np.float32)
-            params = np.zeros((8, 4), dtype=np.float32)
-            for i in range(n):
-                w = self.waves[i]
-                ang = math.radians(float(w.get("direction", 0.0)))
-                dirs[i] = [math.cos(ang), math.sin(ang)]
-                params[i] = [
-                    float(w.get("amplitude", 0.0)),
-                    float(w.get("wavelength", 1.0)),
-                    float(w.get("speed", 1.0)),
-                    float(w.get("steepness", 0.0)),
-                ]
-            prog["_WaveDirection"].write(dirs.tobytes())
-            prog["_WaveParams"].write(params.tobytes())
+            prog["_WaveCount"].value = ws["wave_count"]
+            prog["_WaveDirection"].write(ws["dirs"].tobytes())
+            prog["_WaveParams"].write(ws["params"].tobytes())
 
         if "_WindDir" in prog:
-            prog["_WindDir"].write(np.array([float(wdir[0]), float(wdir[1])], dtype=np.float32).tobytes())
-        _set_float(prog, "_WindSpeed", wind_speed)
-        _set_float(prog, "_WindGust", wind["gust"])
-        _set_float(prog, "_WindTurbulence", wind["turbulence"])
-        _set_float(prog, "_WindAlign", wind_align)
+            prog["_WindDir"].write(np.array([ws["wind_dir"][0], ws["wind_dir"][1]], dtype=np.float32).tobytes())
+        _set_float(prog, "_WindSpeed", ws["wind_speed"])
+        _set_float(prog, "_WindGust", ws["wind_gust"])
+        _set_float(prog, "_WindTurbulence", ws["wind_turbulence"])
+        _set_float(prog, "_WindAlign", ws["wind_align"])
         _set_float(prog, "_Choppiness", self.choppiness)
         _set_float(prog, "_Caustics", self.caustics)
         _set_float(prog, "_MacroWave", self.macro_wave)
         _set_float(prog, "_Chaos", self.chaos)
+
         _set_float(prog, "_DetailScale", self.detail_scale)
         _set_float(prog, "_DetailOctaves", self.detail_octaves)
         _set_float(prog, "_DetailFade", self.detail_fade)

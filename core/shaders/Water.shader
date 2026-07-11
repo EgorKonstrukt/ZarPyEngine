@@ -568,20 +568,14 @@ Shader "Zarin/Water"
                     vec3 L = normalize(_SunDirection);
                     float sssAmt = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0);
                     vec3 sss = _SSSColor * sssAmt * (0.3 + 0.6 * h) * _SunIntensity;
-                    // Caustic web on the glass walls / floor — strongest near
-                    // the floor where the focused light lands.
-                    float ct = _Time * _DetailSpeed;
-                    vec2 flow = vec2(ct * 0.05, -ct * 0.04);
-                    float caustic = caustic_web(dc * 2.2 + flow, ct);
-                    caustic = caustic * 0.65 + 0.35 * caustic_web(dc * 4.7 - flow * 1.3, ct * 1.4);
-                    caustic = pow(caustic, 1.8) * (0.6 + 0.4 * _Caustics);
+                    // Caustics on the submerged walls/floor are now projected in
+                    // world space (see caustics.glsl) by the underwater pass when
+                    // the camera is below the surface, so the glass itself only
+                    // shows its body colour + SSS + sky reflection here.
                     // Sky/environment reflection.
                     vec3 R = reflect(-V, Nv);
                     vec3 sky = sky_tint(R);
-                    // Combine: base water color + SSS + caustic web (brighter
-                    // toward the floor), then blend toward sky via fresnel.
-                    vec3 causCol = mix(_SSSColor, vec3(1.0), 0.4);
-                    vec3 col = waterBody + sss * 0.5 + causCol * caustic * (0.3 + 0.4 * _Caustics) * (1.2 - h);
+                    vec3 col = waterBody + sss * 0.5;
                     col = mix(col, sky, fr * 0.45);
                     // Sun specular on the glass surface.
                     vec3 Hh = normalize(V + L);
@@ -661,20 +655,6 @@ Shader "Zarin/Water"
                 vec3 sss = _SSSColor * sssAmount * (0.35 + 0.85 * crest) * _SunIntensity;
                 if (backface) sss *= 1.8;
                 color += sss * 0.6;
-
-                // Caustics: animated Voronoi web seen through the clear water
-                // (or projected on the pond floor). For the pond (box) with no
-                // scene depth, fall back to a fixed shallow factor.
-                if (_Caustics > 0.0 && depthT < 0.94) {
-                    float ct = _Time * _DetailSpeed;
-                    vec2 flow = vec2(ct * 0.05, -ct * 0.04);
-                    float caus = caustic_web(dc * 2.2 + flow, ct);
-                    caus = caus * 0.65 + 0.35 * caustic_web(dc * 4.7 - flow * 1.3, ct * 1.4);
-                    caus = pow(caus, 1.8);
-                    float causDepth = (_IsBox == 1) ? 0.6 : (1.0 - depthT);
-                    vec3 causCol = mix(_SSSColor, vec3(1.0), 0.4) * causDepth * _Caustics;
-                    color += causCol * caus * 0.55;
-                }
 
                 // Sun specular highlight (Blinn-Phong), perturbed by the detail
                 // normal for a moving sun glitter.
