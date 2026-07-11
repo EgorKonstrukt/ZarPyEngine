@@ -14,9 +14,31 @@ import os
 import json
 import shutil
 import argparse
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def _rmtree_robust(path):
+    for attempt in range(5):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt < 4:
+                time.sleep(0.5)
+                continue
+            try:
+                trash = str(path) + ".old_" + str(int(time.time()))
+                os.rename(str(path), trash)
+                shutil.rmtree(trash, ignore_errors=True)
+                return
+            except Exception:
+                shutil.rmtree(str(path), ignore_errors=True)
+                return
 
 if sys.platform == "win32":
     _ASSIMP_SRC = "assimp-vc143-mt.dll"
@@ -191,38 +213,6 @@ def build():
     print(f"Root: {ROOT}")
     print()
 
-    # Uninstall heavy optional packages before build
-    # Nuitka's --exclude-module doesn't work when packages are installed
-    # because --include-package follows transitive imports
-    PACKAGES_TO_REMOVE = [
-
-
-        "pygments", "pydantic", "pydantic-core", "pydantic-settings",
-        "mcp", "httpx", "starlette", "cryptography",
-        "pydub", "zstandard", "psutil", "anyio",
-        "jinja2", "markupsafe",
-        "pynput", "openal", "pyopenal", "pyogg",
-    ]
-
-    # Save which packages were actually uninstalled for reinstall
-    removed = []
-    for pkg in PACKAGES_TO_REMOVE:
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "uninstall", pkg, "-y"],
-                capture_output=True, text=True
-            )
-            if result.returncode == 0 and "Successfully uninstalled" in result.stdout:
-                removed.append(pkg)
-                print(f"  Removed: {pkg}")
-        except Exception:
-            pass
-
-    if removed:
-        print(f"Uninstalled {len(removed)} packages for clean build\n")
-    else:
-        print("No optional packages to remove\n")
-
     # Load build settings
     bs = _load_build_settings()
     included_scenes = _get_included_scenes(bs)
@@ -286,13 +276,13 @@ def build():
 
     if OUTPUT_DIR.exists():
         print(f"Cleaning old output: {OUTPUT_DIR}")
-        shutil.rmtree(OUTPUT_DIR)
+        _rmtree_robust(OUTPUT_DIR)
 
     # Clean ALL Nuitka build artifacts (stale .c files from previous builds)
     for stale_dir in [ROOT / "player.build", ROOT / "main.build"]:
         if stale_dir.exists():
             print(f"Cleaning stale build dir: {stale_dir}")
-            shutil.rmtree(stale_dir, ignore_errors=True)
+            _rmtree_robust(stale_dir)
 
     # Clean Nuitka cache to force fresh compilation
     nuitka_cache = Path(os.path.expanduser("~")) / ".cache" / "nuitka"
@@ -344,7 +334,7 @@ def build():
         # Create a temp scenes directory with only included scenes
         temp_scenes = ROOT / "_build_scenes"
         if temp_scenes.exists():
-            shutil.rmtree(temp_scenes)
+            _rmtree_robust(temp_scenes)
         temp_scenes.mkdir(parents=True)
         for scene in included_scenes:
             dest = temp_scenes / Path(scene).name
@@ -362,7 +352,7 @@ def build():
     # Include only referenced assets (or all if strip_unused is false)
     temp_assets = ROOT / "_build_assets"
     if temp_assets.exists():
-        shutil.rmtree(temp_assets)
+        _rmtree_robust(temp_assets)
 
     if strip_unused:
         # Copy only referenced assets to temp directory (even if empty)
@@ -424,7 +414,7 @@ def build():
     for d in ["_build_scenes", "_build_assets"]:
         p = ROOT / d
         if p.exists():
-            shutil.rmtree(p)
+            _rmtree_robust(p)
 
     if result.returncode != 0:
         print(f"\nBuild failed with code {result.returncode}")
