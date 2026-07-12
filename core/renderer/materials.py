@@ -30,6 +30,7 @@ class MaterialManager:
     def __init__(self, ctx: moderngl.Context):
         self._ctx = ctx
         self._material_cache: dict[str, Material] = {}
+        self._prog_uniform_names: dict[int, frozenset] = {}
         self._texture_cache: dict[str, Any] = {}
         self._pending_texture_queue: list = []
         self._async_lock = None
@@ -41,18 +42,20 @@ class MaterialManager:
     def load_material(self, path: str) -> Optional[Material]:
         if not path:
             return None
+        cached = self._material_cache.get(path)
+        if cached is not None:
+            return cached
         eng = Engine.instance()
         root = eng.project_root if eng and eng.project_root else os.getcwd()
         abs_path = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
         lib_mat = MaterialLibrary._materials.get(abs_path)
-        cached = self._material_cache.get(abs_path)
-        if lib_mat is not None and lib_mat is not cached:
+        if lib_mat is not None:
+            self._material_cache[path] = lib_mat
             self._material_cache[abs_path] = lib_mat
             return lib_mat
-        if cached is not None:
-            return cached
         m = Material.load(abs_path, root)
         if m:
+            self._material_cache[path] = m
             self._material_cache[abs_path] = m
         return m
 
@@ -179,44 +182,51 @@ class MaterialManager:
     }
 
     def apply_material(self, mat: Optional[Material], prog: moderngl.Program):
+        names = self._prog_uniform_names.get(id(prog))
+        if names is None:
+            try:
+                names = frozenset(prog)
+            except Exception:
+                names = frozenset()
+            self._prog_uniform_names[id(prog)] = names
         self._default_white.use(0)
-        if "u_albedo_tex" in prog:
+        if "u_albedo_tex" in names:
             prog["u_albedo_tex"].value = 0
-        if "u_albedo_color" in prog:
+        if "u_albedo_color" in names:
             prog["u_albedo_color"].write(np.array([1, 1, 1, 1], dtype=np.float32).tobytes())
-        if "u_metallic" in prog:
+        if "u_metallic" in names:
             prog["u_metallic"].value = 0.0
-        if "u_smoothness" in prog:
+        if "u_smoothness" in names:
             prog["u_smoothness"].value = 0.5
-        if "u_emission" in prog:
+        if "u_emission" in names:
             prog["u_emission"].write(np.zeros(3, dtype=np.float32).tobytes())
-        if "u_normal_tex" in prog:
+        if "u_normal_tex" in names:
             prog["u_normal_tex"].value = 0
-        if "u_roughness_tex" in prog:
+        if "u_roughness_tex" in names:
             prog["u_roughness_tex"].value = 0
         for _old_active in ("u_use_albedo_tex", "u_use_normal_tex", "u_use_roughness_tex"):
-            if _old_active in prog:
+            if _old_active in names:
                 prog[_old_active].value = 0
-        if "_BaseMap" in prog:
+        if "_BaseMap" in names:
             prog["_BaseMap"].value = 0
-        if "_BaseColor" in prog:
+        if "_BaseColor" in names:
             prog["_BaseColor"].write(np.array([1, 1, 1, 1], dtype=np.float32).tobytes())
-        if "_Metallic" in prog:
+        if "_Metallic" in names:
             prog["_Metallic"].value = 0.0
-        if "_Smoothness" in prog:
+        if "_Smoothness" in names:
             prog["_Smoothness"].value = 0.5
-        if "_EmissionColor" in prog:
+        if "_EmissionColor" in names:
             prog["_EmissionColor"].write(np.zeros(3, dtype=np.float32).tobytes())
-        if "_EmissionIntensity" in prog:
+        if "_EmissionIntensity" in names:
             prog["_EmissionIntensity"].value = 0.0
-        if "_NormalMap" in prog:
+        if "_NormalMap" in names:
             prog["_NormalMap"].value = 0
-        if "_OcclusionMap" in prog:
+        if "_OcclusionMap" in names:
             prog["_OcclusionMap"].value = 0
         for _active in ("_BaseMap_Active", "_NormalMap_Active", "_OcclusionMap_Active",
                         "_HeightMap_Active", "_EmissionMap_Active", "_DetailAlbedoMap_Active",
                         "_DetailNormalMap_Active"):
-            if _active in prog:
+            if _active in names:
                 prog[_active].value = 0
         if mat is None:
             return
@@ -227,7 +237,7 @@ class MaterialManager:
             if isinstance(value, str):
                 tex_name = tex_uniform_map.get(key, key)
                 tex = None
-                if value and tex_name in prog:
+                if value and tex_name in names:
                     tex = self.load_texture(value)
                     if tex:
                         tex.use(tex_unit)
@@ -235,16 +245,16 @@ class MaterialManager:
                         tex_unit += 1
                 tex_active = 1 if tex else 0
                 for aname in (f"{tex_name}_Active", f"u_use_{tex_name[2:]}" if tex_name.startswith("u_") else None):
-                    if aname and aname in prog:
+                    if aname and aname in names:
                         prog[aname].value = tex_active
                 continue
-            if key in prog:
+            if key in names:
                 self._set_uniform_value(prog, key, value)
-            elif f"u_{key}" in prog:
+            elif f"u_{key}" in names:
                 self._set_uniform_value(prog, f"u_{key}", value)
             else:
                 alias = self._UNIFORM_ALIASES.get(key)
-                if alias and alias in prog:
+                if alias and alias in names:
                     self._set_uniform_value(prog, alias, value)
 
     def _set_uniform_value(self, prog, name: str, value):

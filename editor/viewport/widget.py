@@ -604,10 +604,10 @@ class SceneViewport(QOpenGLWidget):
                             from editor.viewport.collaboration import send_collab_selection; send_collab_selection(self)
             if not eng.play_mode:
                 self._update_editor_particles(dt, self._selected_entities)
+                self._cam.update(dt)
+                with eng._scene_lock:
+                    self._gizmos_api.update(dt)
             send_collab_camera(self)
-            self._cam.update(dt)
-            with eng._scene_lock:
-                self._gizmos_api.update(dt)
         self._update_status_labels()
         prof = eng._profiler if hasattr(eng, '_profiler') else None
         in_frame = prof is not None and len(prof._stack) > 0 and prof._stack[0][0] == "frame"
@@ -641,53 +641,54 @@ class SceneViewport(QOpenGLWidget):
                 dpr = self.devicePixelRatio()
                 self._renderer._line_width = max(1.0, float(dpr) * 1.0)
                 t1 = time.perf_counter()
-                if in_frame:
-                    prof.start("gizmo_wireframes")
-                if self._gizmo_visible:
+                if not eng.play_mode:
+                    if in_frame:
+                        prof.start("gizmo_wireframes")
+                    if self._gizmo_visible:
+                        with eng._scene_lock:
+                            render_component_gizmos(self, vp_mat)
+                    if in_frame:
+                        prof.stop("gizmo_wireframes")
                     with eng._scene_lock:
-                        render_component_gizmos(self, vp_mat)
-                if in_frame:
-                    prof.stop("gizmo_wireframes")
-                with eng._scene_lock:
-                    render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
-                if in_frame:
-                    prof.start("gizmo_icons")
-                try:
+                        render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
+                    if in_frame:
+                        prof.start("gizmo_icons")
+                    try:
+                        with eng._scene_lock:
+                            render_component_icons_gl(self)
+                    except Exception:
+                        pass
+                    if self._debug_lines:
+                        self._renderer.render_gizmo_lines(self._debug_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
+                        self._debug_lines.clear()
+                    if self._show_bvh_debug:
+                        self._render_bvh_debug()
                     with eng._scene_lock:
-                        render_component_icons_gl(self)
-                except Exception:
-                    pass
-                if self._debug_lines:
-                    self._renderer.render_gizmo_lines(self._debug_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
-                    self._debug_lines.clear()
-                if self._show_bvh_debug:
-                    self._render_bvh_debug()
-                with eng._scene_lock:
-                    draw_axis_gizmo_api(self, vp_mat)
-                    self._render_api_gizmos()
-                if self._pb_scale_gizmo and self._pb_scale_gizmo.active:
-                    self._pb_scale_gizmo.render()
-                if in_frame:
-                    prof.stop("gizmo_icons")
-                if in_frame:
-                    prof.start("gizmo_collab")
-                try:
-                    with eng._scene_lock:
-                        render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
-                except Exception:
-                    pass
-                if in_frame:
-                    prof.stop("gizmo_collab")
-                if self._gizmo_visible:
-                    gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
-                    if gizmo_result is not None:
-                        gs, ge, gcol = gizmo_result
-                        self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.0)
-                    else:
-                        gizmo_lines = self._gizmo.get_gizmo_lines(self._cam, fw, fh)
-                        if gizmo_lines:
-                            self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
-                eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
+                        draw_axis_gizmo_api(self, vp_mat)
+                        self._render_api_gizmos()
+                    if self._pb_scale_gizmo and self._pb_scale_gizmo.active:
+                        self._pb_scale_gizmo.render()
+                    if in_frame:
+                        prof.stop("gizmo_icons")
+                    if in_frame:
+                        prof.start("gizmo_collab")
+                    try:
+                        with eng._scene_lock:
+                            render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
+                    except Exception:
+                        pass
+                    if in_frame:
+                        prof.stop("gizmo_collab")
+                    if self._gizmo_visible:
+                        gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
+                        if gizmo_result is not None:
+                            gs, ge, gcol = gizmo_result
+                            self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.0)
+                        else:
+                            gizmo_lines = self._gizmo.get_gizmo_lines(self._cam, fw, fh)
+                            if gizmo_lines:
+                                self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
+                    eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
                 t2 = time.perf_counter()
                 if in_frame:
                     prof.start("overlay_draw")
