@@ -1,4 +1,4 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
@@ -11,7 +11,7 @@ from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QScrollArea, QLabel, QLineEdit, QPushButton, QCheckBox, QDoubleSpinBox,
     QSpinBox, QComboBox, QGroupBox, QFrame, QMenu, QDialog, QTextEdit,
-    QPlainTextEdit)
+    QPlainTextEdit, QSizePolicy)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QColor
 from core.config.editor_scale import scale, scale_xy
@@ -281,7 +281,9 @@ class InspectorPanel(QDockWidget):
         rl.setContentsMargins(0, 2, 0, 2)
         rl.setSpacing(4)
         lbl = QLabel(label)
-        lbl.setFixedWidth(scale(120))
+        lbl.setMinimumWidth(scale(120))
+        lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         rl.addWidget(lbl)
         rl.addWidget(widget)
         self._add_asset_widget(row)
@@ -514,7 +516,9 @@ class InspectorPanel(QDockWidget):
         shader_rl = QHBoxLayout(shader_row)
         shader_rl.setContentsMargins(0, 2, 0, 2)
         shader_lbl = QLabel("Shader")
-        shader_lbl.setFixedWidth(scale(120))
+        shader_lbl.setMinimumWidth(scale(120))
+        shader_lbl.setWordWrap(True)
+        shader_lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         shader_rl.addWidget(shader_lbl)
         def _on_shader_pick(p):
             mat.shader_path = p
@@ -568,7 +572,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             def _on_pick(p):
                 props[key] = p
@@ -582,7 +588,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             from editor.color_picker import ColorLineEdit
             cl = ColorLineEdit(props.get(key, [1.0, 1.0, 1.0, 1.0]))
@@ -598,7 +606,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             sb = QDoubleSpinBox()
             sb.setRange(sp.range_min, sp.range_max)
@@ -616,7 +626,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             if prop_type == "Int":
                 sb = QSpinBox()
@@ -638,7 +650,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             from editor.gradient_editor import GradientLineEdit
             gle = GradientLineEdit(props.get(key, None))
@@ -660,7 +674,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             def _on_pick(p, _key=key):
                 props[_key] = p
@@ -674,7 +690,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             from editor.color_picker import ColorLineEdit
             cl = ColorLineEdit(props.get(key, [1.0, 1.0, 1.0, 1.0]))
@@ -690,7 +708,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             sb = QDoubleSpinBox()
             sb.setRange(cfg.get("min", 0.0), cfg.get("max", 1.0))
@@ -708,7 +728,9 @@ class InspectorPanel(QDockWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 2, 0, 2)
             lbl = QLabel(label)
-            lbl.setFixedWidth(scale(120))
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl)
             from editor.gradient_editor import GradientLineEdit
             gle = GradientLineEdit(props.get(key, None))
@@ -1128,3 +1150,5 @@ class InspectorPanel(QDockWidget):
         prefab_path = PrefabLibrary.path_for_guid(self._entity._prefab_guid)
         if prefab_path:
             self.open_prefab_editor.emit(prefab_path)
+
+

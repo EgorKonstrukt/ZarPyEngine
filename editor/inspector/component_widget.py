@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QDoubleSpinBox, QSpinBox, \
-    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit
+    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
 from core.config.editor_scale import scale, scale_xy
@@ -378,8 +378,10 @@ class ComponentWidget(QWidget):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(4)
         lbl = QLabel(label)
-        lbl.setFixedWidth(scale(100))
-        rl.addWidget(lbl)
+        lbl.setMinimumWidth(scale(100))
+        lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        rl.addWidget(lbl, 0)
         rl.addWidget(widget, 1)
         if prop_name:
             comp_type = type(self._component).__name__
@@ -969,9 +971,11 @@ class ComponentWidget(QWidget):
         item_label = self._list_item_label(prop_name, index)
         if item_label:
             lbl = QLabel(item_label)
-            lbl.setFixedWidth(scale(90))
+            lbl.setMinimumWidth(scale(90))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             lbl.setStyleSheet(f"color: {_accent()}; font-size: 10px;")
-            rl.addWidget(lbl)
+            rl.addWidget(lbl, 0)
         elem_widget = QWidget()
         elem_widget.setStyleSheet("background: transparent;")
         el = QHBoxLayout(elem_widget)

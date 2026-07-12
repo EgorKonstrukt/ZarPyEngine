@@ -1,4 +1,4 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from typing import Optional, Callable
 from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSpinBox, QSlider, QDialog, QFileDialog, \
-    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect, QStyle
+    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect, QStyle, QSizePolicy
 from PyQt6.QtCore import Qt, QObject, QEvent, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as QF
 from core.config.editor_scale import scale, scale_xy
@@ -472,7 +472,9 @@ def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubl
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setFixedWidth(scale(80))
+    lbl.setMinimumWidth(scale(80))
+    lbl.setWordWrap(True)
+    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
@@ -493,7 +495,9 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setFixedWidth(scale(80))
+    lbl.setMinimumWidth(scale(80))
+    lbl.setWordWrap(True)
+    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:
@@ -521,7 +525,9 @@ def make_vec4_row(label: str, vec: Vec4, callback) -> tuple[QWidget, list[QDoubl
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setFixedWidth(scale(80))
+    lbl.setMinimumWidth(scale(80))
+    lbl.setWordWrap(True)
+    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z"), (vec.w, "W")]:
@@ -540,7 +546,9 @@ def make_vec2_slider_row(label: str, vec: Vec2, callback, lo=0.0, hi=1.0) -> tup
     layout.setSpacing(2)
     if label:
         lbl = QLabel(label)
-        lbl.setFixedWidth(scale(80))
+        lbl.setMinimumWidth(scale(80))
+        lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
@@ -561,7 +569,9 @@ def make_vec3_slider_row(label: str, vec: Vec3, callback, lo=0.0, hi=1.0) -> tup
     layout.setSpacing(2)
     if label:
         lbl = QLabel(label)
-        lbl.setFixedWidth(scale(80))
+        lbl.setMinimumWidth(scale(80))
+        lbl.setWordWrap(True)
+        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:
@@ -604,3 +614,5 @@ def collapse_value(v):
     if hasattr(v, '__iter__') and not isinstance(v, (str, bytes, dict)):
         return list(v)
     return v
+
+

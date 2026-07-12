@@ -127,6 +127,11 @@ def _get_dll():
                 d.aiImportFile.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
                 d.aiImportFile.restype = ctypes.POINTER(aiScene)
                 d.aiReleaseImport.argtypes = [ctypes.POINTER(aiScene)]
+                if hasattr(d, 'aiGetMaterialString'):
+                    d.aiGetMaterialString.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                                      ctypes.c_uint, ctypes.c_uint,
+                                                      ctypes.POINTER(aiString)]
+                    d.aiGetMaterialString.restype = ctypes.c_uint
                 _dll = d
                 return d
         except Exception:
@@ -135,10 +140,30 @@ def _get_dll():
     raise RuntimeError("Assimp library not found")
 
 
+def _read_material_name(scene, mat_idx):
+    try:
+        if not scene.mMaterials or mat_idx >= scene.mNumMaterials or mat_idx < 0:
+            return ""
+        dll = _get_dll()
+        if not hasattr(dll, 'aiGetMaterialString'):
+            return ""
+        mats = ctypes.cast(scene.mMaterials, ctypes.POINTER(ctypes.c_void_p))
+        s = aiString()
+        dll.aiGetMaterialString(ctypes.c_void_p(mats[mat_idx]), b"?mat.name", 0, 0, ctypes.byref(s))
+        return s.data.decode("utf-8", "ignore")[:s.length]
+    except Exception:
+        return ""
+
+
 def _collect_meshes(node_ptr, scene, mesh_parts):
     if not node_ptr:
         return
     node = ctypes.cast(node_ptr, ctypes.POINTER(aiNode)).contents
+    node_name = ""
+    try:
+        node_name = node.mName.data.decode("utf-8", "ignore")[:node.mName.length]
+    except Exception:
+        node_name = ""
     for i in range(node.mNumMeshes):
         mesh_idx = node.mMeshes[i]
         mesh_ptr = scene.mMeshes[mesh_idx]
@@ -147,11 +172,14 @@ def _collect_meshes(node_ptr, scene, mesh_parts):
         mesh = mesh_ptr.contents
         nv = mesh.mNumVertices
         nf = mesh.mNumFaces
-        name = ""
-        try:
-            name = mesh.mName.data.decode("utf-8", "ignore")[:mesh.mName.length]
-        except Exception:
-            name = ""
+        name = _read_material_name(scene, mesh.mMaterialIndex)
+        if not name:
+            name = node_name
+        if not name:
+            try:
+                name = mesh.mName.data.decode("utf-8", "ignore")[:mesh.mName.length]
+            except Exception:
+                name = ""
         if nv == 0 or not mesh.mVertices:
             mesh_parts.append((np.zeros(nv * 3, dtype=np.float32),
                                np.full(nv * 3, 1.0, dtype=np.float32),
