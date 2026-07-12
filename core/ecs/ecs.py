@@ -137,7 +137,7 @@ class Component:
 
     @classmethod
     def deserialize(cls, data: dict) -> Component:
-        inst = cls.__new__(cls)
+        inst = cls()
         inst.enabled = data.get("enabled", True)
         inst._entity = None
         return inst
