@@ -21,16 +21,56 @@ _COMPONENT_MIME = "application/x-zpe-component"
 
 _FUSION_ACCENT_CACHE = None
 
+
+def _palette_color(role, fallback: str = "#000000") -> str:
+    app = QApplication.instance()
+    if app:
+        return app.palette().color(role).name()
+    return fallback
+
+
 def _accent() -> str:
     global _FUSION_ACCENT_CACHE
     if _FUSION_ACCENT_CACHE is None:
-        app = QApplication.instance()
-        if app:
-            c = app.palette().color(QPalette.ColorRole.Highlight)
-            _FUSION_ACCENT_CACHE = c.name()
-        else:
-            _FUSION_ACCENT_CACHE = "#5a9cf5"
+        _FUSION_ACCENT_CACHE = _palette_color(QPalette.ColorRole.Highlight, "#5a9cf5")
     return _FUSION_ACCENT_CACHE
+
+
+def _text() -> str:
+    return _palette_color(QPalette.ColorRole.Text, "#cccccc")
+
+
+def _window_text() -> str:
+    return _palette_color(QPalette.ColorRole.WindowText, "#cccccc")
+
+
+def _base() -> str:
+    return _palette_color(QPalette.ColorRole.Base, "#1e1e1e")
+
+
+def _alternate() -> str:
+    return _palette_color(QPalette.ColorRole.AlternateBase, "#252526")
+
+
+def _mid() -> str:
+    return _palette_color(QPalette.ColorRole.Mid, "#555555")
+
+
+def _button() -> str:
+    return _palette_color(QPalette.ColorRole.Button, "#2d2d2d")
+
+
+def _highlight() -> str:
+    return _palette_color(QPalette.ColorRole.Highlight, "#5a9cf5")
+
+
+def _highlighted_text() -> str:
+    return _palette_color(QPalette.ColorRole.HighlightedText, "#ffffff")
+
+
+def _placeholder() -> str:
+    return _palette_color(QPalette.ColorRole.PlaceholderText, "#888888")
+
 
 def _border_focus() -> str:
     return _accent()

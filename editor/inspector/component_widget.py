@@ -24,9 +24,8 @@ from core.components.animation.animator_controller import (
 )
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
 from core.config.config import get_project_config
-from editor.inspector.constants import (_FUSION_ACCENT_GREEN, _FUSION_ACCENT_RED,
-    _FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS,
-    _COMPONENT_MIME, _accent)
+from editor.inspector.constants import (_FUSION_CARD_RADIUS, _FUSION_INPUT_RADIUS,
+    _COMPONENT_MIME, _accent, _window_text, _base, _mid, _alternate)
 from editor.inspector.helpers import (make_spinbox, make_clickable_label, get_component_icon_pixmap,
     get_component_source_path, get_property_line_number, collapse_value, make_resource_picker,
     make_gameobject_picker, make_resource_type_picker, make_asset_picker, make_vec2_row,
@@ -46,11 +45,6 @@ class ComponentWidget(QWidget):
         self._component_key = component_key
         self._updating = False
         self._collapsed = False
-        self.setStyleSheet(f"""
-            ComponentWidget {{
-                border-radius: {_FUSION_CARD_RADIUS};
-            }}
-        """)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -79,7 +73,6 @@ class ComponentWidget(QWidget):
         self._enabled_cb = QCheckBox()
         self._enabled_cb.setChecked(component.enabled)
         self._enabled_cb.toggled.connect(self._on_enabled_toggled)
-        self._enabled_cb.setStyleSheet(f"background: transparent;")
         header_layout.addWidget(self._enabled_cb)
         self._move_up_btn = QPushButton("^")
         self._move_up_btn.setFixedSize(*scale_xy(16, 16))
@@ -95,12 +88,6 @@ class ComponentWidget(QWidget):
         main_layout.addWidget(self._header_widget)
         self._content_widget = QWidget()
         self._content_widget.setObjectName("compBody")
-        self._content_widget.setStyleSheet(f"""
-            #compBody {{
-                border-bottom-left-radius: {_FUSION_CARD_RADIUS};
-                border-bottom-right-radius: {_FUSION_CARD_RADIUS};
-            }}
-        """)
         self._layout = QVBoxLayout(self._content_widget)
         self._layout.setContentsMargins(8, 6, 8, 6)
         self._layout.setSpacing(3)
@@ -373,7 +360,6 @@ class ComponentWidget(QWidget):
 
     def _add_field(self, label: str, widget: QWidget, prop_name: str = "", toggle_field: str = ""):
         row = QWidget()
-        row.setStyleSheet(f"background: transparent;")
         rl = QHBoxLayout(row)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(4)
@@ -398,14 +384,6 @@ class ComponentWidget(QWidget):
         prop_name = field.name
         if field.field_type.value == "header":
             header = QLabel(f"  {field.label}")
-            header.setStyleSheet(f"""
-                QLabel {{
-                    color: {_accent()};
-                    font-weight: 600;
-                    font-size: 11px;
-                    padding: 5px 0 3px 0;
-                }}
-            """)
             self._layout.addWidget(header)
             return
         value = getattr(c, prop_name)
@@ -438,29 +416,6 @@ class ComponentWidget(QWidget):
             slider.setRange(int(field.min_val * _slider_scale), int(field.max_val * _slider_scale))
             slider.setValue(int(value * _slider_scale))
             slider.setSingleStep(max(1, int(field.step * _slider_scale)))
-            slider.setStyleSheet(f"""
-                QSlider::groove:horizontal {{
-                    border: none;
-                    height: 4px;
-                    background: {self.palette().mid().color().name()};
-                    border-radius: 2px;
-                }}
-                QSlider::handle:horizontal {{
-                    background: {_accent()};
-                    border: none;
-                    width: 10px;
-                    height: 10px;
-                    margin: -3px 0;
-                    border-radius: 5px;
-                }}
-                QSlider::handle:horizontal:hover {{
-                    background: #7bb5ff;
-                }}
-                QSlider::sub-page:horizontal {{
-                    background: {_accent()};
-                    border-radius: 2px;
-                }}
-            """)
             sb = make_spinbox(value, field.min_val, field.max_val, field.step, field.decimals)
             comp_cls = type(c)
             sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
@@ -492,28 +447,6 @@ class ComponentWidget(QWidget):
             slider.setRange(min_i, max_i)
             slider.setValue(max(min_i, min(max_i, int(value))))
             slider.setSingleStep(max(1, int(field.step)))
-            slider.setStyleSheet(f"""
-                QSlider::groove:horizontal {{
-                    border: none;
-                    height: 4px;
-                    border-radius: 2px;
-                }}
-                QSlider::handle:horizontal {{
-                    background: {_accent()};
-                    border: none;
-                    width: 10px;
-                    height: 10px;
-                    margin: -3px 0;
-                    border-radius: 5px;
-                }}
-                QSlider::handle:horizontal:hover {{
-                    background: #7bb5ff;
-                }}
-                QSlider::sub-page:horizontal {{
-                    background: {_accent()};
-                    border-radius: 2px;
-                }}
-            """)
             sb = QSpinBox()
             sb.setRange(min_i, max_i)
             sb.setValue(max(min_i, min(max_i, int(value))))
@@ -546,11 +479,6 @@ class ComponentWidget(QWidget):
             self._toggle_checkboxes[prop_name] = cb
         elif field.field_type.value == "button":
             btn = QPushButton(field.label)
-            btn.setStyleSheet(f"""
-                QPushButton:hover {{
-                    border-color: {_accent()};
-                }}
-            """)
             btn.clicked.connect(lambda: getattr(c, prop_name, lambda: None)())
             self._add_field("", btn)
         elif field.field_type.value == "color":
@@ -640,30 +568,12 @@ class ComponentWidget(QWidget):
                 te = QPlainTextEdit()
                 te.setPlainText(str(value) if value else "")
                 te.setFixedHeight(scale(60))
-                te.setStyleSheet(f"""
-                    QPlainTextEdit {{
-                        border-radius: {_FUSION_INPUT_RADIUS};
-                        padding: 2px 4px;
-                        font-size: 11px;
-                        selection-background-color: {_accent()};
-                    }}
-                    QPlainTextEdit:focus {{ border-color: {_accent()}; }}
-                """)
                 te.textChanged.connect(lambda: setattr(c, prop_name, te.toPlainText()))
                 comp_cls = type(c)
                 te.focusOutEvent = lambda ev: (get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.toPlainText())), QPlainTextEdit.focusOutEvent(te, ev))
             else:
                 te = QLineEdit()
                 te.setText(str(value) if value else "")
-                te.setStyleSheet(f"""
-                    QLineEdit {{
-                        border-radius: {_FUSION_INPUT_RADIUS};
-                        padding: 2px 4px;
-                        font-size: 11px;
-                        selection-background-color: {_accent()};
-                    }}
-                    QLineEdit:focus {{ border-color: {_accent()}; }}
-                """)
                 te.textChanged.connect(lambda: setattr(c, prop_name, te.text()))
                 comp_cls = type(c)
                 te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
@@ -882,7 +792,7 @@ class ComponentWidget(QWidget):
         add_btn = QPushButton("+")
         add_btn.setFixedSize(*scale_xy(18, 18))
         add_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_ACCENT_GREEN}; font-size: 10px; background: transparent; border: none; }}
+            QPushButton {{ color: {_accent()}; font-size: 10px; background: transparent; border: none; }}
         """)
         add_btn.clicked.connect(lambda: self._list_add_item(c, prop_name))
         hl.addStretch()
@@ -964,7 +874,7 @@ class ComponentWidget(QWidget):
         remove_btn = QPushButton("\u2212")
         remove_btn.setFixedSize(*scale_xy(16, 16))
         remove_btn.setStyleSheet(f"""
-            QPushButton {{ color: {_FUSION_ACCENT_RED}; font-size: 10px; background: transparent; border: none; }}
+            QPushButton {{ color: {_window_text()}; font-size: 10px; background: transparent; border: none; }}
         """)
         remove_btn.clicked.connect(lambda: self._list_remove_item(self._component, prop_name, index))
         rl.addWidget(remove_btn)
@@ -974,10 +884,8 @@ class ComponentWidget(QWidget):
             lbl.setMinimumWidth(scale(90))
             lbl.setWordWrap(True)
             lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-            lbl.setStyleSheet(f"color: {_accent()}; font-size: 10px;")
             rl.addWidget(lbl, 0)
         elem_widget = QWidget()
-        elem_widget.setStyleSheet("background: transparent;")
         el = QHBoxLayout(elem_widget)
         el.setContentsMargins(0, 0, 0, 0)
         el.setSpacing(2)
