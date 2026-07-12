@@ -189,7 +189,7 @@ def _read_mesh_import(path: str) -> dict:
     settings = {
         "scale": 1.0,
         "center_pivot": False,
-        "flip_uvs": False,
+        "flip_uvs": True,
         "smooth_angle": 30.0,
         "gen_normals": True,
         "gen_uvs": True,

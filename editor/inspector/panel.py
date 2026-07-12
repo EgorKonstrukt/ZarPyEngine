@@ -312,7 +312,7 @@ class InspectorPanel(QDockWidget):
         pivot_cb.toggled.connect(lambda v: self._save_import_setting("center_pivot", v))
         self._build_labeled_field("Center Pivot", pivot_cb)
         flip_uv_cb = QCheckBox()
-        flip_uv_cb.setChecked(settings.get("flip_uvs", False))
+        flip_uv_cb.setChecked(settings.get("flip_uvs", True))
         flip_uv_cb.toggled.connect(lambda v: self._save_import_setting("flip_uvs", v))
         self._build_labeled_field("Flip UVs", flip_uv_cb)
         smooth_sb = QDoubleSpinBox()

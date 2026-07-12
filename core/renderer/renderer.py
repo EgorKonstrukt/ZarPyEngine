@@ -1918,7 +1918,7 @@ void main() {
 
     def _sync_import_meta(self, mesh_path: str) -> tuple:
         if not mesh_path:
-            return (1.0, False, False, 30.0, True, True)
+            return (1.0, False, True, 30.0, True, True)
         import_cache = self._resolve_import_meta_path(mesh_path)
         try:
             mtime = os.path.getmtime(import_cache) if os.path.exists(import_cache) else -1.0
@@ -1941,9 +1941,9 @@ void main() {
                     bool(_s.get("gen_uvs", True)),
                 )
             except Exception:
-                meta = (1.0, False, False, 30.0, True, True)
+                meta = (1.0, False, True, 30.0, True, True)
         else:
-            meta = (1.0, False, False, 30.0, True, True)
+            meta = (1.0, False, True, 30.0, True, True)
         old = self._import_meta_cache.get(mesh_path)
         self._import_meta_cache[mesh_path] = meta
         if old is not None and old != meta and self._mesh_loader is not None:
