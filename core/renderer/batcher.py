@@ -242,7 +242,7 @@ class RenderBatcher:
         model = wm
         model_f32 = model.to_f32()
         if "u_model" in prog:
-            prog["u_model"].write(model_f32.tobytes())
+            prog["u_model"].write(model_f32)
         nm = normal_cache.get(ent._id)
         if nm is None:
             try:

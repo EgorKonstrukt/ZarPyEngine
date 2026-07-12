@@ -56,8 +56,8 @@ def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
 
 class ShadowRenderer:
     def __init__(self, ctx: moderngl.Context, shadow_prog: moderngl.Program,
-                 shadow_resolution: int = 4096, shadow_distance: float = 50.0,
-                 area_shadow_resolution: int = 8192):
+                  shadow_resolution: int = 1024, shadow_distance: float = 50.0,
+                  area_shadow_resolution: int = 1024):
         self._ctx = ctx
         self._prog = shadow_prog
         self._shadow_resolution = shadow_resolution
@@ -187,7 +187,7 @@ class ShadowRenderer:
                 if mesh is None and not mf.mesh_path:
                     mesh = self._get_mesh(mf.mesh_name)
             if mesh:
-                result.append((mesh, tr.world_matrix))
+                result.append((mesh, tr))
         return result
 
     def _get_mesh(self, cache_key: str) -> Optional[MeshData]:
@@ -198,8 +198,8 @@ class ShadowRenderer:
         if key == self._shadow_groups_key and self._shadow_groups_cache is not None:
             return self._shadow_groups_cache
         groups = defaultdict(list)
-        for mesh, model_mat in renderable_shadow:
-            groups[id(mesh)].append((mesh, model_mat))
+        for mesh, tr in renderable_shadow:
+            groups[id(mesh)].append((mesh, tr))
         self._shadow_groups_cache = groups
         self._shadow_groups_key = key
         self._shadow_groups_ref = renderable_shadow
@@ -254,9 +254,9 @@ class ShadowRenderer:
         for mesh_id, group in groups.items():
             mesh, _ = group[0]
             n = len(group)
-            if n > 1 and supports_instancing:
+            if supports_instancing:
                 key = (mesh_id, id(prog))
-                model_mats = [m for _, m in group]
+                model_mats = [tr.world_matrix for _, tr in group]
                 vbo = self._build_shadow_instance_vbo(key, model_mats)
                 vao = self._get_shadow_vao(prog, mesh, vbo)
                 if "u_use_instancing" in prog:
@@ -265,8 +265,8 @@ class ShadowRenderer:
             else:
                 if "u_use_instancing" in prog:
                     prog["u_use_instancing"].value = 0
-                for _, model_mat in group:
-                    prog["u_model"].write(model_mat.to_f32().tobytes())
+                for _, tr in group:
+                    prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
                     mesh.render(prog)
         self._ctx.enable(moderngl.CULL_FACE)
 

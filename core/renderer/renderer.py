@@ -70,18 +70,20 @@ _TAAU_JITTER = [(_halton(i, 2) - 0.5, _halton(i, 3) - 0.5) for i in range(1, 9)]
 
 
 class _SpriteItem:
-    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'texture_path')
-    def __init__(self, world_matrix, color, flip_x, flip_y, texture_path):
+    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'texture_path', '_tr')
+    def __init__(self, world_matrix, color, flip_x, flip_y, texture_path, tr=None):
         self.world_matrix = world_matrix
+        self._tr = tr
         self.color = list(color) if color else [1, 1, 1, 1]
         self.flip_x = flip_x
         self.flip_y = flip_y
         self.texture_path = texture_path
 
 class _SvgItem:
-    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'abs_path', 'pixels_per_unit')
-    def __init__(self, world_matrix, color, flip_x, flip_y, abs_path, pixels_per_unit):
+    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'abs_path', 'pixels_per_unit', '_tr')
+    def __init__(self, world_matrix, color, flip_x, flip_y, abs_path, pixels_per_unit, tr=None):
         self.world_matrix = world_matrix
+        self._tr = tr
         self.color = list(color) if color else [1, 1, 1, 1]
         self.flip_x = flip_x
         self.flip_y = flip_y
@@ -89,9 +91,10 @@ class _SvgItem:
         self.pixels_per_unit = pixels_per_unit
 
 class _VideoItem:
-    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'video_path', 'entity_id', 'loop', 'volume', 'offset', 'audio_source_entity_id')
-    def __init__(self, world_matrix, color, flip_x, flip_y, video_path, entity_id, loop, volume, offset=0.0, audio_source_entity_id=""):
+    __slots__ = ('world_matrix', 'color', 'flip_x', 'flip_y', 'video_path', 'entity_id', 'loop', 'volume', 'offset', 'audio_source_entity_id', '_tr')
+    def __init__(self, world_matrix, color, flip_x, flip_y, video_path, entity_id, loop, volume, offset=0.0, audio_source_entity_id="", tr=None):
         self.world_matrix = world_matrix
+        self._tr = tr
         self.color = list(color) if color else [1, 1, 1, 1]
         self.flip_x = flip_x
         self.flip_y = flip_y
@@ -105,10 +108,10 @@ class _VideoItem:
 class _ProjectorItem:
     __slots__ = ('texture_path', 'color', 'intensity', 'range', 'spot_angle',
                  'aspect_ratio', 'near_plane', 'far_plane', 'vp_matrix',
-                 'position', 'direction', 'up', 'flip_y', 'flip_x', 'cast_shadows')
+                 'position', 'direction', 'up', 'flip_y', 'flip_x', 'cast_shadows', '_tr')
     def __init__(self, texture_path, color, intensity, range, spot_angle,
                  aspect_ratio, near_plane, far_plane, vp_matrix, position, direction, up,
-                 flip_y=True, flip_x=False, cast_shadows=True):
+                 flip_y=True, flip_x=False, cast_shadows=True, tr=None):
         self.texture_path = texture_path
         c = list(color) if color else [1, 1, 1]
         self.color = c[:3]
@@ -125,6 +128,21 @@ class _ProjectorItem:
         self.flip_y = flip_y
         self.flip_x = flip_x
         self.cast_shadows = cast_shadows
+        self._tr = tr
+
+    def refresh_vp(self):
+        tr = self._tr
+        if tr is None:
+            return
+        pos = tr.position
+        fwd = tr.forward
+        up = tr.up
+        view = Mat4.look_at(pos, pos + fwd, up)
+        proj = Mat4.perspective(self.spot_angle, self.aspect_ratio, self.near_plane, self.far_plane)
+        self.vp_matrix = (view @ proj).to_f32()
+        self.position = np.array(pos.to_array(), dtype=np.float32)
+        self.direction = np.array(fwd.to_array(), dtype=np.float32)
+        self.up = np.array(up.to_array(), dtype=np.float32)
 
 class _RenderSnapshot:
     __slots__ = (
@@ -215,14 +233,18 @@ class Renderer:
         self._culled_total: int = 0
         self._culled_visible: int = 0
         self._render_callback: Optional[Callable] = None
-        self._shadow_resolution: int = 4096
+        self._shadow_resolution: int = 1024
         self._shadow_distance: float = 50.0
+        self._render_scale: float = 1.0
         self._line_width: float = 0.6667
         self._clear_color: list = [0.18, 0.18, 0.18]
         self._import_meta_cache: dict[str, tuple] = {}
         self._import_meta_mtime: dict[str, float] = {}
         self._snap_cache: Optional[_RenderSnapshot] = None
         self._snap_version: int = -1
+        self._snap_struct_version: int = -1
+        self._snap_mesh_gen: int = -1
+        self._snap_scene: object = None
         self._normal_cache: dict[int, np.ndarray] = {}
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
@@ -293,6 +315,7 @@ class Renderer:
         self._max_lights = config.get("rendering.max_lights", self._max_lights)
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
+        self._render_scale = config.get("rendering.render_scale", self._render_scale)
         self._line_width = config.get("gizmo.line_width", self._line_width)
 
     def initialize(self):
@@ -991,8 +1014,13 @@ void main() {
 
     def _collect_snapshot(self, scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos) -> _RenderSnapshot:
         n_updated = scene.flush_transforms()
-        if (n_updated == 0 and self._snap_cache is not None
-                and self._snap_version == scene._render_version):
+        struct_version = scene._render_version
+        mesh_gen = self._mesh_loader._loaded_generation if self._mesh_loader else 0
+        if (self._snap_cache is not None
+                and self._snap_scene is scene
+                and self._snap_struct_version == struct_version
+                and self._snap_mesh_gen == mesh_gen):
+            self._refresh_snapshot_world_matrices(scene, n_updated)
             return self._snap_cache
         snap = _RenderSnapshot()
         if not self._import_meta_cache:
@@ -1059,11 +1087,11 @@ void main() {
                 sub_ranges = mesh.sub_mesh_ranges
                 if sub_ranges:
                     for sub_idx in range(len(sub_ranges)):
-                        snap.renderable.append((ent, tr, mesh, mr, wm, sub_idx))
+                        snap.renderable.append([ent, tr, mesh, mr, wm, sub_idx])
                 else:
-                    snap.renderable.append((ent, tr, mesh, mr, wm, -1))
+                    snap.renderable.append([ent, tr, mesh, mr, wm, -1])
                 if needs_shadow and mr.cast_shadows:
-                    snap.shadow_renderables.append((mesh, wm))
+                    snap.shadow_renderables.append([mesh, tr])
         for ent in scene.get_entities_with_component(SpriteRenderer):
             if not ent.active:
                 continue
@@ -1074,7 +1102,7 @@ void main() {
             if not tr:
                 continue
             snap.sprite_items.append(_SpriteItem(
-                tr.world_matrix, sr.color, sr.flip_x, sr.flip_y, sr.texture_path))
+                tr.world_matrix, sr.color, sr.flip_x, sr.flip_y, sr.texture_path, tr))
         for ent in scene.get_entities_with_component(VideoRenderer):
             if not ent.active:
                 continue
@@ -1087,7 +1115,7 @@ void main() {
             snap.video_items.append(_VideoItem(
                 tr.world_matrix, vr.color, vr.flip_x, vr.flip_y,
                 vr.video_path, ent._id, vr.loop, vr.volume, vr.offset,
-                vr.audio_source_entity_id))
+                vr.audio_source_entity_id, tr))
         for ent in scene.get_entities_with_component(SvgRenderer):
             if not ent.active:
                 continue
@@ -1100,7 +1128,7 @@ void main() {
             abs_path = self._svgs.resolve_path(sr.svg_path)
             snap.svg_items.append(_SvgItem(
                 tr.world_matrix, sr.color, sr.flip_x, sr.flip_y,
-                abs_path or "", sr.pixels_per_unit))
+                abs_path or "", sr.pixels_per_unit, tr))
         for ent in scene.get_entities_with_component(Projector):
             if not ent.active:
                 continue
@@ -1120,7 +1148,7 @@ void main() {
                 pj.texture_path, pj.color, pj.intensity, pj.range,
                 pj.spot_angle, pj.aspect_ratio, pj.near_plane, pj.far_plane,
                 vp, pos, fwd, up, flip_y=pj.flip_y, flip_x=pj.flip_x,
-                cast_shadows=pj.cast_shadows))
+                cast_shadows=pj.cast_shadows, tr=tr))
         for ent in scene.get_entities_with_component(ParticleSystem):
             if not ent.active:
                 continue
@@ -1137,16 +1165,46 @@ void main() {
             if ff and ff.enabled:
                 snap.force_fields.append(ff)
         self._snap_cache = snap
-        self._snap_version = scene._render_version
+        self._snap_version = struct_version
+        self._snap_struct_version = struct_version
+        self._snap_mesh_gen = mesh_gen
+        self._snap_scene = scene
         return snap
+
+    def _refresh_snapshot_world_matrices(self, scene, n_updated: int):
+        snap = self._snap_cache
+        if snap is None:
+            return
+        renderable = snap.renderable
+        for entry in renderable:
+            tr = entry[1]
+            if tr is not None:
+                entry[4] = tr.world_matrix
+        for item in snap.sprite_items:
+            tr = item._tr
+            if tr is not None:
+                item.world_matrix = tr.world_matrix
+        for item in snap.video_items:
+            tr = item._tr
+            if tr is not None:
+                item.world_matrix = tr.world_matrix
+        for item in snap.svg_items:
+            tr = item._tr
+            if tr is not None:
+                item.world_matrix = tr.world_matrix
+        for item in snap.projectors:
+            item.refresh_vp()
 
     def render_scene(self, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                      viewport_w: int, viewport_h: int, fbo=None,
                      selected_entities: Optional[set] = None,
                      cam_near: float = 0.01, cam_far: float = 1000.0, cam_fov: float = 60.0,
-                     display_w: int = None, display_h: int = None):
+                      display_w: int = None, display_h: int = None):
         if not self._initialized:
             return
+        _scale = self._render_scale
+        rw = max(1, int(round(viewport_w * _scale)))
+        rh = max(1, int(round(viewport_h * _scale)))
         _render_t0 = time.perf_counter()
         eng = Engine.instance()
         prof = eng._profiler if eng and hasattr(eng, '_profiler') else None
@@ -1173,7 +1231,7 @@ void main() {
         if fbo is not None:
             fbo.use()
             fbo.viewport = (0, 0, viewport_w, viewport_h)
-        self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+        self._ctx.viewport = (0, 0, rw, rh)
         self._ctx.enable(moderngl.DEPTH_TEST)
         self._ctx.enable(moderngl.CULL_FACE)
         self._ctx.cull_face = 'back'
@@ -1209,27 +1267,37 @@ void main() {
         proj_f32 = proj_mat.to_f32()
         if prof:
             prof.stop("gl_state_setup")
-        self._ensure_scene_fbo(viewport_w, viewport_h)
+        self._ensure_scene_fbo(rw, rh)
         self._ctx.disable(moderngl.BLEND)
         self._scene_fbo.use()
         self._scene_fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
-        aspect = viewport_w / max(1, viewport_h)
+        aspect = rw / max(1, rh)
+        if prof:
+            prof.start("mesh_async_load")
+        self._mesh_loader.process_pending()
+        if prof:
+            prof.stop("mesh_async_load")
         if prof:
             prof.start("render_shadow_pass")
-        shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {})
-        if snap.projectors:
-            self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
+        shadow_groups = {}
+        try:
+            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {})
+            if snap.projectors:
+                self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
+        except Exception as _sh_err:
+            import traceback as _tb
+            _tb.print_exc()
         if prof:
             prof.stop("render_shadow_pass")
         self._scene_fbo.use()
-        self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+        self._ctx.viewport = (0, 0, rw, rh)
         if sky_component and sky_component.enabled and self._skybox_cube and self._skybox_enabled:
             if prof:
                 prof.start("render_skybox")
             sky_component.render_sky(self._ctx, self._shaders, view_mat, proj_mat, dir_light, self._skybox_cube)
             if prof:
                 prof.stop("render_skybox")
-        self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+        self._ctx.viewport = (0, 0, rw, rh)
         if use_polygon_mode:
             self._ctx.wireframe = True
         if prof:
@@ -1237,11 +1305,6 @@ void main() {
         self._materials.process_texture_pending()
         if prof:
             prof.stop("process_pending_textures")
-        if prof:
-            prof.start("mesh_async_load")
-        self._mesh_loader.process_pending()
-        if prof:
-            prof.stop("mesh_async_load")
 
 
         self._culled_total = len(renderable) if renderable else 0
@@ -1249,14 +1312,9 @@ void main() {
         if renderable:
             try:
                 n = len(renderable)
-                wm_stack = np.array([entry[4]._d for entry in renderable])
-                centers = wm_stack[:, 3, :3].astype(np.float32)
-                cols = wm_stack[:, :3, :3]
-                sx = np.linalg.norm(cols[:, :, 0], axis=1)
-                sy = np.linalg.norm(cols[:, :, 1], axis=1)
-                sz = np.linalg.norm(cols[:, :, 2], axis=1)
-                max_scale = np.maximum(np.maximum(sx, sy), sz)
-                radii = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float32) * max_scale
+                from core._render_utils import build_frustum_cull_inputs as _bfci
+                radii_in = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float64)
+                centers, radii = _bfci(renderable, radii_in)
                 vp = proj_mat._d.T @ view_mat._d.T
                 visible = cpu_frustum_cull(centers, radii, vp)
                 self._culled_visible = len(visible)
@@ -1326,8 +1384,8 @@ void main() {
             self._ctx.wireframe = False
         if snap.projectors:
             self._scene_fbo.use()
-            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._scene_fbo.viewport = (0, 0, rw, rh)
+            self._ctx.viewport = (0, 0, rw, rh)
             self._ctx.disable(moderngl.DEPTH_TEST)
             self._ctx.enable(moderngl.BLEND)
             self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
@@ -1368,7 +1426,7 @@ void main() {
             prof.start("render_text_world")
         if self._text and scene:
             with eng._scene_lock:
-                self._text.render(scene, view_mat, proj_mat, viewport_w, viewport_h, world_space_only=True)
+                self._text.render(scene, view_mat, proj_mat, rw, rh, world_space_only=True)
         if prof:
             prof.stop("render_text_world")
         if prof:
@@ -1395,11 +1453,11 @@ void main() {
         if water_components and self._water_plane:
             if prof:
                 prof.start("render_water")
-            self._ensure_water_fbo(viewport_w, viewport_h)
+            self._ensure_water_fbo(rw, rh)
             self._ctx.copy_framebuffer(self._water_fbo, self._scene_fbo)
             self._water_fbo.use()
-            self._water_fbo.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._water_fbo.viewport = (0, 0, rw, rh)
+            self._ctx.viewport = (0, 0, rw, rh)
             self._ctx.enable(moderngl.DEPTH_TEST)
             self._ctx.enable(moderngl.CULL_FACE)
             self._ctx.cull_face = 'back'
@@ -1413,7 +1471,7 @@ void main() {
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
-                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 (rw, rh), cam_near, cam_far,
                                                  snap.wind_zones, snap.lights, chunk_models)
                 elif water_component.surface_type == "Pond":
                     res = int(getattr(water_component, "mesh_resolution", 128.0))
@@ -1421,7 +1479,7 @@ void main() {
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
-                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 (rw, rh), cam_near, cam_far,
                                                  snap.wind_zones, snap.lights, None, is_box=True)
                 else:
                     res = int(getattr(water_component, "mesh_resolution", 200.0))
@@ -1429,11 +1487,11 @@ void main() {
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
-                                                 (viewport_w, viewport_h), cam_near, cam_far,
+                                                 (rw, rh), cam_near, cam_far,
                                                  snap.wind_zones, snap.lights, None)
             self._scene_fbo.use()
-            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._scene_fbo.viewport = (0, 0, rw, rh)
+            self._ctx.viewport = (0, 0, rw, rh)
             self._ctx.disable(moderngl.DEPTH_TEST)
             self._pp_copy_prog["u_input_tex"] = 0
             self._water_color_tex.use(0)
@@ -1480,7 +1538,7 @@ void main() {
             except Exception:
                 c_inv_vp = None
             self._render_caustics_pass(
-                viewport_w, viewport_h, view_f32, proj_f32, cam_pos,
+                rw, rh, view_f32, proj_f32, cam_pos,
                 csun_dir, csun_color, csun_intensity,
                 c_tint, c_strength, c_surface_y,
                 caustic_water, c_inv_vp, cam_near, cam_far
@@ -1497,17 +1555,17 @@ void main() {
         if cloud_components and self._cloud_quad and self._skybox_enabled:
             if prof:
                 prof.start("render_clouds")
-            self._ensure_pp_fbo(viewport_w, viewport_h)
+            self._ensure_pp_fbo(rw, rh)
             self._ctx.copy_framebuffer(self._pp_fbo_a, self._scene_fbo)
             self._pp_fbo_a.use()
-            self._pp_fbo_a.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._pp_fbo_a.viewport = (0, 0, rw, rh)
+            self._ctx.viewport = (0, 0, rw, rh)
             self._ctx.disable(moderngl.DEPTH_TEST)
             for cloud_component in cloud_components:
-                cloud_component.render_clouds(self._ctx, self._shaders, view_mat, proj_mat, dir_light, cam_pos, self._cloud_quad, self._shadows, self._scene_depth_tex, (viewport_w, viewport_h))
+                cloud_component.render_clouds(self._ctx, self._shaders, view_mat, proj_mat, dir_light, cam_pos, self._cloud_quad, self._shadows, self._scene_depth_tex, (rw, rh))
             self._scene_fbo.use()
-            self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
-            self._ctx.viewport = (0, 0, viewport_w, viewport_h)
+            self._scene_fbo.viewport = (0, 0, rw, rh)
+            self._ctx.viewport = (0, 0, rw, rh)
             self._ctx.disable(moderngl.DEPTH_TEST)
             self._pp_copy_prog["u_input_tex"] = 0
             self._pp_color_tex_a.use(0)
@@ -1548,7 +1606,7 @@ void main() {
             except Exception:
                 inv_vp_f32 = None
             self._render_underwater_pass(
-                viewport_w, viewport_h, view_f32, proj_f32, cam_pos,
+                rw, rh, view_f32, proj_f32, cam_pos,
                 sun_dir, sun_color, sun_intensity, fog_color, caustic_color,
                 best_depth, cam_near, cam_far,
                 water_component=underwater_water, inv_view_proj_f32=inv_vp_f32
@@ -1630,9 +1688,9 @@ void main() {
             velocity_tex = None
             if has_velocity_effects and renderable and prev_view_proj is not None and self._velocity_geom_prog:
                 try:
-                    self._ensure_velocity_fbo(viewport_w, viewport_h)
+                    self._ensure_velocity_fbo(rw, rh)
                     self._velocity_fbo.use()
-                    self._velocity_fbo.viewport = (0, 0, viewport_w, viewport_h)
+                    self._velocity_fbo.viewport = (0, 0, rw, rh)
                     self._velocity_fbo.clear(red=0.0, green=0.0, depth=1.0)
                     self._ctx.enable(moderngl.DEPTH_TEST)
                     self._ctx.enable(moderngl.CULL_FACE)
@@ -1657,7 +1715,7 @@ void main() {
                         self._prev_model_by_entity[id(ent)] = wm
                     velocity_tex = self._velocity_tex
                     self._scene_fbo.use()
-                    self._scene_fbo.viewport = (0, 0, viewport_w, viewport_h)
+                    self._scene_fbo.viewport = (0, 0, rw, rh)
                     self._ctx.disable(moderngl.DEPTH_TEST)
                 except Exception as e:
                     Logger.error(f"Velocity geometry pass error: {e}")
@@ -1752,7 +1810,7 @@ void main() {
             prof.start("render_text")
         if self._text and scene:
             with eng._scene_lock:
-                self._text.render(scene, view_mat, proj_mat, viewport_w, viewport_h, world_space_only=False)
+                self._text.render(scene, view_mat, proj_mat, rw, rh, world_space_only=False)
         if prof:
             prof.stop("render_text")
         if prof:
@@ -2095,6 +2153,7 @@ void main() {
         self._import_meta_mtime.clear()
         self._snap_cache = None
         self._snap_version = -1
+        self._snap_scene = None
 
     def release_all_caches(self):
         """Clear mesh, material and texture caches. Called when loading a
@@ -2104,6 +2163,7 @@ void main() {
         self._import_meta_mtime.clear()
         self._snap_cache = None
         self._snap_version = -1
+        self._snap_scene = None
         if self._materials:
             self._materials.clear_caches()
         if self._mesh_loader:
@@ -2157,6 +2217,7 @@ void main() {
                 ent.add_component(mr)
             cache_key = f"{mesh_name}|s=1.0|cp=False|fu=False"
             mesh_loader._meshes[cache_key] = gpu_mesh
+            mesh_loader.bump_generation()
             pb._gpu_dirty = False
         active_ids = {ent.id for ent in scene.get_entities_with_component(ProBuilderMesh) if ent.active}
         stale = [k for k in self._pb_scale_cache if k not in active_ids]

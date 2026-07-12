@@ -114,6 +114,8 @@ class PlayViewport(QOpenGLWidget):
                 self._overlay_canvas._render_overlay(qp)
                 qp.end()
         except Exception as e:
+            import traceback as _tb
+            _tb.print_exc()
             Logger.error(f"PlayViewport render error: {e}", e)
 
     def _tick(self):

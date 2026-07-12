@@ -134,6 +134,8 @@ class GameViewport(QOpenGLWidget):
             self._renderer.show_grid = False
             self._renderer.render_scene(scene, view, proj, tr.position, rw, rh, self._screen_fbo, display_w=pw, display_h=ph)
         except Exception as e:
+            import traceback as _tb
+            _tb.print_exc()
             Logger.error(f"GameViewport render error: {e}", e)
 
     def _tick(self):

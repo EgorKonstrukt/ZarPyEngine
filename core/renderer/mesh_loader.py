@@ -39,6 +39,7 @@ class MeshLoader:
         self._async_lock: threading.Lock = threading.Lock()
         self._pending_mesh_queue: list = []
         self._render_callback = None
+        self._loaded_generation: int = 0
 
     def register_primitives(self):
         self._meshes["cube"] = make_cube_mesh()
@@ -225,6 +226,10 @@ class MeshLoader:
                 self._pending_cache_keys.discard(cache_key)
                 continue
             self._apply_transforms(m, cache_key, scale, cp, fuvs)
+            self._loaded_generation += 1
+
+    def bump_generation(self):
+        self._loaded_generation += 1
 
     def clear_scene_data(self):
         with self._async_lock:
@@ -235,6 +240,7 @@ class MeshLoader:
             m.release()
         self._meshes.clear()
         self.register_primitives()
+        self._loaded_generation += 1
 
     def release(self):
         for m in self._meshes.values():
