@@ -71,6 +71,7 @@ def render_component_icons_gl(vp):
     ref_distance = cfg.get("gizmo.icon_ref_distance", 4.5)
     near_fade_start = cfg.get("gizmo.icon_near_fade_start", 0.25)
     near_fade_end = cfg.get("gizmo.icon_near_fade_end", 2.5)
+    groups: dict = {}
     for entity in scene.get_all_entities():
         if not entity.active:
             continue
@@ -91,6 +92,7 @@ def render_component_icons_gl(vp):
         if not sp:
             continue
         y_off = 0
+        sz = icon_size * dpr
         for comp in entity.get_all_components():
             if isinstance(comp, Transform):
                 continue
@@ -99,9 +101,17 @@ def render_component_icons_gl(vp):
                 continue
             r, g, b, label = icon
             icon_path = getattr(comp, '_gizmo_icon_path', None)
-            tex = get_or_create_icon_texture(vp, type(comp).__name__, (r, g, b), label, icon_path)
-            if tex:
-                sx, sy = sp[0], sp[1] + y_off
-                sz = icon_size * dpr
-                vp._renderer._render_icon(tex, sx, sy, sz, alpha, pw, ph)
-            y_off += icon_size * dpr + 2 * dpr
+            key = type(comp).__name__
+            grp = groups.get(key)
+            if grp is None:
+                tex = get_or_create_icon_texture(vp, key, (r, g, b), label, icon_path)
+                if tex is None:
+                    y_off += sz + 2 * dpr
+                    continue
+                grp = (tex, [])
+                groups[key] = grp
+            grp[1].append((sp[0], sp[1] + y_off, sz, alpha))
+            y_off += sz + 2 * dpr
+    batches = [(tex, quads) for (tex, quads) in groups.values() if quads]
+    if batches:
+        vp._renderer._render_icons_batched(batches, pw, ph)

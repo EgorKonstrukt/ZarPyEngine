@@ -2071,6 +2071,12 @@ void main() {
 
     _render_icon = render_icon
 
+    def render_icons_batched(self, batches: list, viewport_w: int, viewport_h: int):
+        if self._icons:
+            self._icons.render_batched(batches, viewport_w, viewport_h)
+
+    _render_icons_batched = render_icons_batched
+
     @property
     def _meshes(self):
         if self._mesh_loader:
