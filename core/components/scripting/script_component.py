@@ -11,6 +11,7 @@ from core.ecs.ecs import Component, ComponentRegistry
 from core.foundation.logger import Logger
 from core.components.inspector_meta import FieldType, InspectorField
 from core.math.math3d import Vec2, Vec3, Vec4
+from core.foundation.curve import Curve
 from core.input.input_system import Input, KeyCode
 import importlib.util
 import os
@@ -163,6 +164,8 @@ class ScriptComponent(Component):
             return FieldType.VEC3
         if t is Vec4:
             return FieldType.VEC4
+        if t is Curve:
+            return FieldType.CURVE
         if isinstance(t, str):
             t_clean = t.strip("'\"")
             if t_clean == 'Entity':
@@ -339,6 +342,8 @@ class ScriptComponent(Component):
                 fields[name] = [value.x, value.y, value.z, value.w]
             elif isinstance(value, Enum):
                 fields[name] = value.value
+            elif isinstance(value, Curve):
+                fields[name] = value.to_dict()
             else:
                 fields[name] = value
         d["script_fields"] = fields
@@ -349,5 +354,15 @@ class ScriptComponent(Component):
         sc = cls()
         sc.enabled = data.get("enabled", True)
         sc.script_path = data.get("script_path", "")
-        sc._field_values = data.get("script_fields", {})
+        raw_fields = data.get("script_fields", {})
+        field_values = {}
+        for name, value in raw_fields.items():
+            if isinstance(value, dict) and "keys" in value:
+                try:
+                    field_values[name] = Curve.from_dict(value)
+                    continue
+                except Exception:
+                    pass
+            field_values[name] = value
+        sc._field_values = field_values
         return sc

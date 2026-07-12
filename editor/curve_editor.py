@@ -9,7 +9,7 @@ import math
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QDoubleSpinBox, QComboBox, QGridLayout,
-    QGroupBox, QScrollArea, QFrame, QSizePolicy, QMenu
+    QGroupBox, QScrollArea, QFrame, QSizePolicy, QMenu, QSplitter
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
 from PyQt6.QtGui import (
@@ -19,6 +19,7 @@ from PyQt6.QtGui import (
 )
 import numpy as np
 from core.foundation.curve import Curve, CurveKey, TangentMode
+from editor.curve_presets import build_preset, PRESET_CATEGORIES
 
 
 class CurvePreview(QWidget):
@@ -29,8 +30,8 @@ class CurvePreview(QWidget):
         self._curve: Curve = Curve()
         self._bg_color = QColor(37, 37, 37)
         self._line_color = QColor(90, 156, 245)
-        self.setMinimumSize(100, 30)
-        self.setMaximumHeight(40)
+        self.setMinimumHeight(56)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def set_curve(self, curve: Curve):
@@ -89,8 +90,15 @@ class CurveWidget(QWidget):
         self._dragging: bool = False
         self._drag_tangent: str = None
         self._hovered_key: CurveKey = None
-        self._pan_offset = QPointF(0, 0)
-        self._zoom = 1.0
+        self._handle_len: float = 42.0
+        self._view_t0: float = 0.0
+        self._view_t1: float = 1.0
+        self._view_v0: float = 0.0
+        self._view_v1: float = 1.0
+        self._panning: bool = False
+        self._pan_last: QPointF = QPointF(0, 0)
+        self._pan_moved: bool = False
+        self._pan_deselect: bool = False
 
         self._grid_color = QColor(42, 42, 42)
         self._major_grid_color = QColor(60, 60, 60)
@@ -108,10 +116,32 @@ class CurveWidget(QWidget):
     def set_curve(self, curve: Curve):
         self._curve = curve
         self._selected_key = None
+        self.fit_view()
         self.update()
 
     def get_curve(self) -> Curve:
         return self._curve
+
+    def fit_view(self):
+        if not self._curve.keys:
+            self._view_t0, self._view_t1, self._view_v0, self._view_v1 = 0.0, 1.0, 0.0, 1.0
+            self.update()
+            return
+        times = [k.time for k in self._curve.keys]
+        vals = [k.value for k in self._curve.keys]
+        t_min, t_max = min(times), max(times)
+        v_min, v_max = min(vals), max(vals)
+        if t_max - t_min < 1e-10:
+            t_max = t_min + 1.0
+        if v_max - v_min < 1e-10:
+            v_max = v_min + 1.0
+        dt = (t_max - t_min) * 0.15
+        dv = (v_max - v_min) * 0.15
+        self._view_t0 = t_min - dt
+        self._view_t1 = t_max + dt
+        self._view_v0 = v_min - dv
+        self._view_v1 = v_max + dv
+        self.update()
 
     def _get_key_rect(self, key: CurveKey) -> QRectF:
         x, y = self._key_to_screen(key)
@@ -136,19 +166,42 @@ class CurveWidget(QWidget):
         return t, v
 
     def _get_bounds(self) -> tuple[float, float, float, float]:
-        if not self._curve.keys:
-            return 0.0, 1.0, 0.0, 1.0
-        times = [k.time for k in self._curve.keys]
-        vals = [k.value for k in self._curve.keys]
-        t_min, t_max = min(times), max(times)
-        v_min, v_max = min(vals), max(vals)
-        if t_max - t_min < 1e-10:
-            t_max = t_min + 1.0
-        if v_max - v_min < 1e-10:
-            v_max = v_min + 1.0
-        dt = (t_max - t_min) * 0.15
-        dv = (v_max - v_min) * 0.15
-        return t_min - dt, t_max + dt, v_min - dv, v_max + dv
+        return self._view_t0, self._view_t1, self._view_v0, self._view_v1
+
+    def _view_metrics(self) -> tuple[float, float, float, float, float, float]:
+        t_min, t_max, v_min, v_max = self._get_bounds()
+        m = 30
+        pw = max(self.width() - m * 2, 1)
+        ph = max(self.height() - m * 2, 1)
+        return pw, ph, t_min, t_max, v_min, v_max
+
+    def _tangent_handle_offset(self, slope: float, pw: float, ph: float,
+                               t_min: float, t_max: float, v_min: float, v_max: float
+                               ) -> tuple[float, float]:
+        dx = pw / max(t_max - t_min, 1e-10)
+        dy = -slope * ph / max(v_max - v_min, 1e-10)
+        length = math.hypot(dx, dy) or 1.0
+        return dx / length * self._handle_len, dy / length * self._handle_len
+
+    def _tangent_handle_pos(self, key: CurveKey, side: str) -> tuple[float, float] | None:
+        keys = self._curve.keys
+        if len(keys) < 2:
+            return None
+        idx = keys.index(key)
+        if side == "in" and idx == 0:
+            return None
+        if side == "out" and idx == len(keys) - 1:
+            return None
+        if key.tangent_mode not in (TangentMode.FREE, TangentMode.SMOOTH):
+            return None
+        sx, sy = self._key_to_screen(key)
+        pw, ph, t_min, t_max, v_min, v_max = self._view_metrics()
+        slope = key.in_tangent if side == "in" else key.out_tangent
+        ox, oy = self._tangent_handle_offset(slope, pw, ph, t_min, t_max, v_min, v_max)
+        if side == "in":
+            ox = -ox
+            oy = -oy
+        return sx + ox, sy + oy
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -210,26 +263,15 @@ class CurveWidget(QWidget):
         p.drawPath(path)
 
     def _draw_tangents(self, p: QPainter):
-        if not self._selected_key:
-            return
         k = self._selected_key
+        if not k:
+            return
         x, y = self._key_to_screen(k)
-        t_min, t_max, v_min, v_max = self._get_bounds()
-        m = 30
-        pw = self.width() - m * 2
-        ph = self.height() - m * 2
-        def tangent_to_screen(tangent: float) -> tuple[float, float]:
-            dt_frac = tangent * (t_max - t_min) / max(pw, 1)
-            dv_frac = -tangent * (v_max - v_min) / max(ph, 1)
-            return x + dt_frac * pw, y + dv_frac * ph
-        if k.in_tangent != 0:
-            tx, ty = tangent_to_screen(k.in_tangent * 0.3)
-            p.setPen(QPen(self._tangent_color, 1, Qt.PenStyle.DashLine))
-            p.drawLine(int(x), int(y), int(tx), int(ty))
-            p.setBrush(QBrush(self._tangent_color))
-            p.drawEllipse(QPointF(tx, ty), 4, 4)
-        if k.out_tangent != 0:
-            tx, ty = tangent_to_screen(k.out_tangent * 0.3)
+        for side in ("in", "out"):
+            pos = self._tangent_handle_pos(k, side)
+            if pos is None:
+                continue
+            tx, ty = pos
             p.setPen(QPen(self._tangent_color, 1, Qt.PenStyle.DashLine))
             p.drawLine(int(x), int(y), int(tx), int(ty))
             p.setBrush(QBrush(self._tangent_color))
@@ -257,66 +299,87 @@ class CurveWidget(QWidget):
             p.drawText(self.width() - 180, 15, text)
 
     def mousePressEvent(self, event: QMouseEvent):
+        pos = event.position()
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._panning = True
+            self._pan_last = pos
+            self._pan_moved = False
+            self._pan_deselect = False
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
+            # 1. tangent handles of the currently selected key take priority
+            if self._selected_key:
+                for side in ("in", "out"):
+                    hpos = self._tangent_handle_pos(self._selected_key, side)
+                    if hpos and math.hypot(pos.x() - hpos[0], pos.y() - hpos[1]) <= 7:
+                        self._drag_tangent = side
+                        self._dragging = True
+                        self.update()
+                        return
+            # 2. key hit -> select and prepare to drag the key
             for k in self._curve.keys:
                 if self._get_key_rect(k).contains(pos):
                     self._selected_key = k
                     self._dragging = True
-                    self._drag_offset = QPointF(
-                        k.time, k.value
-                    )
-                    self._drag_start = pos
                     self.update()
                     return
-            t, v = self._screen_to_value(pos.x(), pos.y())
+            # 3. tangent handles of any key (selects that key too)
             for k in self._curve.keys:
-                sx, sy = self._key_to_screen(k)
-                t_min, t_max, v_min, v_max = self._get_bounds()
-                m = 30
-                pw = self.width() - m * 2
-                ph = self.height() - m * 2
-                def tang_to_screen(tang):
-                    return tang * (t_max - t_min) / max(pw, 1), -tang * (v_max - v_min) / max(ph, 1)
-                if k.in_tangent != 0:
-                    tx, ty = tang_to_screen(k.in_tangent * 0.3)
-                    if abs(pos.x() - (sx + tx * pw)) < 8 and abs(pos.y() - (sy + ty * ph)) < 8:
+                for side in ("in", "out"):
+                    hpos = self._tangent_handle_pos(k, side)
+                    if hpos and math.hypot(pos.x() - hpos[0], pos.y() - hpos[1]) <= 7:
                         self._selected_key = k
-                        self._drag_tangent = "in"
+                        self._drag_tangent = side
                         self._dragging = True
                         self.update()
                         return
-                if k.out_tangent != 0:
-                    tx, ty = tang_to_screen(k.out_tangent * 0.3)
-                    if abs(pos.x() - (sx + tx * pw)) < 8 and abs(pos.y() - (sy + ty * ph)) < 8:
-                        self._selected_key = k
-                        self._drag_tangent = "out"
-                        self._dragging = True
-                        self.update()
-                        return
-            self._selected_key = None
-            self.update()
+            # 4. empty space -> pan (a click without drag deselects)
+            self._panning = True
+            self._pan_last = pos
+            self._pan_moved = False
+            self._pan_deselect = True
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def mouseMoveEvent(self, event: QMouseEvent):
         pos = event.position()
+        if self._panning:
+            dx = pos.x() - self._pan_last.x()
+            dy = pos.y() - self._pan_last.y()
+            self._pan_last = pos
+            if abs(dx) > 2 or abs(dy) > 2:
+                self._pan_moved = True
+            m = 30
+            pw = max(self.width() - m * 2, 1)
+            ph = max(self.height() - m * 2, 1)
+            dt = dx / pw * (self._view_t1 - self._view_t0)
+            dv = dy / ph * (self._view_v1 - self._view_v0)
+            self._view_t0 -= dt
+            self._view_t1 -= dt
+            self._view_v0 += dv
+            self._view_v1 += dv
+            self.update()
+            return
         if self._dragging and self._selected_key:
-            t, v = self._screen_to_value(pos.x(), pos.y())
             if self._drag_tangent:
                 k = self._selected_key
-                t_min, t_max, v_min, v_max = self._get_bounds()
-                m = 30
-                pw = self.width() - m * 2
-                ph = self.height() - m * 2
                 sx, sy = self._key_to_screen(k)
-                dx = (pos.x() - sx) / max(pw, 1) / 0.3 * (t_max - t_min)
-                dy = -(pos.y() - sy) / max(ph, 1) / 0.3 * (v_max - v_min)
+                pw, ph, t_min, t_max, v_min, v_max = self._view_metrics()
+                dx = pos.x() - sx
+                dy = pos.y() - sy
+                if abs(dx) < 1e-3:
+                    dx = 1e-3 if dx >= 0 else -1e-3
+                slope = -(dy / dx) * pw * (v_max - v_min) / (ph * (t_max - t_min))
+                slope = max(-100.0, min(100.0, slope))
                 if self._drag_tangent == "in":
-                    k.in_tangent = dx
+                    k.in_tangent = slope
                 else:
-                    k.out_tangent = dx
+                    k.out_tangent = slope
+                k.tangent_mode = TangentMode.FREE
                 self.curve_changed.emit()
                 self.update()
                 return
+            t, v = self._screen_to_value(pos.x(), pos.y())
             t = max(0.0, min(1.0, t))
             k = self._selected_key
             k.time = round(t, 4)
@@ -334,14 +397,22 @@ class CurveWidget(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._panning:
+                self._panning = False
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                if self._pan_deselect and not self._pan_moved:
+                    self._selected_key = None
+                self.update()
+                return
             was_tangent_drag = self._drag_tangent is not None
             self._dragging = False
             self._drag_tangent = None
-            if was_tangent_drag:
-                if self._selected_key:
-                    self._selected_key.tangent_mode = TangentMode.FREE
-            else:
+            if not was_tangent_drag:
                 self._curve._auto_smooth()
             self.curve_changed.emit()
             self.update()
@@ -356,6 +427,25 @@ class CurveWidget(QWidget):
             self.curve_changed.emit()
             self.update()
 
+    def wheelEvent(self, event):
+        pos = event.position()
+        t, v = self._screen_to_value(pos.x(), pos.y())
+        m = 30
+        pw = max(self.width() - m * 2, 1)
+        ph = max(self.height() - m * 2, 1)
+        fx = (pos.x() - m) / pw
+        fy = (pos.y() - m) / ph
+        factor = math.pow(1.1, event.angleDelta().y() / 120.0)
+        tw = (self._view_t1 - self._view_t0) / factor
+        vh = (self._view_v1 - self._view_v0) / factor
+        tw = max(min(tw, 1e6), 1e-4)
+        vh = max(min(vh, 1e6), 1e-4)
+        self._view_t0 = t - fx * tw
+        self._view_t1 = self._view_t0 + tw
+        self._view_v0 = v - (1.0 - fy) * vh
+        self._view_v1 = self._view_v0 + vh
+        self.update()
+
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
             if self._selected_key and len(self._curve.keys) > 1:
@@ -363,6 +453,8 @@ class CurveWidget(QWidget):
                 self._selected_key = None
                 self.curve_changed.emit()
                 self.update()
+        elif event.key() == Qt.Key.Key_F:
+            self.fit_view()
         elif event.key() == Qt.Key.Key_Space:
             if self._selected_key:
                 k = self._selected_key
@@ -392,8 +484,8 @@ class CurveEditorDialog(QDialog):
     def __init__(self, curve: Curve, title: str = "Curve Editor", parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setMinimumSize(600, 450)
-        self.resize(700, 500)
+        self.setMinimumSize(640, 480)
+        self.resize(860, 580)
         self._curve = curve
 
         self.setStyleSheet(f"""
@@ -472,7 +564,21 @@ class CurveEditorDialog(QDialog):
         self._curve_widget = CurveWidget()
         self._curve_widget.set_curve(curve)
         self._curve_widget.curve_changed.connect(self._on_curve_changed)
-        layout.addWidget(self._curve_widget, 1)
+
+        top_split = QSplitter(Qt.Orientation.Horizontal)
+        left = QWidget()
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(4)
+        left_lay.addWidget(self._curve_widget, 1)
+        hint = QLabel("Wheel: zoom  ·  Middle-drag / drag empty space: pan  ·  F: fit  ·  Double-click: add key  ·  Del: remove selected")
+        hint.setStyleSheet("color: #888888; font-size: 10px;")
+        left_lay.addWidget(hint)
+        top_split.addWidget(left)
+        top_split.addWidget(self._build_presets_panel())
+        top_split.setStretchFactor(0, 3)
+        top_split.setStretchFactor(1, 2)
+        layout.addWidget(top_split, 1)
 
         info_group = QGroupBox("Selected Key")
         info_layout = QGridLayout(info_group)
@@ -519,6 +625,9 @@ class CurveEditorDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
         btn_layout.addStretch()
+        fit_btn = QPushButton("Fit View")
+        fit_btn.clicked.connect(self._curve_widget.fit_view)
+        btn_layout.addWidget(fit_btn)
         add_btn = QPushButton("Add Key (0,0)")
         add_btn.clicked.connect(lambda: self._add_key_at(0.0, 0.0))
         btn_layout.addWidget(add_btn)
@@ -537,6 +646,71 @@ class CurveEditorDialog(QDialog):
         self._curve_widget.curve_changed.connect(self._sync_spins)
 
     def _on_curve_changed(self):
+        self._sync_spins()
+
+    def _build_presets_panel(self) -> QWidget:
+        group = QGroupBox("Presets")
+        vlay = QVBoxLayout(group)
+        vlay.setContentsMargins(4, 4, 4, 4)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        cvlay = QVBoxLayout(content)
+        cvlay.setContentsMargins(2, 2, 2, 2)
+        cvlay.setSpacing(6)
+        cols = 3
+        for cat, names in PRESET_CATEGORIES:
+            cat_lbl = QLabel(cat)
+            cat_lbl.setStyleSheet("color: #5a9cf5; font-size: 10px; font-weight: 600; padding: 2px 0;")
+            cvlay.addWidget(cat_lbl)
+            grid = QGridLayout()
+            grid.setSpacing(4)
+            grid.setContentsMargins(0, 0, 0, 0)
+            for i, name in enumerate(names):
+                grid.addWidget(self._make_preset_item(name), i // cols, i % cols)
+            cvlay.addLayout(grid)
+        cvlay.addStretch()
+        scroll.setWidget(content)
+        vlay.addWidget(scroll)
+        return group
+
+    def _make_preset_item(self, name: str) -> QWidget:
+        item = QWidget()
+        item.setCursor(Qt.CursorShape.PointingHandCursor)
+        vlay = QVBoxLayout(item)
+        vlay.setContentsMargins(2, 2, 2, 2)
+        vlay.setSpacing(2)
+        pv = CurvePreview()
+        pv.setFixedSize(78, 46)
+        pv.set_curve(build_preset(name))
+        lbl = QLabel(name)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("color: #cccccc; font-size: 10px;")
+        lbl.setWordWrap(True)
+        vlay.addWidget(pv)
+        vlay.addWidget(lbl)
+
+        def _on_click(event):
+            self._apply_preset(name)
+
+        item.mousePressEvent = _on_click
+        pv.mousePressEvent = _on_click
+        return item
+
+    def _apply_preset(self, name: str):
+        preset = build_preset(name)
+        self._curve.keys = [
+            CurveKey(
+                time=k.time, value=k.value, in_tangent=k.in_tangent,
+                out_tangent=k.out_tangent, tangent_mode=k.tangent_mode,
+            )
+            for k in preset.keys
+        ]
+        self._curve.pre_wrap = preset.pre_wrap
+        self._curve.post_wrap = preset.post_wrap
+        self._curve_widget.set_curve(self._curve)
+        self._curve_widget.curve_changed.emit()
         self._sync_spins()
 
     def _sync_spins(self):

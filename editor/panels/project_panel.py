@@ -1873,7 +1873,7 @@ class ProjectPanel(QDockWidget):
         paths = self._extract_drop_paths(event)
         if not paths:
             return
-        target_item = self._folder_tree.itemAt(event.pos())
+        target_item = self._folder_tree.itemAt(event.position().toPoint())
         if target_item:
             target_path = target_item.data(0, Qt.ItemDataRole.UserRole)
         else:

@@ -130,6 +130,9 @@ class Curve:
             "post_wrap": self.post_wrap,
         }
 
+    def copy(self) -> "Curve":
+        return Curve.from_dict(self.to_dict())
+
     @classmethod
     def from_dict(cls, data: dict) -> Curve:
         c = cls()

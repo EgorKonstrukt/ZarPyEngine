@@ -542,12 +542,13 @@ class ComponentWidget(QWidget):
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "curve":
             preview = CurvePreview()
-            preview.setFixedSize(*scale_xy(60, 20))
+            preview.setMinimumHeight(scale(56))
+            preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             if isinstance(value, Curve):
                 preview.set_curve(value)
             from PyQt6.QtWidgets import QColorDialog
             def _open_editor(*, _prop_name=prop_name, _field=field):
-                dlg = CurveEditorDialog(c, _prop_name, self)
+                dlg = CurveEditorDialog(getattr(c, _prop_name, None), field.label, self)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     preview.set_curve(getattr(c, _prop_name, None))
             preview.mousePressEvent = lambda ev, pe=_open_editor: pe() if ev.button() == Qt.MouseButton.LeftButton else None
@@ -1093,26 +1094,26 @@ class ComponentWidget(QWidget):
 
     def _build_script_field_from_meta(self, field, comp):
         prop_name = field.name
-        value = getattr(comp, prop_name, None)
+        value = comp.get_field_value(prop_name)
         if field.field_type.value == "float":
-            sb = make_spinbox(value or 0.0)
+            sb = make_spinbox(value if isinstance(value, (int, float)) else 0.0)
             def _on_float_changed(v, n=prop_name):
-                setattr(comp, n, v)
+                comp.set_field_value(n, v)
             sb.valueChanged.connect(_on_float_changed)
             self._add_field(field.label or prop_name, sb)
         elif field.field_type.value == "int":
             sb = QSpinBox()
             sb.setRange(-2147483648, 2147483647)
-            sb.setValue(int(value or 0))
+            sb.setValue(int(value) if isinstance(value, (int, float)) else 0)
             def _on_int_changed(v, n=prop_name):
-                setattr(comp, n, v)
+                comp.set_field_value(n, v)
             sb.valueChanged.connect(_on_int_changed)
             self._add_field(field.label or prop_name, sb)
         elif field.field_type.value == "bool":
             cb = QCheckBox()
             cb.setChecked(bool(value))
             def _on_bool_changed(v, n=prop_name):
-                setattr(comp, n, v)
+                comp.set_field_value(n, v)
             cb.toggled.connect(_on_bool_changed)
             self._add_field(field.label or prop_name, cb)
         elif field.field_type.value == "str":
@@ -1128,22 +1129,22 @@ class ComponentWidget(QWidget):
                 QLineEdit:focus {{ border-color: {_accent()}; }}
             """)
             def _on_str_changed(v, n=prop_name):
-                setattr(comp, n, v)
+                comp.set_field_value(n, v)
             te.textChanged.connect(_on_str_changed)
             self._add_field(field.label or prop_name, te)
         elif field.field_type.value == "vec2":
-            v = value or Vec2()
+            v = value if isinstance(value, Vec2) else Vec2()
             w, sbs = make_vec2_row(field.label or "", v, lambda: None)
             def _on_vec2_changed(n=prop_name, sbs_box=sbs):
-                setattr(comp, n, Vec2(sbs_box[0].value(), sbs_box[1].value()))
+                comp.set_field_value(n, Vec2(sbs_box[0].value(), sbs_box[1].value()))
             for sb in sbs:
                 sb.valueChanged.connect(_on_vec2_changed)
             self._layout.addWidget(w)
         elif field.field_type.value == "vec3":
-            v = value or Vec3()
+            v = value if isinstance(value, Vec3) else Vec3()
             w, sbs = make_vec3_row(field.label or "", v, lambda: None)
             def _on_vec3_changed(n=prop_name, sbs_box=sbs):
-                setattr(comp, n, Vec3(sbs_box[0].value(), sbs_box[1].value(), sbs_box[2].value()))
+                comp.set_field_value(n, Vec3(sbs_box[0].value(), sbs_box[1].value(), sbs_box[2].value()))
             for sb in sbs:
                 sb.valueChanged.connect(_on_vec3_changed)
             self._layout.addWidget(w)
@@ -1155,44 +1156,77 @@ class ComponentWidget(QWidget):
             try: combo.setCurrentText(str(value or ""))
             except: pass
             def _on_enum_changed(v, n=prop_name):
-                setattr(comp, n, v)
+                comp.set_field_value(n, v)
             combo.currentTextChanged.connect(_on_enum_changed)
             self._add_field(field.label or prop_name, combo)
-        elif field.field_type.value == "resource":
-            filter_str = field.file_filter or ""
-            def _on_click_r(m=prop_name, cc=comp):
-                from editor.resource_picker import pick_resource
-                p = pick_resource(self, "Select Resource", filter_str, getattr(cc, m, ""))
-                if p:
-                    setattr(cc, m, p)
-            from PyQt6.QtWidgets import QPushButton, QSizePolicy
-            btn = QPushButton(value or f"Pick {field.label}")
+        elif field.field_type.value == "gameobject":
+            btn = QPushButton(str(value or "") or f"Pick {field.label}")
             btn.setStyleSheet(f"""
                 QPushButton {{
                     border-radius: {_FUSION_INPUT_RADIUS};
                     padding: 2px 6px; font-size: 10px; text-align: left;
                 }}
             """)
+            def _on_click_go(m=prop_name, cc=comp):
+                from editor.entity_picker import pick_entity
+                eid = pick_entity(self, cc.get_field_value(m) or "")
+                if eid:
+                    cc.set_field_value(m, eid)
+                    btn.setText(str(eid))
+            btn.clicked.connect(_on_click_go)
+            self._add_field(field.label or prop_name, btn)
+        elif field.field_type.value == "resource":
+            filter_str = field.file_filter or ""
+            btn = QPushButton(str(value or "") or f"Pick {field.label}")
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    border-radius: {_FUSION_INPUT_RADIUS};
+                    padding: 2px 6px; font-size: 10px; text-align: left;
+                }}
+            """)
+            def _on_click_r(m=prop_name, cc=comp, fs=filter_str):
+                from editor.resource_picker import pick_resource
+                p = pick_resource(self, "Select Resource", fs, cc.get_field_value(m) or "")
+                if p:
+                    cc.set_field_value(m, p)
+                    btn.setText(str(p))
             btn.clicked.connect(_on_click_r)
             self._add_field(field.label or prop_name, btn)
         elif field.field_type.value == "resource_type":
             from core.components.scripting.script_component import RESOURCE_TYPE_FILTERS
             filter_str = RESOURCE_TYPE_FILTERS.get(field.resource_type, "")
-            def _on_click_rt(m=prop_name, cc=comp):
-                from editor.resource_picker import pick_resource
-                p = pick_resource(self, "Select Resource", filter_str, getattr(cc, m, ""))
-                if p:
-                    setattr(cc, m, p)
-            from PyQt6.QtWidgets import QPushButton, QSizePolicy
-            btn = QPushButton(value or f"Pick {field.label}")
+            btn = QPushButton(str(value or "") or f"Pick {field.label}")
             btn.setStyleSheet(f"""
                 QPushButton {{
                     border-radius: {_FUSION_INPUT_RADIUS};
                     padding: 2px 6px; font-size: 10px; text-align: left;
                 }}
             """)
+            def _on_click_rt(m=prop_name, cc=comp, fs=filter_str):
+                from editor.resource_picker import pick_resource
+                p = pick_resource(self, "Select Resource", fs, cc.get_field_value(m) or "")
+                if p:
+                    cc.set_field_value(m, p)
+                    btn.setText(str(p))
             btn.clicked.connect(_on_click_rt)
             self._add_field(field.label or prop_name, btn)
+        elif field.field_type.value == "curve":
+            from editor.curve_editor import CurvePreview, CurveEditorDialog
+            preview = CurvePreview()
+            preview.setMinimumHeight(scale(56))
+            preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            cv = comp.get_field_value(prop_name)
+            if isinstance(cv, Curve):
+                preview.set_curve(cv)
+            def _open_curve_editor(_pn=prop_name, _preview=preview, _label=field.label):
+                cur = comp.get_field_value(_pn)
+                edit_curve = cur.copy() if isinstance(cur, Curve) else Curve()
+                dlg = CurveEditorDialog(edit_curve, _label, self)
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    comp.set_field_value(_pn, dlg.get_curve())
+                    _preview.set_curve(dlg.get_curve())
+            preview.mousePressEvent = lambda ev, pe=_open_curve_editor: pe() if ev.button() == Qt.MouseButton.LeftButton else None
+            self._add_field(field.label or prop_name, preview)
 
     def _on_script_gameobject_changed(self, comp, prop_name, value):
         pass
