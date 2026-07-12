@@ -154,6 +154,7 @@ class MeshLoader:
         m.indices = import_data.indices.copy()
         m.is_error_mesh = import_data.is_error_mesh
         m.sub_mesh_ranges = list(getattr(import_data, 'sub_mesh_ranges', []))
+        m.sub_mesh_names = list(getattr(import_data, 'sub_mesh_names', []))
         return m
 
     def _load_async(self, key: str, file_path: str, cache_key: str,

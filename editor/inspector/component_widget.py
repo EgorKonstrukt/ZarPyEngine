@@ -893,12 +893,65 @@ class ComponentWidget(QWidget):
                 if w is not header and w is not None:
                     w.deleteLater()
             items = getattr(c, prop_name, [])
+            min_len = self._list_min_length(prop_name)
+            if min_len and len(items) < min_len:
+                items = list(items) + [{} for _ in range(min_len - len(items))]
+                setattr(c, prop_name, items)
             element_fields = self._get_list_element_fields(prop_name)
             for idx, elem in enumerate(items):
                 row = self._build_list_row_standalone(prop_name, idx, elem, element_fields)
                 cl.addWidget(row)
         rebuild_list()
         self._layout.addWidget(container)
+
+    def _list_item_label(self, prop_name, index):
+        if type(self._component).__name__ == "MeshRenderer" and prop_name == "materials":
+            names = self._get_submesh_names()
+            if names and len(names) > 1:
+                return names[index] if (index < len(names) and names[index]) else f"Submesh {index}"
+        return ""
+
+    def _list_min_length(self, prop_name):
+        if type(self._component).__name__ == "MeshRenderer" and prop_name == "materials":
+            names = self._get_submesh_names()
+            if names and len(names) > 1:
+                return len(names)
+        return 0
+
+    def _get_submesh_names(self):
+        if self._entity is None:
+            return []
+        try:
+            from core.components.rendering.renderers.mesh_filter import MeshFilter
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+            r = getattr(eng, '_renderer', None)
+            if r is None:
+                vp = getattr(eng, 'viewport', None)
+                r = getattr(vp, '_renderer', None)
+            if r is None or r._mesh_loader is None:
+                return []
+            mf = self._entity.get_component(MeshFilter)
+            if mf is None:
+                return []
+            key = mf.mesh_path
+            if not key:
+                return []
+            meshes = r._mesh_loader._meshes
+            mesh = meshes.get(key)
+            if mesh is None:
+                prefix = key + "|"
+                for k, v in meshes.items():
+                    if k.startswith(prefix):
+                        mesh = v
+                        break
+            if mesh is not None:
+                names = getattr(mesh, 'sub_mesh_names', None)
+                if names:
+                    return list(names)
+        except Exception:
+            pass
+        return []
 
     def _build_list_row_standalone(self, prop_name, index, elem_data, element_fields):
         row = QWidget()
@@ -913,6 +966,12 @@ class ComponentWidget(QWidget):
         """)
         remove_btn.clicked.connect(lambda: self._list_remove_item(self._component, prop_name, index))
         rl.addWidget(remove_btn)
+        item_label = self._list_item_label(prop_name, index)
+        if item_label:
+            lbl = QLabel(item_label)
+            lbl.setFixedWidth(scale(90))
+            lbl.setStyleSheet(f"color: {_accent()}; font-size: 10px;")
+            rl.addWidget(lbl)
         elem_widget = QWidget()
         elem_widget.setStyleSheet("background: transparent;")
         el = QHBoxLayout(elem_widget)

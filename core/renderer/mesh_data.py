@@ -40,6 +40,7 @@ class MeshData:
         self.aabb_max: np.ndarray = np.array([0.5, 0.5, 0.5], dtype=np.float32)
         self.is_error_mesh: bool = False
         self.sub_mesh_ranges: list[tuple[int, int]] = []
+        self.sub_mesh_names: list[str] = []
         self._vao: Optional[Any] = None
         self._vbo: Optional[Any] = None
         self._ibo: Optional[Any] = None

@@ -147,11 +147,16 @@ def _collect_meshes(node_ptr, scene, mesh_parts):
         mesh = mesh_ptr.contents
         nv = mesh.mNumVertices
         nf = mesh.mNumFaces
+        name = ""
+        try:
+            name = mesh.mName.data.decode("utf-8", "ignore")[:mesh.mName.length]
+        except Exception:
+            name = ""
         if nv == 0 or not mesh.mVertices:
             mesh_parts.append((np.zeros(nv * 3, dtype=np.float32),
                                np.full(nv * 3, 1.0, dtype=np.float32),
                                np.zeros(nv * 2, dtype=np.float32),
-                               np.array([], dtype=np.uint32), nv))
+                               np.array([], dtype=np.uint32), nv, name))
             continue
         verts_ptr = ctypes.cast(mesh.mVertices, ctypes.POINTER(aiVector3D * nv)).contents
         verts = np.frombuffer(verts_ptr, dtype=np.float32).copy()
@@ -176,7 +181,7 @@ def _collect_meshes(node_ptr, scene, mesh_parts):
                 for k in range(face.mNumIndices):
                     all_idxs.append(idx_ptr[k])
         indices = np.array(all_idxs, dtype=np.uint32)
-        mesh_parts.append((verts, norms, uvs, indices, nv))
+        mesh_parts.append((verts, norms, uvs, indices, nv, name))
     children_ptr = ctypes.cast(node.mChildren, ctypes.POINTER(ctypes.c_void_p * node.mNumChildren))
     for i in range(node.mNumChildren):
         child_addr = children_ptr.contents[i]
@@ -275,14 +280,16 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
             all_uvs = []
             all_idxs = []
             ranges = []
+            names = []
             idx_offset = 0
-            for verts, norms, uvs, idxs, nv in mesh_parts:
+            for verts, norms, uvs, idxs, nv, name in mesh_parts:
                 all_verts.append(verts)
                 all_norms.append(norms)
                 all_uvs.append(uvs)
                 if len(idxs) > 0:
                     offset_idxs = idxs + vert_offset
                     ranges.append((idx_offset, len(offset_idxs)))
+                    names.append(name)
                     idx_offset += len(offset_idxs)
                     all_idxs.append(offset_idxs)
                 vert_offset += nv
@@ -304,6 +311,7 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
             if all_idxs:
                 data.indices = np.concatenate(all_idxs)
                 data.sub_mesh_ranges = ranges
+                data.sub_mesh_names = names
         if prof: prof.stop("load_mesh")
         return data
     except Exception:
@@ -320,6 +328,7 @@ class MeshImportData:
         self.indices: np.ndarray = np.array([], dtype=np.uint32)
         self.is_error_mesh: bool = False
         self.sub_mesh_ranges: list[tuple[int, int]] = []
+        self.sub_mesh_names: list[str] = []
 
 
 def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
