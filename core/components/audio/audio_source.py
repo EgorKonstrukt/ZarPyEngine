@@ -19,6 +19,7 @@ class AudioSource(Component):
     _icon = "AudioSource.png"
     _gizmo_icon_color = (80, 220, 80)
     _gizmo_icon_label = "A"
+    _gizmo_cache_attrs = ("min_distance", "max_distance")
     _gizmo_pass = "audio"
 
     @classmethod

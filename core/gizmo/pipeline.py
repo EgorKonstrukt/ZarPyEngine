@@ -12,6 +12,11 @@ from core.math.math3d import Vec3
 from core.ecs.ecs import GizmoPrimitive, GizmoStyle
 from core.gizmo.api import Gizmos
 
+_GIZMO_CACHE: dict = {}
+
+
+
+
 
 class GizmoPipeline:
     __slots__ = ('_batches', '_instance_batches')
@@ -32,15 +37,35 @@ class GizmoPipeline:
                 continue
             for comp in entity.get_components(comp_type):
                 try:
-                    inst = comp.gizmo_instance_data()
-                    if inst is not None:
-                        self.add_instance(inst.shape_type, inst.transform_flat, inst.color)
-                        continue
-                    for prim in comp.gizmo():
-                        if prim.starts.shape[0] > 0:
-                            self._batches.append(prim)
+                    self._collect_comp(comp)
                 except Exception:
                     pass
+
+    def _collect_comp(self, comp):
+        inst = comp.gizmo_instance_data()
+        if inst is not None:
+            self.add_instance(inst.shape_type, inst.transform_flat, inst.color)
+            return
+        sig_fn = getattr(comp, "gizmo_cache_sig", None)
+        if sig_fn is not None:
+            sig = sig_fn()
+            if sig is not None:
+                key = id(comp)
+                cached = _GIZMO_CACHE.get(key)
+                if cached is not None and cached[0] == sig:
+                    prims = cached[1]
+                else:
+                    prims = comp.gizmo()
+                    _GIZMO_CACHE[key] = (sig, prims)
+                    if len(_GIZMO_CACHE) > 6000:
+                        _GIZMO_CACHE.clear()
+                for prim in prims:
+                    if prim.starts.shape[0] > 0:
+                        self._batches.append(prim)
+                return
+        for prim in comp.gizmo():
+            if prim.starts.shape[0] > 0:
+                self._batches.append(prim)
 
     def get_instance_render_data(self) -> list[Tuple[str, np.ndarray, int]]:
         result = []

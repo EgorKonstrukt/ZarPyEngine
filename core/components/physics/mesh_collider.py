@@ -266,12 +266,33 @@ class MeshCollider(Component):
         c = self.center if isinstance(self.center, Vec3) else Vec3(*self.center)
         return Vec3(c.x * s.x, c.y * s.y, c.z * s.z)
 
+    def _gizmo_sig(self):
+        tr = self.transform
+        if tr is None:
+            return None
+        c = self.center
+        if isinstance(c, Vec3):
+            cx, cy, cz = c.x, c.y, c.z
+        else:
+            cx, cy, cz = c[0], c[1], c[2]
+        return (
+            self.mesh_path, self.collision_mode.value, self.max_vertices,
+            cx, cy, cz,
+            tr.local_position.x, tr.local_position.y, tr.local_position.z,
+            tr.local_rotation.x, tr.local_rotation.y, tr.local_rotation.z, tr.local_rotation.w,
+            tr.local_scale.x, tr.local_scale.y, tr.local_scale.z,
+        )
+
     def gizmo_primitives(self):
         if not self.mesh_path:
             return None
         tr = self.transform
         if not tr:
             return None
+        sig = self._gizmo_sig()
+        cached = getattr(self, "_mc_gizmo_cache", None)
+        if cached is not None and cached[0] == sig:
+            return cached[1]
         path = self.mesh_path
         if self.collision_mode == CollisionMode.CONVEX_HULL and self.max_vertices > 0:
             edges_np = _get_decimated_hull_edges_np(path, self.max_vertices)
@@ -280,7 +301,9 @@ class MeshCollider(Component):
         if edges_np is None or len(edges_np) == 0:
             return None
         color = [0.0, 1.0, 0.0, 0.6]
-        return _edge_pairs_np(edges_np, color, tr.local_position, tr.local_rotation, tr.local_scale)
+        result = _edge_pairs_np(edges_np, color, tr.local_position, tr.local_rotation, tr.local_scale)
+        self._mc_gizmo_cache = (sig, result)
+        return result
 
     def gizmo_lines(self) -> list[tuple[Vec3, Vec3, list[float]]]:
         prim = self.gizmo_primitives()

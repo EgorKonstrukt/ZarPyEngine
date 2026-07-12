@@ -21,6 +21,7 @@ class CameraResolutionMode(Enum):
 class Camera(Component):
     _icon = "Camera.png"
     _gizmo_pass = "camera"
+    _gizmo_cache_attrs = ("fov", "near", "far", "projection", "ortho_size")
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:

@@ -37,6 +37,7 @@ class ParticleForceField(Component):
     _gizmo_icon_color = (100, 200, 255)
     _gizmo_icon_label = "FF"
     _gizmo_pass = "force_field"
+    _gizmo_cache_attrs = ("shape", "radius", "box_size", "start_range")
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:

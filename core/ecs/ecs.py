@@ -97,6 +97,34 @@ class Component:
     def gizmo_instance_data(self):
         return None
 
+    def gizmo_cache_sig(self):
+        attrs = getattr(type(self), "_gizmo_cache_attrs", None)
+        if not attrs:
+            return None
+        tr = self.transform
+        if tr is None:
+            return None
+        try:
+            wm = tr.world_matrix._d.tobytes()
+        except Exception:
+            return None
+        from core.math.math3d import Vec2, Vec3, Vec4
+        from enum import Enum
+        parts = [wm]
+        for a in attrs:
+            v = getattr(self, a, None)
+            if v is None:
+                parts.append(None)
+            elif isinstance(v, (list, tuple)):
+                parts.append(tuple(v))
+            elif isinstance(v, (Vec2, Vec3, Vec4)):
+                parts.append((v.x, v.y, v.z, getattr(v, "w", 0.0)))
+            elif isinstance(v, Enum):
+                parts.append(v.value)
+            else:
+                parts.append(v)
+        return tuple(parts)
+
     def gizmo_meshes(self) -> list[tuple[list, list, list]]:
         return []
 

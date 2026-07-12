@@ -24,6 +24,8 @@ class Light(Component):
     _gizmo_icon_color = (255, 220, 50)
     _gizmo_icon_label = "L"
     _gizmo_pass = "light"
+    _gizmo_cache_attrs = ("light_type", "range", "spot_angle", "area_width", "area_height",
+                          "area_type", "area_double_sided", "color")
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:

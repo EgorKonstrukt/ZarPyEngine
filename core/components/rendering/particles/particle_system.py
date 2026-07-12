@@ -141,6 +141,8 @@ class ParticleSystem(Component):
     _allow_multiple = False
     _gizmo_icon_color = (255, 160, 50)
     _gizmo_icon_label = "P"
+    _gizmo_cache_attrs = ("shape_type", "shape_radius", "shape_arc", "shape_angle",
+                          "shape_length", "shape_box")
     _gizmo_pass = "particle"
 
     @classmethod
