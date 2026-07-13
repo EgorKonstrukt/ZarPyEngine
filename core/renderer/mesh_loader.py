@@ -118,6 +118,9 @@ class MeshLoader:
                 return rel
             eng = Engine.instance()
             root = eng.project_root if eng and eng.project_root else os.getcwd()
+            rel_root = os.path.join(root, file_path)
+            if os.path.exists(rel_root):
+                return os.path.normpath(rel_root).replace("\\", "/")
             if len(file_path) > 1 and file_path[1] == ":":
                 parts = file_path.replace("\\", "/").split("/")
                 for i in range(len(parts)):
@@ -155,6 +158,14 @@ class MeshLoader:
         m.is_error_mesh = import_data.is_error_mesh
         m.sub_mesh_ranges = list(getattr(import_data, 'sub_mesh_ranges', []))
         m.sub_mesh_names = list(getattr(import_data, 'sub_mesh_names', []))
+        if getattr(import_data, 'has_skeleton', False) and len(getattr(import_data, 'bone_indices', np.zeros((0, 4), dtype=np.int32))) > 0:
+            m.has_skeleton = True
+            m.bone_names = list(import_data.bone_names)
+            m.bone_parents = list(import_data.bone_parents)
+            m.bone_offset_matrices = [np.array(x, dtype=np.float32) for x in import_data.bone_offset_matrices]
+            m.bone_bind_local = [np.array(x, dtype=np.float32) for x in import_data.bone_bind_local]
+            m.bone_indices = np.array(import_data.bone_indices, dtype=np.int32).copy()
+            m.bone_weights = np.array(import_data.bone_weights, dtype=np.float32).copy()
         return m
 
     def _load_async(self, key: str, file_path: str, cache_key: str,

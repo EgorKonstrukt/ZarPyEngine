@@ -22,6 +22,8 @@ from core.foundation.logger import Logger
 
 from core.components.rendering.renderers.mesh_filter import MeshFilter
 from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+from core.components.rendering.skeleton.armature import Armature
 from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
 from core.components.rendering.renderers.svg_renderer import SvgRenderer
 from core.components.rendering.particles.particle_system import ParticleSystem
@@ -147,9 +149,9 @@ class _ProjectorItem:
 class _RenderSnapshot:
     __slots__ = (
         'lights', 'dir_light', 'sky_component', 'sky_entity', 'cloud_components',
-        'water_components', 'wind_zones', 'renderable', 'shadow_renderables', 'sprite_items', 'video_items',
+        'water_components', 'wind_zones', 'renderable', 'shadow_renderables',         'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
-        'projectors',
+        'projectors', 'skinned_renderables', 'skinned_shadow_renderables',
     )
     def __init__(self):
         self.lights: list = []
@@ -161,6 +163,8 @@ class _RenderSnapshot:
         self.wind_zones: list = []
         self.renderable: list = []
         self.shadow_renderables: list = []
+        self.skinned_renderables: list = []
+        self.skinned_shadow_renderables: list = []
         self.sprite_items: list = []
         self.video_items: list = []
         self.svg_items: list = []
@@ -297,6 +301,8 @@ class Renderer:
         self._batcher: Optional[RenderBatcher] = None
         self._gpu_storage: Optional[GpuStorage] = None
         self._gpu_culling: Optional[GpuCulling] = None
+        self._skinned_bone_ssbo: Optional[Any] = None
+        self._skinned_bone_ssbo_capacity: int = 0
         self._render_count: int = 0
 
     def load_config(self, config) -> None:
@@ -930,6 +936,81 @@ void main() {
         if self._mesh_loader:
             self._mesh_loader.set_render_callback(callback)
 
+    def _ensure_skinned_bone_ssbo(self, n_bones: int):
+        needed = max(64, n_bones) * 64
+        if self._skinned_bone_ssbo is not None and self._skinned_bone_ssbo_capacity >= needed:
+            return
+        if self._skinned_bone_ssbo is not None:
+            try:
+                self._skinned_bone_ssbo.release()
+            except Exception:
+                pass
+        self._skinned_bone_ssbo = self._ctx.buffer(reserve=needed)
+        self._skinned_bone_ssbo_capacity = needed
+
+    def _bind_bone_ssbo(self, flat: np.ndarray):
+        n = flat.shape[0]
+        self._ensure_skinned_bone_ssbo(n)
+        data = flat.tobytes()
+        if self._skinned_bone_ssbo.size < len(data):
+            try:
+                self._skinned_bone_ssbo.release()
+            except Exception:
+                pass
+            self._skinned_bone_ssbo = self._ctx.buffer(reserve=len(data) + 64)
+            self._skinned_bone_ssbo_capacity = len(data) + 64
+        self._skinned_bone_ssbo.write(data)
+        self._skinned_bone_ssbo.bind_to_storage_buffer(6)
+
+    def _render_skinned_meshes(self, snap, view_f32, proj_f32, cam_pos, lights):
+        eng = Engine.instance()
+        scene = eng.scene if eng and hasattr(eng, 'scene') else None
+        if scene is None:
+            return
+        last_prog = None
+        for entry in snap.skinned_renderables:
+            ent, tr, mesh, smr, wm, armature, sub_idx = entry[:7]
+            if armature is None or len(armature.bone_offset_matrices) == 0:
+                continue
+            flat, n_bones = armature.compute_skinning_buffer(scene, wm)
+            if n_bones == 0:
+                continue
+            mat = self._materials.load_material(smr.get_material_path(sub_idx if sub_idx >= 0 else 0))
+            shader_path = mat.shader_path if mat else ""
+            prog = self._shaders.get_or_compile(shader_path) if shader_path else self._default_prog
+            if prog is None:
+                prog = self._default_prog
+            if prog is not last_prog:
+                self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights,
+                                          disable_shadows=not smr.receive_shadows)
+                last_prog = prog
+            model_f32 = wm.to_f32()
+            if "u_model" in prog:
+                prog["u_model"].write(model_f32.tobytes())
+            try:
+                from core.math_helpers import mat4_normal_matrix
+                nm = mat4_normal_matrix(wm._d)
+            except Exception:
+                nm = np.eye(3, dtype=np.float32).T
+            if "u_normal_matrix" in prog:
+                prog["u_normal_matrix"].write(nm.tobytes())
+            if "u_use_skinning" in prog:
+                prog["u_use_skinning"].value = 1
+            if "u_bone_count" in prog:
+                prog["u_bone_count"].value = int(n_bones)
+            self._bind_bone_ssbo(flat)
+            self._materials.apply_material(mat, prog)
+            if "u_use_instancing" in prog:
+                prog["u_use_instancing"].value = 0
+            if sub_idx >= 0 and mesh.sub_mesh_ranges:
+                start, count = mesh.sub_mesh_ranges[sub_idx]
+                mesh.render_range(prog, start, count)
+            else:
+                mesh.render(prog)
+        if last_prog is not None and "u_use_skinning" in last_prog:
+            last_prog["u_use_skinning"].value = 0
+
+
     def _set_scene_uniforms(self, prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=False):
         if "u_view" in prog:
             prog["u_view"].write(view_f32.tobytes())
@@ -1092,6 +1173,37 @@ void main() {
                     snap.renderable.append([ent, tr, mesh, mr, wm, -1])
                 if needs_shadow and mr.cast_shadows:
                     snap.shadow_renderables.append([mesh, tr])
+        for ent in scene.get_entities_with_component(SkinnedMeshRenderer):
+            if not ent.active:
+                continue
+            smr = ent.get_component(SkinnedMeshRenderer)
+            tr = ent.transform
+            if not tr or not smr or not smr.enabled:
+                continue
+            armature = ent.get_component(Armature)
+            mesh_name = smr.mesh_name
+            mesh_path = smr.mesh_path or ""
+            if mesh_path:
+                _meta = self._sync_import_meta(mesh_path)
+                scale, cp, fuvs = _meta[0], _meta[1], _meta[2]
+            else:
+                scale, cp, fuvs = 1.0, False, False
+            if not mesh_name and not mesh_path:
+                continue
+            elif not mesh_name and mesh_path:
+                mesh_name = os.path.splitext(os.path.basename(mesh_path))[0]
+            mesh = self.get_or_create_mesh(mesh_name, mesh_path, 1.0, False, fuvs)
+            if not mesh or not getattr(mesh, 'has_skeleton', False):
+                continue
+            wm = tr.world_matrix
+            sub_ranges = mesh.sub_mesh_ranges
+            if sub_ranges:
+                for sub_idx in range(len(sub_ranges)):
+                    snap.skinned_renderables.append([ent, tr, mesh, smr, wm, armature, sub_idx])
+            else:
+                snap.skinned_renderables.append([ent, tr, mesh, smr, wm, armature, -1])
+            if needs_shadow and smr.cast_shadows:
+                snap.skinned_shadow_renderables.append([mesh, ent, armature, wm])
         for ent in scene.get_entities_with_component(SpriteRenderer):
             if not ent.active:
                 continue
@@ -1281,7 +1393,7 @@ void main() {
             prof.start("render_shadow_pass")
         shadow_groups = {}
         try:
-            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {})
+            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene)
             if snap.projectors:
                 self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
         except Exception as _sh_err:
@@ -1382,6 +1494,12 @@ void main() {
             prof.stop("render_meshes")
         if use_polygon_mode:
             self._ctx.wireframe = False
+        if snap.skinned_renderables:
+            if prof:
+                prof.start("render_skinned")
+            self._render_skinned_meshes(snap, view_f32, proj_f32, cam_pos, lights)
+            if prof:
+                prof.stop("render_skinned")
         if snap.projectors:
             self._scene_fbo.use()
             self._scene_fbo.viewport = (0, 0, rw, rh)

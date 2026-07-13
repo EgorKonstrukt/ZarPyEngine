@@ -197,6 +197,8 @@ class RenderBatcher:
             self._write_shared_vbo(model_mats)
             if "u_use_instancing" in prog:
                 prog["u_use_instancing"].value = 1
+        if "u_use_skinning" in prog:
+            prog["u_use_skinning"].value = 0
 
         vao = self._get_vao(prog, mesh)
 
@@ -236,6 +238,8 @@ class RenderBatcher:
         ent, tr, _, _, _, _, wm, sub_idx = item
         if "u_use_instancing" in prog:
             prog["u_use_instancing"].value = 0
+        if "u_use_skinning" in prog:
+            prog["u_use_skinning"].value = 0
         if set_scene:
             set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
                                   disable_shadows=disable_shadows)

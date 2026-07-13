@@ -49,6 +49,15 @@ class MeshData:
         self._ctx: Optional[Any] = None
         self._vao_cache: dict[int, Any] = {}
         self._bounding_radius: Optional[float] = None
+        self.has_skeleton: bool = False
+        self.bone_names: list[str] = []
+        self.bone_parents: list[int] = []
+        self.bone_offset_matrices: list[np.ndarray] = []
+        self.bone_bind_local: list[np.ndarray] = []
+        self.bone_indices: np.ndarray = np.zeros((0, 4), dtype=np.int32)
+        self.bone_weights: np.ndarray = np.zeros((0, 4), dtype=np.float32)
+        self.bone_count: int = 0
+        self._bone_vbo: Optional[Any] = None
 
     def compute_aabb(self):
         if len(self.vertices) < 3:
@@ -83,6 +92,16 @@ class MeshData:
         if len(self.indices) > 0:
             if self._ibo is None:
                 self._ibo = ctx.buffer(self.indices.astype(np.uint32).tobytes())
+        if self.has_skeleton and len(self.bone_indices) > 0:
+            nb = len(self.bone_indices)
+            bone_data = np.zeros((nb, 8), dtype=np.float32)
+            bone_data[:, 0:4] = self.bone_indices.reshape(-1, 4).astype(np.float32)
+            bone_data[:, 4:8] = self.bone_weights.reshape(-1, 4)
+            if self._bone_vbo is None:
+                self._bone_vbo = ctx.buffer(bone_data.tobytes())
+            else:
+                self._bone_vbo.write(bone_data.tobytes())
+            self.bone_count = len(self.bone_offset_matrices)
         self._build_vao_for_program(program)
         self._vao = self._vao_cache.get(id(program))
 
@@ -95,6 +114,8 @@ class MeshData:
         has_pos = "in_position" in program
         has_nrm = "in_normal" in program
         has_uv = "in_uv" in program
+        has_bone_idx = "in_bone_indices" in program
+        has_bone_w = "in_bone_weights" in program
         fmt_parts = []
         attrib_names = []
         if has_pos:
@@ -112,10 +133,12 @@ class MeshData:
             attrib_names.append("in_uv")
         else:
             fmt_parts.append("2x4")
-        fmt = " ".join(fmt_parts)
+        buffers = [(self._vbo, " ".join(fmt_parts), *attrib_names)]
+        if self._bone_vbo is not None and has_bone_idx and has_bone_w:
+            buffers.append((self._bone_vbo, "4f 4f", "in_bone_indices", "in_bone_weights"))
         self._vao_cache[key] = self._ctx.vertex_array(
             program,
-            [(self._vbo, fmt, *attrib_names)],
+            buffers,
             self._ibo
         )
 
@@ -166,6 +189,9 @@ class MeshData:
             self._vbo.release()
         if self._ibo:
             self._ibo.release()
+        if self._bone_vbo:
+            self._bone_vbo.release()
+            self._bone_vbo = None
         if self._outline_vao:
             self._outline_vao.release()
         if self._outline_vbo:

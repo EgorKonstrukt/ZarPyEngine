@@ -98,6 +98,10 @@ class ShadowRenderer:
         self._has_projector_shadow: list[bool] = [False, False]
         self._shadow_vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
         self._shadow_inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
+        self._skinned_bone_ssbo: Optional[Any] = None
+        self._skinned_bone_ssbo_cap: int = 0
+        self._pending_skinned: list = []
+        self._pending_scene: Any = None
         self._shadow_groups_cache: Optional[dict] = None
         self._shadow_groups_key: int = 0
         self._shadow_groups_ref: Any = None
@@ -276,10 +280,70 @@ class ShadowRenderer:
         self._get_mesh = None
         return result
 
+    def _bind_bone_ssbo(self, flat: np.ndarray):
+        n = flat.shape[0]
+        needed = max(64, n) * 64
+        if self._skinned_bone_ssbo is not None and self._skinned_bone_ssbo_cap >= needed:
+            data = flat.tobytes()
+            if self._skinned_bone_ssbo.size < len(data):
+                try:
+                    self._skinned_bone_ssbo.release()
+                except Exception:
+                    pass
+                self._skinned_bone_ssbo = self._ctx.buffer(reserve=len(data) + 64)
+                self._skinned_bone_ssbo_cap = len(data) + 64
+            self._skinned_bone_ssbo.write(data)
+        else:
+            if self._skinned_bone_ssbo is not None:
+                try:
+                    self._skinned_bone_ssbo.release()
+                except Exception:
+                    pass
+            self._skinned_bone_ssbo = self._ctx.buffer(reserve=needed)
+            self._skinned_bone_ssbo_cap = needed
+            self._skinned_bone_ssbo.write(flat.tobytes())
+        self._skinned_bone_ssbo.bind_to_storage_buffer(6)
+
+    def _maybe_render_skinned(self, vp: np.ndarray, fbo, resolution: int):
+        if not self._pending_skinned:
+            return
+        if self._pending_scene is None:
+            return
+        prog = self._prog
+        fbo.use()
+        fbo.viewport = (0, 0, resolution, resolution)
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        self._ctx.depth_mask = True
+        self._ctx.disable(moderngl.CULL_FACE)
+        prog["u_light_vp"].write(vp.astype(np.float32).tobytes())
+        if "u_use_instancing" in prog:
+            prog["u_use_instancing"].value = 0
+        if "u_use_skinning" in prog:
+            prog["u_use_skinning"].value = 1
+        for entry in self._pending_skinned:
+            mesh, ent, armature, wm = entry[0], entry[1], entry[2], entry[3]
+            if armature is None or len(armature.bone_offset_matrices) == 0:
+                continue
+            flat, n_bones = armature.compute_skinning_buffer(self._pending_scene, wm)
+            if n_bones == 0:
+                continue
+            self._bind_bone_ssbo(flat)
+            if "u_bone_count" in prog:
+                prog["u_bone_count"].value = int(n_bones)
+            if "u_model" in prog:
+                prog["u_model"].write(wm.to_f32().tobytes())
+            mesh.render(prog)
+        if "u_use_skinning" in prog:
+            prog["u_use_skinning"].value = 0
+        self._ctx.enable(moderngl.CULL_FACE)
+
     def render_shadow_pass(self, renderable_shadow, lights, cam_near: float, cam_far: float, cam_fov: float,
-                           aspect: float, view_mat: Mat4, meshes: object = None) -> dict:
+                           aspect: float, view_mat: Mat4, meshes: object = None,
+                           skinned_entries: list = None, scene: object = None) -> dict:
         if not self._prog:
             return {}
+        self._pending_skinned = skinned_entries or []
+        self._pending_scene = scene
         if not renderable_shadow:
             self._cascade_splits = [0.0] * 3
             self._has_point_shadow = False
@@ -349,6 +413,7 @@ class ShadowRenderer:
             vp = self._build_directional_cascade(light_dir, corners, split_far - near_z)
             self._light_space_matrices[cascade_idx] = vp
             self._render_geometry_with_groups(vp, self._shadow_fbos[cascade_idx], shadow_groups, resolution=self._shadow_resolution)
+            self._maybe_render_skinned(vp, self._shadow_fbos[cascade_idx], self._shadow_resolution)
             near_z = split_far
 
     def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray], depth_span: float) -> np.ndarray:
@@ -414,6 +479,7 @@ class ShadowRenderer:
             vp = (view_np @ proj_np).astype(np.float32)
             self._point_light_vps[face_idx] = vp
             self._render_geometry_with_groups(vp, self._point_shadow_fbos[face_idx], shadow_groups, resolution=self._point_shadow_resolution)
+            self._maybe_render_skinned(vp, self._point_shadow_fbos[face_idx], self._point_shadow_resolution)
 
     def _render_spot_shadow(self, spot_light, spot_transform, shadow_groups, lights):
         if not self._spot_shadow_map:
@@ -433,6 +499,7 @@ class ShadowRenderer:
             (i for i, (l, lt) in enumerate(lights) if l is spot_light and lt is spot_transform), -1
         )
         self._render_geometry_with_groups(vp, self._spot_shadow_fbo, shadow_groups, resolution=self._shadow_resolution)
+        self._maybe_render_skinned(vp, self._spot_shadow_fbo, self._shadow_resolution)
 
     def _render_area_shadow(self, area_light, area_transform, shadow_groups, lights):
         if not self._area_shadow_map:
@@ -464,6 +531,7 @@ class ShadowRenderer:
             (i for i, (l, lt) in enumerate(lights) if l is area_light and lt is area_transform), -1
         )
         self._render_geometry_with_groups(vp, self._area_shadow_fbo, shadow_groups, resolution=self._area_shadow_resolution)
+        self._maybe_render_skinned(vp, self._area_shadow_fbo, self._area_shadow_resolution)
 
     def render_projector_shadows(self, projectors, renderable_shadow, shadow_groups: dict = None):
         if shadow_groups is None:
@@ -639,3 +707,9 @@ class ShadowRenderer:
                 pass
         self._shadow_inst_vbo.clear()
         self._shadow_vao_cache.clear()
+        if self._skinned_bone_ssbo is not None:
+            try:
+                self._skinned_bone_ssbo.release()
+            except Exception:
+                pass
+            self._skinned_bone_ssbo = None
