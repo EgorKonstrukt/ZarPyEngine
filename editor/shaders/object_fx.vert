@@ -37,6 +37,8 @@ uniform float u_disint_cell;
 uniform float u_disint_noise_scale;
 uniform float u_disint_speed;
 uniform float u_disint_drag;
+uniform float u_disint_gravity;
+uniform float u_disint_rot;
 uniform vec3 u_obj_center;
 uniform float u_obj_scale;
 out vec3 v_world_pos;
@@ -98,18 +100,41 @@ void main() {
         local_nrm = mat3(skin) * in_normal;
     }
     if (u_disint_amount > 0.0) {
-        vec3 cell = floor((in_position - u_obj_center) / max(0.001, u_disint_cell));
-        float h = hash31(cell);
-        vec3 outward = normalize(in_position - u_obj_center + vec3(1e-4));
-        vec3 rnd = vec3(hash31(cell + 1.3), hash31(cell + 2.7), hash31(cell + 5.1)) * 2.0 - 1.0;
-        vec3 vel = normalize(u_disint_dir * 1.5 + outward * 1.3 + rnd * 0.6);
-        float speed = (0.3 + h * 1.2) * u_obj_scale * u_disint_speed;
+        float cs = max(0.001, u_disint_cell);
+        vec3 cellId = floor((in_position - u_obj_center) / cs);
+        float h = hash31(cellId);
+        float h2 = hash31(cellId + 7.3);
+        float h3 = hash31(cellId + 19.1);
         float t = u_disint_amount;
         float drag = max(0.01, u_disint_drag);
         float s = (1.0 - exp(-drag * t)) / drag;
-        local_pos += vel * (speed * s);
+
+        vec3 cellCenter = (cellId + 0.5) * cs + u_obj_center;
+        vec3 rel = in_position - cellCenter;
+
+        if (u_disint_rot > 0.0) {
+            float ang = h * 6.2831853 + t * u_disint_rot * (h2 - 0.5) * 4.0;
+            vec3 axis = normalize(vec3(h, h2, h3) * 2.0 - 1.0 + vec3(1e-4));
+            float c = cos(ang);
+            float si = sin(ang);
+            vec3 cr = cross(axis, rel);
+            rel = rel * c + cr * si + axis * dot(axis, rel) * (1.0 - c);
+            vec3 nr = cross(axis, local_nrm);
+            local_nrm = local_nrm * c + nr * si + axis * dot(axis, local_nrm) * (1.0 - c);
+        }
+
+        vec3 outward = normalize(in_position - u_obj_center + vec3(1e-4));
+        vec3 rnd = vec3(h, h2, h3) * 2.0 - 1.0;
+        vec3 vel = normalize(u_disint_dir * 1.5 + outward * 1.3 + rnd * 0.6);
+        float speed = (0.3 + h * 1.2) * u_obj_scale * u_disint_speed;
+        vec3 disp = vel * (speed * s);
+
+        disp += vec3(0.0, -1.0, 0.0) * u_disint_gravity * u_obj_scale * (s * s);
+
         float jitter = (noise3(in_position * max(0.1, u_disint_noise_scale)) - 0.5);
-        local_pos += outward * jitter * t * u_obj_scale * 0.6;
+        disp += outward * jitter * t * u_obj_scale * 0.6;
+
+        local_pos = cellCenter + rel + disp;
     }
     vec4 world_pos = model * vec4(local_pos, 1.0);
     v_world_pos = world_pos.xyz;

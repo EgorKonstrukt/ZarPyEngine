@@ -91,6 +91,8 @@ uniform float u_disint_noise_scale;
 uniform float u_disint_edge;
 uniform vec3 u_disint_edge_color;
 uniform float u_disint_edge_emission;
+uniform float u_disint_stagger;
+uniform float u_disint_fade;
 uniform vec3 u_obj_center;
 
 float hash(vec2 p) {
@@ -334,12 +336,17 @@ void main() {
         vec3 cell = floor((v_local_pos - u_obj_center) / max(0.001, u_disint_cell));
         float h = hash31(cell);
         float n = noise3(v_local_pos * max(0.1, u_disint_noise_scale));
-        float thr = u_disint_amount * 1.3 - h * 0.5;
+        float thr = u_disint_amount * 1.3 - h * u_disint_stagger;
         if (n < thr) discard;
         float edge = thr + max(0.0001, u_disint_edge);
         if (n < edge) {
             float t = (n - thr) / (edge - thr);
             result = mix(u_disint_edge_color * u_disint_edge_emission, result, t);
+        }
+        if (u_disint_fade > 0.0) {
+            float released = u_disint_amount * 1.3 - h * u_disint_stagger;
+            float f = clamp(released / max(0.0001, u_disint_fade), 0.0, 1.0);
+            fx_alpha *= 1.0 - f;
         }
     }
 
