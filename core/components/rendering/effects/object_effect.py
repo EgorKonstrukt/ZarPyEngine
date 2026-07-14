@@ -20,6 +20,8 @@ class ObjectEffect(Component):
 
     _registry: list[ObjectEffect] = []
 
+    fx_uniform_defaults: dict = {}
+
     def __init__(self):
         super().__init__()
         self._time_offset: float = 0.0
@@ -66,6 +68,33 @@ class ObjectEffect(Component):
                 prog[name].write(np.array(arr, dtype=np.float32).tobytes())
         except Exception:
             pass
+
+    def _set_vec_bytes(self, prog, name: str, arr: np.ndarray):
+        try:
+            if name in prog:
+                prog[name].write(arr.tobytes())
+        except Exception:
+            pass
+
+    @classmethod
+    def reset_defaults(cls, prog):
+        for name, val in cls.fx_uniform_defaults.items():
+            try:
+                if name in prog:
+                    if isinstance(val, (list, tuple, np.ndarray)):
+                        prog[name].write(np.array(val, dtype=np.float32).tobytes())
+                    else:
+                        prog[name].value = val
+            except Exception:
+                pass
+
+    @classmethod
+    def reset_all_defaults(cls, prog):
+        for sub in cls.__subclasses__():
+            try:
+                sub.reset_defaults(prog)
+            except Exception:
+                pass
 
     def bind(self, prog, time_s: float):
         self._set(prog, "u_time", time_s - self._time_offset)

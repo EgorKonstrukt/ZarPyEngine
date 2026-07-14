@@ -1386,6 +1386,7 @@ void main() {
                 if "u_use_skinning" in prog:
                     prog["u_use_skinning"].value = 0
                 self._materials.apply_material(mat, prog)
+                ObjectEffect.reset_all_defaults(prog)
                 for fx in fx_list:
                     fx.bind(prog, t)
                 mesh.render(prog)

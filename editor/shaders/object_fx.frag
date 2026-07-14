@@ -93,6 +93,24 @@ uniform vec3 u_disint_edge_color;
 uniform float u_disint_edge_emission;
 uniform float u_disint_stagger;
 uniform float u_disint_fade;
+uniform float u_holo_amount;
+uniform vec3 u_holo_color;
+uniform float u_holo_scan;
+uniform float u_holo_speed;
+uniform float u_holo_flicker;
+uniform float u_holo_rim;
+uniform float u_frost_amount;
+uniform vec3 u_frost_color;
+uniform float u_frost_coverage;
+uniform float u_frost_rim;
+uniform float u_pulse_amount;
+uniform vec3 u_pulse_color;
+uniform float u_pulse_speed;
+uniform float u_pulse_strength;
+uniform float u_glitch_amount;
+uniform float u_glitch_speed;
+uniform float u_glitch_block;
+uniform float u_glitch_rgb;
 uniform vec3 u_obj_center;
 
 float hash(vec2 p) {
@@ -347,6 +365,40 @@ void main() {
             float released = u_disint_amount * 1.3 - h * u_disint_stagger;
             float f = clamp(released / max(0.0001, u_disint_fade), 0.0, 1.0);
             fx_alpha *= 1.0 - f;
+        }
+    }
+
+    if (u_holo_amount > 0.0) {
+        vec3 V = normalize(u_camera_pos - v_world_pos);
+        float fres = pow(1.0 - max(dot(normalize(v_normal), V), 0.0), u_holo_rim);
+        float scan = 0.5 + 0.5 * sin(v_world_pos.y * u_holo_scan + u_time * u_holo_speed);
+        float fl = 1.0 - u_holo_flicker * (0.5 + 0.5 * sin(u_time * 37.0 + v_world_pos.x * 4.0));
+        vec3 holo = u_holo_color * (fres * 1.5 + scan * 0.5) * u_holo_amount * fl;
+        result = mix(result, result + holo, u_holo_amount);
+        fx_alpha = clamp(fx_alpha + fres * u_holo_amount * 0.6, 0.0, 1.0);
+    }
+    if (u_frost_amount > 0.0) {
+        float n = noise3(v_local_pos * 8.0);
+        vec3 V = normalize(u_camera_pos - v_world_pos);
+        float fres = pow(1.0 - max(dot(normalize(v_normal), V), 0.0), u_frost_rim);
+        float ice = clamp(u_frost_amount * (u_frost_coverage * (0.45 + 0.55 * n)) + fres * u_frost_amount, 0.0, 1.0);
+        vec3 tinted = mix(result, u_frost_color, ice * 0.85) + u_frost_color * fres * u_frost_amount * 0.7;
+        result = mix(result, tinted, u_frost_amount);
+    }
+    if (u_pulse_amount > 0.0) {
+        float p = 0.5 + 0.5 * sin(u_time * u_pulse_speed);
+        result += u_pulse_color * p * u_pulse_strength * u_pulse_amount;
+    }
+    if (u_glitch_amount > 0.0) {
+        float blk = floor(v_local_pos.y / max(0.01, u_glitch_block) + u_time * u_glitch_speed);
+        float r = hash31(vec3(blk, 4.2, 7.7));
+        if (r < u_glitch_amount) {
+            float mode = hash31(vec3(blk, 2.2, 8.8));
+            vec3 g = result;
+            if (mode < 0.34) g = result.gbr;
+            else if (mode < 0.67) g = result.brg;
+            g *= 1.0 + u_glitch_rgb * (r / max(0.001, u_glitch_amount));
+            result = mix(result, g, u_glitch_amount);
         }
     }
 

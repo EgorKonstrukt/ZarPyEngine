@@ -39,6 +39,14 @@ uniform float u_disint_speed;
 uniform float u_disint_drag;
 uniform float u_disint_gravity;
 uniform float u_disint_rot;
+uniform float u_wind_amount;
+uniform vec3 u_wind_dir;
+uniform float u_wind_speed;
+uniform float u_wind_strength;
+uniform float u_glitch_amount;
+uniform float u_glitch_intensity;
+uniform float u_glitch_speed;
+uniform float u_glitch_block;
 uniform vec3 u_obj_center;
 uniform float u_obj_scale;
 out vec3 v_world_pos;
@@ -135,6 +143,21 @@ void main() {
         disp += outward * jitter * t * u_obj_scale * 0.6;
 
         local_pos = cellCenter + rel + disp;
+    }
+    if (u_wind_amount > 0.0) {
+        float phase = u_time * u_wind_speed;
+        float h = clamp((in_position.y - u_obj_center.y) / max(0.001, u_obj_scale), 0.0, 1.0);
+        float sway = sin(phase + (in_position.x + in_position.z) * 0.5) * u_wind_strength * h * h * u_wind_amount;
+        vec3 wdir = normalize(u_wind_dir + vec3(1e-4, 0.0, 1e-4));
+        local_pos += wdir * sway;
+    }
+    if (u_glitch_amount > 0.0) {
+        float blk = floor(in_position.y / max(0.01, u_glitch_block) + u_time * u_glitch_speed);
+        float r = hash31(vec3(blk, 1.7, 3.3));
+        if (r < u_glitch_amount) {
+            float off = (hash31(vec3(blk, 9.1, 2.2)) - 0.5) * u_glitch_intensity * u_obj_scale;
+            local_pos.x += off;
+        }
     }
     vec4 world_pos = model * vec4(local_pos, 1.0);
     v_world_pos = world_pos.xyz;

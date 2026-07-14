@@ -16,6 +16,7 @@ from core.components.rendering.effects.object_effect import ObjectEffect
 @ComponentRegistry.register
 class PolygonDisintegrationEffect(ObjectEffect):
     _gizmo_icon_label = "P"
+    fx_uniform_defaults = {"u_disint_amount": 0.0}
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
@@ -109,13 +110,6 @@ class PolygonDisintegrationEffect(ObjectEffect):
         self._set(prog, "u_disint_edge", float(self.edge_width))
         self._set_vec_bytes(prog, "u_disint_edge_color", self._edge_buf)
         self._set(prog, "u_disint_edge_emission", float(self.edge_emission))
-
-    def _set_vec_bytes(self, prog, name: str, arr: np.ndarray):
-        try:
-            if name in prog:
-                prog[name].write(arr.tobytes())
-        except Exception:
-            pass
 
     def serialize(self) -> dict:
         d = super().serialize()

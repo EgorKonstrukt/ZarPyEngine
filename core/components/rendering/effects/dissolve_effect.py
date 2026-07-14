@@ -15,6 +15,7 @@ from core.components.rendering.effects.object_effect import ObjectEffect
 @ComponentRegistry.register
 class DissolveEffect(ObjectEffect):
     _gizmo_icon_label = "D"
+    fx_uniform_defaults = {"u_dissolve_amount": 0.0}
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
