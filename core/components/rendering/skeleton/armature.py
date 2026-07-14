@@ -7,8 +7,9 @@
 from __future__ import annotations
 import numpy as np
 from typing import Optional
-from core.ecs.ecs import Component, ComponentRegistry
+from core.ecs.ecs import Component, ComponentRegistry, GizmoPrimitive
 from core.math.math3d import Mat4, Vec3, Quat
+from core.config.config import get_global_config
 from core.components.inspector_meta import FieldType, InspectorField
 
 
@@ -51,6 +52,9 @@ class Armature(Component):
     _show_gizmo_icon: bool = False
     _gizmo_icon_label = "A"
     _category = "Skinned Mesh"
+    _gizmo_pass = "armature"
+    _gizmo_bone_color = (1.0, 0.78, 0.22, 1.0)
+    _gizmo_root_color = (0.42, 0.9, 1.0, 1.0)
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
@@ -117,6 +121,70 @@ class Armature(Component):
             if parent_ent is not None and entities[i] is not None:
                 entities[i].set_parent(parent_ent, preserve_world=False)
             self.bone_entity_ids[i] = entities[i].id if entities[i] is not None else ""
+
+    def _bone_world_positions(self) -> list:
+        scene = self.entity._scene if self.entity else None
+        n = len(self.bone_names)
+        positions = [None] * n
+        live = False
+        for i in range(n):
+            ent_id = self.bone_entity_ids[i] if i < len(self.bone_entity_ids) else ""
+            ent = None
+            if scene and ent_id:
+                ent = scene.get_entity(ent_id)
+            if ent is not None and ent.transform is not None:
+                p = ent.transform.position
+                positions[i] = (p.x, p.y, p.z)
+                live = True
+        if not live:
+            base = Mat4.identity()
+            tr = self.transform
+            if tr is not None:
+                base = tr.world_matrix
+            for i in range(n):
+                local = Mat4(self.bone_bind_local[i]) if i < len(self.bone_bind_local) and self.bone_bind_local[i] is not None else Mat4.identity()
+                wp = (base * local).get_translation()
+                positions[i] = (wp.x, wp.y, wp.z)
+        return positions
+
+    def _append_joint_cross(self, s_list, e_list, c_list, p, size, color):
+        x, y, z = p
+        s_list.append([x - size, y, z]); e_list.append([x + size, y, z])
+        s_list.append([x, y - size, z]); e_list.append([x, y + size, z])
+        s_list.append([x, y, z - size]); e_list.append([x, y, z + size])
+        for _ in range(3):
+            c_list.append(color)
+
+    def gizmo(self):
+        if not get_global_config().get("gizmo.show_armature_bones", True):
+            return []
+        n = len(self.bone_names)
+        if n == 0:
+            return []
+        positions = self._bone_world_positions()
+        parents = self.bone_parents
+        bone_color = self._gizmo_bone_color
+        root_color = self._gizmo_root_color
+        s_list, e_list, c_list = [], [], []
+        for i in range(n):
+            p = positions[i]
+            if p is None:
+                continue
+            pi = parents[i] if i < len(parents) else -1
+            if pi >= 0 and pi < n and positions[pi] is not None:
+                pp = positions[pi]
+                s_list.append([pp[0], pp[1], pp[2]])
+                e_list.append([p[0], p[1], p[2]])
+                c_list.append(bone_color)
+                self._append_joint_cross(s_list, e_list, c_list, p, 0.03, bone_color)
+            else:
+                self._append_joint_cross(s_list, e_list, c_list, p, 0.06, root_color)
+        if not s_list:
+            return []
+        starts = np.array(s_list, dtype=np.float32)
+        ends = np.array(e_list, dtype=np.float32)
+        colors = np.array(c_list, dtype=np.float32)
+        return [GizmoPrimitive(starts, ends, colors)]
 
     def bone_world_matrices(self, scene, renderer_world: Mat4) -> list[np.ndarray]:
         n = len(self.bone_offset_matrices)

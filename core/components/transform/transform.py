@@ -82,10 +82,17 @@ class Transform(Component):
         self._world_target = None
         self._dirty = False
     def _build_local_matrix(self) -> Mat4:
-        t = mat4_translation(self._local_pos.x, self._local_pos.y, self._local_pos.z)
         r = mat4_from_quaternion(self._local_rot.x, self._local_rot.y, self._local_rot.z, self._local_rot.w)
-        s = mat4_scale_mat(self._local_scale.x, self._local_scale.y, self._local_scale.z)
-        return Mat4(mat4_mul_fast(mat4_mul_fast(s, r), t))
+        sx, sy, sz = self._local_scale.x, self._local_scale.y, self._local_scale.z
+        m = np.array(r, dtype=FLOAT_TYPE)
+        m[0, 0] *= sx; m[0, 1] *= sx; m[0, 2] *= sx
+        m[1, 0] *= sy; m[1, 1] *= sy; m[1, 2] *= sy
+        m[2, 0] *= sz; m[2, 1] *= sz; m[2, 2] *= sz
+        m[3, 0] = self._local_pos.x
+        m[3, 1] = self._local_pos.y
+        m[3, 2] = self._local_pos.z
+        m[3, 3] = 1.0
+        return Mat4(m)
     @property
     def local_position(self) -> Vec3: return self._local_pos
     @local_position.setter

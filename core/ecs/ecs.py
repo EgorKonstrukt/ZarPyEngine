@@ -17,7 +17,7 @@ T = TypeVar("T", bound="Component")
 _UNSET = object()
 
 _GIZMO_PASSES: dict[str, list[type[Component]]] = {}
-_GIZMO_PASS_ORDER: list[str] = ["collider", "particle", "force_field", "camera", "audio", "light", "script", "nav"]
+_GIZMO_PASS_ORDER: list[str] = ["collider", "particle", "force_field", "camera", "audio", "light", "script", "nav", "armature"]
 
 
 def _get_engine():
