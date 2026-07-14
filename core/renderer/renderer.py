@@ -1292,6 +1292,15 @@ void main() {
             tr = entry[1]
             if tr is not None:
                 entry[4] = tr.world_matrix
+        for entry in snap.skinned_renderables:
+            tr = entry[1]
+            if tr is not None:
+                entry[4] = tr.world_matrix
+        for entry in snap.skinned_shadow_renderables:
+            ent = entry[1]
+            tr = ent.transform if ent is not None else None
+            if tr is not None:
+                entry[3] = tr.world_matrix
         for item in snap.sprite_items:
             tr = item._tr
             if tr is not None:

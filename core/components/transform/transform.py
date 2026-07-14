@@ -131,7 +131,7 @@ class Transform(Component):
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
                 world_arr = np.array([world_pos.x, world_pos.y, world_pos.z, 1.0], dtype=FLOAT_TYPE)
-                local_arr = world_arr @ inv.T
+                local_arr = world_arr @ inv
                 self._local_pos = Vec3(float(local_arr[0]), float(local_arr[1]), float(local_arr[2]))
                 self._mark_dirty()
                 return
