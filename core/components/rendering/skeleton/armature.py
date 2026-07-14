@@ -126,7 +126,6 @@ class Armature(Component):
         scene = self.entity._scene if self.entity else None
         n = len(self.bone_names)
         positions = [None] * n
-        live = False
         for i in range(n):
             ent_id = self.bone_entity_ids[i] if i < len(self.bone_entity_ids) else ""
             ent = None
@@ -135,16 +134,22 @@ class Armature(Component):
             if ent is not None and ent.transform is not None:
                 p = ent.transform.position
                 positions[i] = (p.x, p.y, p.z)
-                live = True
-        if not live:
-            base = Mat4.identity()
-            tr = self.transform
-            if tr is not None:
-                base = tr.world_matrix
-            for i in range(n):
-                local = Mat4(self.bone_bind_local[i]) if i < len(self.bone_bind_local) and self.bone_bind_local[i] is not None else Mat4.identity()
-                wp = (base * local).get_translation()
-                positions[i] = (wp.x, wp.y, wp.z)
+        if all(p is not None for p in positions):
+            return positions
+        off = self.bone_offset_matrices
+        base_np = np.eye(4, dtype=np.float32)
+        tr = self.transform
+        if tr is not None:
+            base_np = tr.world_matrix._d
+        for i in range(n):
+            if positions[i] is not None:
+                continue
+            if i >= len(off) or off[i] is None:
+                continue
+            bw = np.linalg.inv(np.array(off[i], dtype=np.float32))
+            lp = bw[3, 0:3]
+            world = base_np @ np.array([lp[0], lp[1], lp[2], 1.0], dtype=np.float32)
+            positions[i] = (float(world[0]), float(world[1]), float(world[2]))
         return positions
 
     def _append_joint_cross(self, s_list, e_list, c_list, p, size, color):
