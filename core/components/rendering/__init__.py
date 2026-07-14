@@ -15,9 +15,13 @@ from core.components.rendering.particles.particle_force_field import ParticleFor
 from core.components.rendering.environment.sky import Sky
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.renderers.text_renderer import TextRenderer
+from core.components.rendering.effects.object_effect import ObjectEffect
+from core.components.rendering.effects.dissolve_effect import DissolveEffect
+from core.components.rendering.effects.polygon_disintegration_effect import PolygonDisintegrationEffect
 
 __all__ = [
     "Camera", "CameraProjection", "MeshFilter", "MeshRenderer",
     "SpriteRenderer", "VideoRenderer", "SvgRenderer", "ParticleSystem", "ParticleForceField",
     "Sky", "Cloud", "TextRenderer",
+    "ObjectEffect", "DissolveEffect", "PolygonDisintegrationEffect",
 ]

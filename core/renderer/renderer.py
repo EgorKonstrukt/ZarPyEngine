@@ -31,6 +31,7 @@ from core.components.rendering.particles.particle_force_field import ParticleFor
 from core.components.mesh_editor import ProBuilderMesh
 from core.components.rendering.postfx.graphics_effect import GraphicsEffect
 from core.components.rendering.renderers.video_renderer import VideoRenderer
+from core.components.rendering.effects.object_effect import ObjectEffect
 from core.math.math3d import Mat4, Vec3
 
 from core.renderer.types import RenderMode
@@ -185,6 +186,7 @@ class Renderer:
         self._skybox_cube: Optional[MeshData] = None
         self._wireframe_prog: Optional[moderngl.Program] = None
         self._outline_prog: Optional[moderngl.Program] = None
+        self._object_fx_prog: Optional[moderngl.Program] = None
         self._gizmo_fatline_prog: Optional[moderngl.Program] = None
         self._gizmo_solid_prog: Optional[moderngl.Program] = None
         self._shadow_prog: Optional[moderngl.Program] = None
@@ -527,6 +529,7 @@ void main() {
             self._mesh_loader.register_primitives()
             self._batcher = RenderBatcher(self._ctx, self._default_prog)
             self._default_prog = self._batcher._default_prog
+            self._compile_object_fx()
             self._gpu_storage = GpuStorage(self._ctx)
             self._gpu_culling = self._gpu_storage.get_or_create_culling()
             self._grid = GridRenderer(self._ctx, self._grid_prog)
@@ -559,6 +562,20 @@ void main() {
             Logger.info("Renderer initialized.")
         except Exception as e:
             Logger.error(f"Renderer init error: {e}", e)
+
+    def _compile_object_fx(self):
+        try:
+            fx_vert = read_shader("object_fx.vert")
+            fx_frag = read_shader("object_fx.frag")
+            fx_frag = ShaderManager._inject_area_shadows(fx_frag)
+            fx_frag = ShaderManager._inject_caustics(fx_frag)
+            self._object_fx_prog = self._ctx.program(
+                vertex_shader=fx_vert,
+                fragment_shader=fx_frag
+            )
+        except Exception as e:
+            Logger.error(f"Failed to compile object_fx shader: {e}", e)
+            self._object_fx_prog = None
 
     def _load_grid_config(self):
         eng = Engine.instance()
@@ -1093,6 +1110,13 @@ void main() {
         if not disable_shadows:
             self._shadows.set_uniforms(prog)
 
+    def _find_object_effect(self, ent) -> list:
+        result = []
+        for comp in ent.get_all_components():
+            if isinstance(comp, ObjectEffect) and comp.enabled:
+                result.append(comp)
+        return result
+
     def _collect_snapshot(self, scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos) -> _RenderSnapshot:
         n_updated = scene.flush_transforms()
         struct_version = scene._render_version
@@ -1166,11 +1190,12 @@ void main() {
             if mesh:
                 wm = tr.world_matrix
                 sub_ranges = mesh.sub_mesh_ranges
+                fx_list = self._find_object_effect(ent)
                 if sub_ranges:
                     for sub_idx in range(len(sub_ranges)):
-                        snap.renderable.append([ent, tr, mesh, mr, wm, sub_idx])
+                        snap.renderable.append([ent, tr, mesh, mr, wm, sub_idx, fx_list])
                 else:
-                    snap.renderable.append([ent, tr, mesh, mr, wm, -1])
+                    snap.renderable.append([ent, tr, mesh, mr, wm, -1, fx_list])
                 if needs_shadow and mr.cast_shadows:
                     snap.shadow_renderables.append([mesh, tr])
         for ent in scene.get_entities_with_component(SkinnedMeshRenderer):
@@ -1316,6 +1341,59 @@ void main() {
         for item in snap.projectors:
             item.refresh_vp()
 
+    def _render_object_effects(self, entries, view_f32, proj_f32, cam_pos, lights,
+                                 selected_entities, outline_queue):
+        prog = self._object_fx_prog
+        if prog is None:
+            return
+        self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=False)
+        t = time.time()
+        for entry in entries:
+            ent, tr, mesh, mr = entry[:4]
+            wm = entry[4]
+            fx_list = entry[6] if len(entry) > 6 else None
+            if not fx_list:
+                continue
+            try:
+                mat = self._materials.load_material(mr.get_material_path(0))
+                model_f32 = wm.to_f32()
+                if "u_model" in prog:
+                    prog["u_model"].write(model_f32.tobytes())
+                nm = np.eye(3, dtype=np.float32).T
+                try:
+                    m3 = wm._d[:3, :3].copy()
+                    m3[:, 0] /= max(1e-10, float(np.linalg.norm(m3[:, 0])))
+                    m3[:, 1] /= max(1e-10, float(np.linalg.norm(m3[:, 1])))
+                    m3[:, 2] /= max(1e-10, float(np.linalg.norm(m3[:, 2])))
+                    nm = m3.T.astype(np.float32)
+                except Exception:
+                    pass
+                if "u_normal_matrix" in prog:
+                    prog["u_normal_matrix"].write(nm.tobytes())
+                center = [wm._d[0, 3], wm._d[1, 3], wm._d[2, 3]]
+                scale = max(
+                    float(np.linalg.norm(wm._d[:3, 0])),
+                    float(np.linalg.norm(wm._d[:3, 1])),
+                    float(np.linalg.norm(wm._d[:3, 2])),
+                    1e-4,
+                )
+                if "u_obj_center" in prog:
+                    prog["u_obj_center"].write(np.array(center, dtype=np.float32).tobytes())
+                if "u_obj_scale" in prog:
+                    prog["u_obj_scale"].value = scale
+                if "u_use_instancing" in prog:
+                    prog["u_use_instancing"].value = 0
+                if "u_use_skinning" in prog:
+                    prog["u_use_skinning"].value = 0
+                self._materials.apply_material(mat, prog)
+                for fx in fx_list:
+                    fx.bind(prog, t)
+                mesh.render(prog)
+                if selected_entities and ent in selected_entities:
+                    outline_queue.append((mesh, wm))
+            except Exception as e:
+                Logger.error(f"ObjectEffect render failed on '{getattr(ent, 'name', '?')}': {e}", e)
+
     def render_scene(self, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                      viewport_w: int, viewport_h: int, fbo=None,
                      selected_entities: Optional[set] = None,
@@ -1447,6 +1525,10 @@ void main() {
         if prof:
             prof.start("render_meshes")
         outline_queue: list[tuple[MeshData, Mat4]] = []
+        fx_renderable = [e for e in renderable if len(e) > 6 and e[6]]
+        if fx_renderable:
+            self._render_object_effects(fx_renderable, view_f32, proj_f32, cam_pos, lights, selected_entities, outline_queue)
+            renderable = [e for e in renderable if not (len(e) > 6 and e[6])]
         if self._batcher:
             groups = self._batcher.collect_groups(
                 renderable, self._materials, self._shaders)
