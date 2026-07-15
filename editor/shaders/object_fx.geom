@@ -102,11 +102,7 @@ void main() {
     float jitter = (noise3(cellCenter * max(0.1, u_disint_noise_scale)) - 0.5);
     disp += outward * jitter * t * u_obj_scale * u_disint_jitter;
 
-    vec3 cam_fwd = normalize(u_view[2].xyz);
-    float depth_comp = dot(disp, cam_fwd);
-    disp -= cam_fwd * depth_comp;
-
-    float rot_angle = h * 6.2831853 + t * u_disint_rot * (h2 - 0.5) * 4.0 + t * u_disint_twist;
+    float rot_angle = t * (h * 6.2831853 + u_disint_rot * (h2 - 0.5) * 4.0 + u_disint_twist);
     vec3 rot_axis = normalize(vec3(h, h2, h3) * 2.0 - 1.0 + vec3(1e-4));
     bool do_rot = u_disint_rot > 0.0 || u_disint_twist > 0.0;
 
