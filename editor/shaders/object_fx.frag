@@ -119,6 +119,7 @@ uniform float u_glitch_rgb;
 uniform vec3 u_obj_center;
 uniform float u_obj_scale;
 uniform int u_double_sided;
+// @FX_UNIFORMS
 
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -433,5 +434,6 @@ void main() {
         }
     }
 
+    // @FX_MAIN
     frag_color = vec4(result, fx_alpha);
 }

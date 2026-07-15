@@ -55,6 +55,18 @@ class ObjectEffect(Component):
                 pass
         cls._registry.clear()
 
+    @classmethod
+    def fx_geometry_shader(cls) -> "str | None":
+        return None
+
+    @classmethod
+    def fx_fragment_uniforms(cls) -> str:
+        return ""
+
+    @classmethod
+    def fx_fragment_snippet(cls) -> str:
+        return ""
+
     def _set(self, prog, name: str, value):
         try:
             if name in prog:

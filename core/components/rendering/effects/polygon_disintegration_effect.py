@@ -19,6 +19,14 @@ class PolygonDisintegrationEffect(ObjectEffect):
     fx_uniform_defaults = {"u_disint_amount": 0.0}
 
     @classmethod
+    def fx_geometry_shader(cls) -> "str | None":
+        try:
+            from core.renderer.mesh_data import read_shader
+            return read_shader("object_fx.geom")
+        except Exception:
+            return None
+
+    @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
             InspectorField("amount", "Amount", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
