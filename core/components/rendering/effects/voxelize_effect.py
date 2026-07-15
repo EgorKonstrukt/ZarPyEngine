@@ -15,7 +15,7 @@ from core.components.rendering.effects.object_effect import ObjectEffect
 
 VOXELIZE_GEOM_SHADER = """#version 460 core
 layout(triangles) in;
-layout(triangle_strip, max_vertices = 32) out;
+layout(triangle_strip, max_vertices = 48) out;
 
 in vec3 gs_world_pos[3];
 in vec3 gs_normal[3];
@@ -72,6 +72,10 @@ void emitCube(vec3 C, float h, float hy) {
     emitFW(C+vec3( h,-hy,-h), C+vec3(-h,-hy,-h), C+vec3( h, hy,-h), C+vec3(-h, hy,-h), vec3( 0, 0,-1));
 }
 
+vec3 snapCell(vec3 p, float vs) {
+    return (floor(p / vs) + 0.5) * vs;
+}
+
 void main() {
     if (u_vox_show_base > 0.5) {
         for (int i = 0; i < 3; i++) {
@@ -89,46 +93,60 @@ void main() {
     if (u_vox_amount <= 0.0) return;
 
     float vs = max(0.0001, u_vox_size);
-    float h = vs * 0.5;
+    float h = vs * 0.55;
     float hy = h * max(0.01, u_vox_height);
 
-    vec3 wc;
+    vec3 triCen, v0, v1, v2;
     if (u_vox_world_grid > 0.5) {
-        vec3 w0 = (u_model * vec4(gs_local_pos[0], 1.0)).xyz;
-        vec3 w1 = (u_model * vec4(gs_local_pos[1], 1.0)).xyz;
-        vec3 w2 = (u_model * vec4(gs_local_pos[2], 1.0)).xyz;
-        vec3 s0 = (floor(w0 / vs) + 0.5) * vs;
-        vec3 s1 = (floor(w1 / vs) + 0.5) * vs;
-        vec3 s2 = (floor(w2 / vs) + 0.5) * vs;
-        float d0 = length(w0 - s0);
-        float d1 = length(w1 - s1);
-        float d2 = length(w2 - s2);
-        if (d0 <= d1 && d0 <= d2) wc = s0;
-        else if (d1 <= d2) wc = s1;
-        else wc = s2;
+        v0 = (u_model * vec4(gs_local_pos[0], 1.0)).xyz;
+        v1 = (u_model * vec4(gs_local_pos[1], 1.0)).xyz;
+        v2 = (u_model * vec4(gs_local_pos[2], 1.0)).xyz;
+        triCen = (v0 + v1 + v2) / 3.0;
     } else {
-        vec3 s0 = (floor(gs_local_pos[0] / vs) + 0.5) * vs;
-        vec3 s1 = (floor(gs_local_pos[1] / vs) + 0.5) * vs;
-        vec3 s2 = (floor(gs_local_pos[2] / vs) + 0.5) * vs;
-        float d0 = length(gs_local_pos[0] - s0);
-        float d1 = length(gs_local_pos[1] - s1);
-        float d2 = length(gs_local_pos[2] - s2);
-        vec3 lc;
-        if (d0 <= d1 && d0 <= d2) lc = s0;
-        else if (d1 <= d2) lc = s1;
-        else lc = s2;
-        wc = (u_model * vec4(lc, 1.0)).xyz;
+        triCen = (gs_local_pos[0] + gs_local_pos[1] + gs_local_pos[2]) / 3.0;
+        v0 = gs_local_pos[0];
+        v1 = gs_local_pos[1];
+        v2 = gs_local_pos[2];
     }
 
-    vec3 cell = floor(wc / vs);
-    wc = (cell + 0.5) * vs;
+    vec3 cCell = floor(triCen / vs);
+    vec3 cSnap = (cCell + 0.5) * vs;
+
+    vec3 cell0 = floor(v0 / vs);
+    vec3 cell1 = floor(v1 / vs);
+    vec3 cell2 = floor(v2 / vs);
+
+    vec3 dc0 = cell0 - cCell;
+    vec3 dc1 = cell1 - cCell;
+    vec3 dc2 = cell2 - cCell;
+    float dd0 = dot(dc0, dc0);
+    float dd1 = dot(dc1, dc1);
+    float dd2 = dot(dc2, dc2);
+
+    vec3 farCell;
+    if (dd0 >= dd1 && dd0 >= dd2) farCell = cell0;
+    else if (dd1 >= dd2) farCell = cell1;
+    else farCell = cell2;
+
+    vec3 wc1 = cSnap;
     if (u_vox_jitter > 0.0) {
-        float r1 = hash31(cell + 1.3);
-        float r2 = hash31(cell + 7.7);
-        float r3 = hash31(cell + 19.1);
-        wc += (vec3(r1, r2, r3) - 0.5) * u_vox_jitter * vs;
+        float r1 = hash31(cCell + 1.3);
+        float r2 = hash31(cCell + 7.7);
+        float r3 = hash31(cCell + 19.1);
+        wc1 += (vec3(r1, r2, r3) - 0.5) * u_vox_jitter * vs;
     }
-    emitCube(wc, h, hy);
+    emitCube(wc1, h, hy);
+
+    if (farCell.x != cCell.x || farCell.y != cCell.y || farCell.z != cCell.z) {
+        vec3 wc2 = (farCell + 0.5) * vs;
+        if (u_vox_jitter > 0.0) {
+            float r1 = hash31(farCell + 1.3);
+            float r2 = hash31(farCell + 7.7);
+            float r3 = hash31(farCell + 19.1);
+            wc2 += (vec3(r1, r2, r3) - 0.5) * u_vox_jitter * vs;
+        }
+        emitCube(wc2, h, hy);
+    }
 }
 """
 
