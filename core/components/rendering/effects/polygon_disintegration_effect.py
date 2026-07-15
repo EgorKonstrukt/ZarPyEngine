@@ -23,26 +23,26 @@ class PolygonDisintegrationEffect(ObjectEffect):
         return [
             InspectorField("amount", "Amount", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("double_sided", "Double Sided", FieldType.BOOL),
-            InspectorField("direction", "Eject Direction", FieldType.VEC3, min_val=-1.0, max_val=1.0, step=0.05, decimals=3),
-            InspectorField("speed", "Eject Speed", FieldType.FLOAT, min_val=0.0, max_val=10.0, step=0.1, decimals=3),
-            InspectorField("sp_variance", "Speed Variance", FieldType.FLOAT, min_val=0.0, max_val=4.0, step=0.05, decimals=3),
-            InspectorField("outward", "Outward Force", FieldType.FLOAT, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
-            InspectorField("scatter", "Scatter", FieldType.FLOAT, min_val=0.0, max_val=3.0, step=0.05, decimals=3),
-            InspectorField("jitter", "Jitter", FieldType.FLOAT, min_val=0.0, max_val=3.0, step=0.05, decimals=3),
-            InspectorField("drag", "Drag", FieldType.SLIDER, min_val=0.5, max_val=12.0, step=0.1, decimals=3),
-            InspectorField("gravity", "Gravity", FieldType.FLOAT, min_val=0.0, max_val=20.0, step=0.1, decimals=3),
-            InspectorField("rotation", "Spin", FieldType.FLOAT, min_val=0.0, max_val=30.0, step=0.1, decimals=3),
-            InspectorField("twist", "Twist", FieldType.FLOAT, min_val=0.0, max_val=30.0, step=0.1, decimals=3),
+            InspectorField("direction", "Eject Direction", FieldType.VEC3, step=0.05, decimals=3),
+            InspectorField("speed", "Eject Speed", FieldType.FLOAT, step=0.1, decimals=3),
+            InspectorField("sp_variance", "Speed Variance", FieldType.FLOAT, step=0.05, decimals=3),
+            InspectorField("outward", "Outward Force", FieldType.FLOAT, step=0.05, decimals=3),
+            InspectorField("scatter", "Scatter", FieldType.FLOAT, step=0.05, decimals=3),
+            InspectorField("jitter", "Jitter", FieldType.FLOAT, step=0.05, decimals=3),
+            InspectorField("drag", "Drag", FieldType.FLOAT, step=0.1, decimals=3),
+            InspectorField("gravity", "Gravity", FieldType.FLOAT, step=0.1, decimals=3),
+            InspectorField("rotation", "Spin", FieldType.FLOAT, step=0.1, decimals=3),
+            InspectorField("twist", "Twist", FieldType.FLOAT, step=0.1, decimals=3),
             InspectorField("fade", "Fade Out", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
-            InspectorField("cell_size", "Cell Size", FieldType.FLOAT, min_val=0.01, max_val=5.0, step=0.01, decimals=3),
-            InspectorField("noise_scale", "Shatter Noise", FieldType.FLOAT, min_val=0.1, max_val=20.0, step=0.1, decimals=2),
+            InspectorField("cell_size", "Cell Size", FieldType.FLOAT, step=0.01, decimals=3),
+            InspectorField("noise_scale", "Shatter Noise", FieldType.FLOAT, step=0.1, decimals=2),
             InspectorField("stagger", "Cell Stagger", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
-            InspectorField("thr_scale", "Threshold Scale", FieldType.FLOAT, min_val=0.5, max_val=3.0, step=0.05, decimals=3),
+            InspectorField("thr_scale", "Threshold Scale", FieldType.FLOAT, step=0.05, decimals=3),
             InspectorField("edge_width", "Dissolve Edge", FieldType.SLIDER, min_val=0.0, max_val=0.5, step=0.01, decimals=3),
             InspectorField("edge_color", "Edge Color", FieldType.COLOR),
-            InspectorField("edge_emission", "Edge Emission", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
+            InspectorField("edge_emission", "Edge Emission", FieldType.FLOAT, step=0.05, decimals=3),
             InspectorField("animate", "Animate", FieldType.BOOL),
-            InspectorField("speed_anim", "Anim Speed", FieldType.FLOAT, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
+            InspectorField("speed_anim", "Anim Speed", FieldType.FLOAT, step=0.05, decimals=3),
             InspectorField("ping_pong", "Ping Pong", FieldType.BOOL),
         ]
 
@@ -50,24 +50,24 @@ class PolygonDisintegrationEffect(ObjectEffect):
         super().__init__()
         self.amount: float = 0.0
         self.double_sided: bool = True
-        self.direction: Vec3 = Vec3(0.0, -1.0, 0.0)
-        self.speed: float = 2.0
-        self.sp_variance: float = 1.2
-        self.outward: float = 1.3
-        self.scatter: float = 0.6
-        self.jitter: float = 0.6
-        self.drag: float = 4.0
+        self.direction: Vec3 = Vec3(0.0, 0.2, 0.0)
+        self.speed: float = 10.0
+        self.sp_variance: float = 4.0
+        self.outward: float = 5.0
+        self.scatter: float = 3.0
+        self.jitter: float = 3.0
+        self.drag: float = 12.0
         self.gravity: float = 0.0
-        self.rotation: float = 0.0
-        self.twist: float = 0.0
-        self.fade: float = 0.0
-        self.cell_size: float = 0.15
-        self.noise_scale: float = 1.0
-        self.stagger: float = 0.5
-        self.thr_scale: float = 1.3
-        self.edge_width: float = 0.06
-        self.edge_color: list[float] = [1.0, 0.55, 0.15]
-        self.edge_emission: float = 2.0
+        self.rotation: float = 1.6
+        self.twist: float = 1.4
+        self.fade: float = 1.0
+        self.cell_size: float = 0.08
+        self.noise_scale: float = 4.6
+        self.stagger: float = 0.595
+        self.thr_scale: float = 1.45
+        self.edge_width: float = 0.5
+        self.edge_color: list[float] = [1.0, 0.55, 0.10]
+        self.edge_emission: float = 5.0
         self.animate: bool = False
         self.speed_anim: float = 0.5
         self.ping_pong: bool = False
