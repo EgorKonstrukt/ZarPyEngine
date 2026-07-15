@@ -146,7 +146,7 @@ void main() {
     }
     if (u_wind_amount > 0.0) {
         float phase = u_time * u_wind_speed;
-        float h = clamp((in_position.y - u_obj_center.y) / max(0.001, u_obj_scale), 0.0, 1.0);
+        float h = clamp(in_position.y / max(0.001, u_obj_scale) * 0.5 + 0.5, 0.0, 1.0);
         float sway = sin(phase + (in_position.x + in_position.z) * 0.5) * u_wind_strength * h * h * u_wind_amount;
         vec3 wdir = normalize(u_wind_dir + vec3(1e-4, 0.0, 1e-4));
         local_pos += wdir * sway;

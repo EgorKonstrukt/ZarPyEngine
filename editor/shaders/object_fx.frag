@@ -103,6 +103,10 @@ uniform float u_frost_amount;
 uniform vec3 u_frost_color;
 uniform float u_frost_coverage;
 uniform float u_frost_rim;
+uniform float u_frost_crack;
+uniform float u_frost_sparkle;
+uniform vec3 u_frost_dir;
+uniform float u_frost_animate;
 uniform float u_pulse_amount;
 uniform vec3 u_pulse_color;
 uniform float u_pulse_speed;
@@ -112,6 +116,7 @@ uniform float u_glitch_speed;
 uniform float u_glitch_block;
 uniform float u_glitch_rgb;
 uniform vec3 u_obj_center;
+uniform float u_obj_scale;
 
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -142,6 +147,16 @@ float noise3(vec3 x) {
     float nxy0 = mix(nx00, nx10, f.y);
     float nxy1 = mix(nx01, nx11, f.y);
     return mix(nxy0, nxy1, f.z);
+}
+float fbm3(vec3 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+        v += a * noise3(p);
+        p *= 2.02;
+        a *= 0.5;
+    }
+    return v;
 }
 float sample_shadow(sampler2D shadow_map, vec3 proj_coords) {
     float current_depth = proj_coords.z - u_shadow_bias;
@@ -378,12 +393,25 @@ void main() {
         fx_alpha = clamp(fx_alpha + fres * u_holo_amount * 0.6, 0.0, 1.0);
     }
     if (u_frost_amount > 0.0) {
-        float n = noise3(v_local_pos * 8.0);
+        float animT = (u_frost_animate > 0.5) ? u_time : 0.0;
         vec3 V = normalize(u_camera_pos - v_world_pos);
         float fres = pow(1.0 - max(dot(normalize(v_normal), V), 0.0), u_frost_rim);
-        float ice = clamp(u_frost_amount * (u_frost_coverage * (0.45 + 0.55 * n)) + fres * u_frost_amount, 0.0, 1.0);
-        vec3 tinted = mix(result, u_frost_color, ice * 0.85) + u_frost_color * fres * u_frost_amount * 0.7;
-        result = mix(result, tinted, u_frost_amount);
+
+        float fbm = fbm3(v_local_pos * u_frost_crack + vec3(0.0, 0.0, animT * 0.05));
+        vec3 fdir = normalize(u_frost_dir + vec3(0.0, 1e-4, 0.0));
+        float along = clamp(dot(v_local_pos, fdir) / max(0.001, u_obj_scale) * 0.5 + 0.5, 0.0, 1.0);
+        float front = u_frost_amount * (1.0 + u_frost_coverage);
+        float local = clamp(front - (1.0 - along) * (1.0 - u_frost_coverage), 0.0, 1.0);
+        float mask = clamp(local * (0.35 + 0.75 * fbm), 0.0, 1.0);
+
+        vec3 icy = u_frost_color;
+        float sp = noise3(v_local_pos * u_frost_crack * 6.0 + vec3(animT * 2.0));
+        float glint = smoothstep(0.82, 1.0, sp) * u_frost_sparkle * mask;
+
+        vec3 frosted = mix(result, icy, mask * 0.9);
+        frosted += icy * fres * u_frost_amount * 0.8;
+        frosted += vec3(1.0) * glint;
+        result = mix(result, frosted, u_frost_amount);
     }
     if (u_pulse_amount > 0.0) {
         float p = 0.5 + 0.5 * sin(u_time * u_pulse_speed);

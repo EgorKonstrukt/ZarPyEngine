@@ -22,7 +22,7 @@ class GlitchEffect(ObjectEffect):
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
-            InspectorField("amount", "Strength", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("amount", "Amount", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("intensity", "Block Shift", FieldType.FLOAT, min_val=0.0, max_val=2.0, step=0.01, decimals=3),
             InspectorField("speed", "Speed", FieldType.FLOAT, min_val=0.0, max_val=20.0, step=0.1, decimals=2),
             InspectorField("block_size", "Block Size", FieldType.FLOAT, min_val=0.01, max_val=2.0, step=0.01, decimals=3),
