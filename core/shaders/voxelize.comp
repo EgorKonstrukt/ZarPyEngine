@@ -1,0 +1,132 @@
+#version 460 core
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer PosBuffer {
+    vec4 positions[];
+};
+layout(std430, binding = 1) buffer IdxBuffer {
+    uint indices[];
+};
+layout(std430, binding = 2) buffer GridBuffer {
+    uint grid[];
+};
+layout(std430, binding = 3) buffer InstBuffer {
+    vec4 instances[];
+};
+
+uniform int u_pass;
+uniform int u_num_tris;
+uniform int u_total_cells;
+uniform vec3 u_grid_min;
+uniform float u_cell_size;
+uniform ivec3 u_grid_dims;
+uniform float u_jitter;
+uniform int u_world_grid;
+uniform mat4 u_model;
+
+bool triBoxOverlap(vec3 boxcenter, vec3 boxhalf, vec3 v0, vec3 v1, vec3 v2) {
+    vec3 t0 = v0 - boxcenter;
+    vec3 t1 = v1 - boxcenter;
+    vec3 t2 = v2 - boxcenter;
+    vec3 tmin = min(min(t0, t1), t2);
+    vec3 tmax = max(max(t0, t1), t2);
+    if (any(greaterThan(tmin, boxhalf)) || any(lessThan(tmax, -boxhalf)))
+        return false;
+    vec3 e0 = t1 - t0;
+    vec3 e1 = t2 - t1;
+    vec3 e2 = t0 - t2;
+    vec3 n = cross(e0, e1);
+    float rad = abs(n.x) * boxhalf.x + abs(n.y) * boxhalf.y + abs(n.z) * boxhalf.z;
+    float d0 = dot(n, t0);
+    float d1 = dot(n, t1);
+    float d2 = dot(n, t2);
+    if (min(d0, min(d1, d2)) > rad || max(d0, max(d1, d2)) < -rad)
+        return false;
+    vec3 axes[3] = vec3[3](vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+    vec3 edges[3] = vec3[3](e0, e1, e2);
+    for (int a = 0; a < 3; a++) {
+        for (int b = 0; b < 3; b++) {
+            vec3 ax = cross(axes[a], edges[b]);
+            if (ax.x == 0.0 && ax.y == 0.0 && ax.z == 0.0)
+                continue;
+            float p0 = dot(ax, t0);
+            float p1 = dot(ax, t1);
+            float p2 = dot(ax, t2);
+            float pmin = min(p0, min(p1, p2));
+            float pmax = max(p0, max(p1, p2));
+            float er = abs(ax.x) * boxhalf.x + abs(ax.y) * boxhalf.y + abs(ax.z) * boxhalf.z;
+            if (pmin > er || pmax < -er)
+                return false;
+        }
+    }
+    return true;
+}
+
+vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+}
+
+void main() {
+    if (u_pass == 0) {
+        uint id = gl_GlobalInvocationID.x;
+        if (id >= uint(u_num_tris))
+            return;
+        uint i0 = indices[id * 3u];
+        uint i1 = indices[id * 3u + 1u];
+        uint i2 = indices[id * 3u + 2u];
+        vec3 a = positions[i0].xyz;
+        vec3 b = positions[i1].xyz;
+        vec3 c = positions[i2].xyz;
+        if (u_world_grid == 1) {
+            a = (u_model * vec4(a, 1.0)).xyz;
+            b = (u_model * vec4(b, 1.0)).xyz;
+            c = (u_model * vec4(c, 1.0)).xyz;
+        }
+        float inv = 1.0 / u_cell_size;
+        vec3 tmn = min(min(a, b), c) - u_grid_min;
+        vec3 tmx = max(max(a, b), c) - u_grid_min;
+        ivec3 cmin = ivec3(floor(tmn * inv));
+        ivec3 cmax = ivec3(floor(tmx * inv));
+        ivec3 span = cmax - cmin + ivec3(1);
+        if (span.x > 64 || span.y > 64 || span.z > 64)
+            return;
+        vec3 boxhalf = vec3(u_cell_size * 0.5);
+        int dx = u_grid_dims.x;
+        int dy = u_grid_dims.y;
+        int dz = u_grid_dims.z;
+        int total = dx * dy * dz;
+        for (int x = cmin.x; x <= cmax.x; x++) {
+            for (int y = cmin.y; y <= cmax.y; y++) {
+                for (int z = cmin.z; z <= cmax.z; z++) {
+                    vec3 center = u_grid_min + (vec3(float(x), float(y), float(z)) + 0.5) * u_cell_size;
+                    if (triBoxOverlap(center, boxhalf, a, b, c)) {
+                        int idx = x + y * dx + z * dx * dy;
+                        if (idx >= 0 && idx < total)
+                            grid[idx] = 1u;
+                    }
+                }
+            }
+        }
+    } else {
+        uint id = gl_GlobalInvocationID.x;
+        if (id >= uint(u_total_cells))
+            return;
+        int dx = u_grid_dims.x;
+        int dy = u_grid_dims.y;
+        int x = int(id % uint(dx));
+        int y = int((id / uint(dx)) % uint(dy));
+        int z = int(id / (uint(dx) * uint(dy)));
+        vec3 center = u_grid_min + (vec3(float(x), float(y), float(z)) + 0.5) * u_cell_size;
+        if (grid[id] != 0u) {
+            if (u_jitter > 0.0) {
+                vec3 hsh = hash33(vec3(float(x), float(y), float(z))) - 0.5;
+                center += hsh * u_jitter * u_cell_size;
+            }
+            instances[id] = vec4(center, 1.0);
+        } else {
+            instances[id] = vec4(0.0, 0.0, 0.0, -1.0);
+        }
+    }
+}
