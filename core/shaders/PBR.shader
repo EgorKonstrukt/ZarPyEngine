@@ -34,6 +34,7 @@ Shader "Zarin/PBR"
         _SubsurfaceAmount("Subsurface Amount", Range(0, 1)) = 0
         _ThinFilmThickness("Thin Film Thickness", Range(0, 600)) = 0
         _ThinFilmIntensity("Thin Film Intensity", Range(0, 1)) = 0
+        _double_sided("Double Sided", Range(0, 1)) = 0
     }
 
     SubShader
@@ -145,6 +146,7 @@ Shader "Zarin/PBR"
             uniform float _SubsurfaceAmount;
             uniform float _ThinFilmThickness;
             uniform float _ThinFilmIntensity;
+            uniform int u_double_sided;
 
             uniform vec3 u_camera_pos;
             uniform Light u_lights[MAX_LIGHTS];
@@ -638,6 +640,7 @@ Shader "Zarin/PBR"
                     vec3 detail_N = get_normal_from_map(_DetailNormalMap, uv * _DetailUVScale, _DetailNormalStrength);
                     N = normalize(N + detail_N);
                 }
+                if (u_double_sided == 1 && !gl_FrontFacing) N = -N;
                 float roughness = 1.0 - _Smoothness;
                 roughness = max(roughness, 0.001);
                 float metallic = _Metallic;

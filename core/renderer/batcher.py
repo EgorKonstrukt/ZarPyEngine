@@ -215,11 +215,24 @@ class RenderBatcher:
 
         sub_idx = group[0][7]
         ranges = mesh.sub_mesh_ranges
-        if ranges and sub_idx >= 0 and sub_idx < len(ranges):
-            start, count = ranges[sub_idx]
-            vao.render(instances=len(group), vertices=count, first=start)
-        else:
-            vao.render(instances=len(group))
+        ds = bool(mat.properties.get("double_sided") or mat.properties.get("_double_sided")) if mat else False
+        cull_on = bool(self._ctx.cull_face)
+        if ds and cull_on:
+            self._ctx.disable(moderngl.CULL_FACE)
+        try:
+            if "u_double_sided" in prog:
+                try:
+                    prog["u_double_sided"].value = 1 if ds else 0
+                except Exception:
+                    pass
+            if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+                start, count = ranges[sub_idx]
+                vao.render(instances=len(group), vertices=count, first=start)
+            else:
+                vao.render(instances=len(group))
+        finally:
+            if ds and cull_on:
+                self._ctx.enable(moderngl.CULL_FACE)
         self._stats_draw_calls += 1
         self._stats_instanced += len(group)
 
@@ -265,11 +278,24 @@ class RenderBatcher:
         else:
             apply_material_fn(mat, prog)
         ranges = mesh.sub_mesh_ranges
-        if ranges and sub_idx >= 0 and sub_idx < len(ranges):
-            start, count = ranges[sub_idx]
-            mesh.render_range(prog, start, count)
-        else:
-            mesh.render(prog)
+        ds = bool(mat.properties.get("double_sided") or mat.properties.get("_double_sided")) if mat else False
+        cull_on = bool(self._ctx.cull_face)
+        if ds and cull_on:
+            self._ctx.disable(moderngl.CULL_FACE)
+        try:
+            if "u_double_sided" in prog:
+                try:
+                    prog["u_double_sided"].value = 1 if ds else 0
+                except Exception:
+                    pass
+            if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+                start, count = ranges[sub_idx]
+                mesh.render_range(prog, start, count)
+            else:
+                mesh.render(prog)
+        finally:
+            if ds and cull_on:
+                self._ctx.enable(moderngl.CULL_FACE)
         if selected_entities and ent in selected_entities:
             outline_queue.append((mesh, wm))
 

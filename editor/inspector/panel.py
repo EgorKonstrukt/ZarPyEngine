@@ -551,6 +551,7 @@ class InspectorPanel(QDockWidget):
                 "emission_intensity": {"label": "Emission Intensity", "widget": "slider", "min": 0, "max": 100, "step": 0.1},
                 "normal_texture": {"label": "Normal Map", "widget": "texture"},
                 "roughness_texture": {"label": "Roughness Map", "widget": "texture"},
+                "double_sided": {"label": "Double Sided", "widget": "toggle"},
             }
             tex_seen = False
             for key, cfg in known_keys.items():
@@ -722,6 +723,25 @@ class InspectorPanel(QDockWidget):
                 _update_preview()
             sb.valueChanged.connect(_on_change)
             rl.addWidget(sb, 1)
+            self._add_asset_widget(row)
+        elif widget_type == "toggle":
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            lbl = QLabel(label)
+            lbl.setMinimumWidth(scale(120))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            rl.addWidget(lbl)
+            from PyQt6.QtWidgets import QCheckBox
+            cb = QCheckBox()
+            cb.setChecked(bool(props.get(key, False)))
+            def _on_toggle(v, _key=key):
+                props[_key] = bool(v)
+                _save()
+                _update_preview()
+            cb.toggled.connect(_on_toggle)
+            rl.addWidget(cb, 1)
             self._add_asset_widget(row)
         elif widget_type == "gradient":
             row = QWidget()

@@ -31,6 +31,7 @@ struct Light {
     float area_double_sided;
 };
 uniform vec4 u_albedo_color;
+uniform int u_double_sided;
 uniform float u_metallic;
 uniform float u_smoothness;
 uniform vec3 u_emission;
@@ -248,6 +249,7 @@ void main() {
         vec3 tangentNormal = texture(u_normal_tex, v_uv).rgb * 2.0 - 1.0;
         normal = normalize(normal + tangentNormal * 0.5);
     }
+    if (u_double_sided == 1 && !gl_FrontFacing) normal = -normal;
     float roughness = u_smoothness;
     if (u_use_roughness_tex == 1) {
         float r = texture(u_roughness_tex, v_uv).r;

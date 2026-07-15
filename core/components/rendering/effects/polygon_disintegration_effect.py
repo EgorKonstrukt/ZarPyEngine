@@ -22,6 +22,7 @@ class PolygonDisintegrationEffect(ObjectEffect):
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
             InspectorField("amount", "Amount", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("double_sided", "Double Sided", FieldType.BOOL),
             InspectorField("direction", "Eject Direction", FieldType.VEC3, min_val=-1.0, max_val=1.0, step=0.05, decimals=3),
             InspectorField("speed", "Eject Speed", FieldType.FLOAT, min_val=0.0, max_val=10.0, step=0.1, decimals=3),
             InspectorField("sp_variance", "Speed Variance", FieldType.FLOAT, min_val=0.0, max_val=4.0, step=0.05, decimals=3),
@@ -48,6 +49,7 @@ class PolygonDisintegrationEffect(ObjectEffect):
     def __init__(self):
         super().__init__()
         self.amount: float = 0.0
+        self.double_sided: bool = True
         self.direction: Vec3 = Vec3(0.0, -1.0, 0.0)
         self.speed: float = 2.0
         self.sp_variance: float = 1.2
@@ -92,6 +94,7 @@ class PolygonDisintegrationEffect(ObjectEffect):
             self._anim_active = False
         if self.amount <= 0.0:
             self._set(prog, "u_disint_amount", 0.0)
+            self._set(prog, "u_double_sided", 1.0 if self.double_sided else 0.0)
             return
 
         d = self.direction
@@ -128,11 +131,13 @@ class PolygonDisintegrationEffect(ObjectEffect):
         self._set(prog, "u_disint_edge", float(self.edge_width))
         self._set_vec_bytes(prog, "u_disint_edge_color", self._edge_buf)
         self._set(prog, "u_disint_edge_emission", float(self.edge_emission))
+        self._set(prog, "u_double_sided", 1.0 if self.double_sided else 0.0)
 
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
             "amount": self.amount,
+            "double_sided": self.double_sided,
             "direction": [self.direction.x, self.direction.y, self.direction.z],
             "speed": self.speed,
             "sp_variance": self.sp_variance,
@@ -162,6 +167,7 @@ class PolygonDisintegrationEffect(ObjectEffect):
         fx = cls()
         fx.enabled = data.get("enabled", True)
         fx.amount = data.get("amount", 0.0)
+        fx.double_sided = data.get("double_sided", True)
         fd = data.get("direction", [0.0, -1.0, 0.0])
         fx.direction = Vec3(*fd[:3])
         fx.speed = data.get("speed", 2.0)

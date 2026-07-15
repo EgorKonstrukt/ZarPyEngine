@@ -1343,6 +1343,28 @@ void main() {
         for item in snap.projectors:
             item.refresh_vp()
 
+    def _mat_double_sided(self, mat) -> bool:
+        if mat is None:
+            return False
+        props = mat.properties
+        return bool(props.get("double_sided") or props.get("_double_sided"))
+
+    def _render_mesh_double_sided(self, prog, mesh, double_sided: bool):
+        ctx = self._ctx
+        cull_on = bool(ctx.cull_face)
+        if double_sided and cull_on:
+            ctx.disable(moderngl.CULL_FACE)
+        try:
+            if "u_double_sided" in prog:
+                try:
+                    prog["u_double_sided"].value = 1 if double_sided else 0
+                except Exception:
+                    pass
+            mesh.render(prog)
+        finally:
+            if double_sided and cull_on:
+                ctx.enable(moderngl.CULL_FACE)
+
     def _render_object_effects(self, entries, view_f32, proj_f32, cam_pos, lights,
                                  selected_entities, outline_queue):
         prog = self._object_fx_prog
@@ -1391,7 +1413,8 @@ void main() {
                 ObjectEffect.reset_all_defaults(prog)
                 for fx in fx_list:
                     fx.bind(prog, t)
-                mesh.render(prog)
+                ds = any(getattr(fx, 'double_sided', False) for fx in fx_list)
+                self._render_mesh_double_sided(prog, mesh, ds)
                 if selected_entities and ent in selected_entities:
                     outline_queue.append((mesh, wm))
             except Exception as e:
@@ -1568,7 +1591,8 @@ void main() {
                     if "u_normal_matrix" in prog:
                         prog["u_normal_matrix"].write(nm.tobytes())
                     self._materials.apply_material(mat, prog)
-                    mesh.render(prog)
+                    ds = self._mat_double_sided(mat)
+                    self._render_mesh_double_sided(prog, mesh, ds)
                     if selected_entities and ent in selected_entities:
                         outline_queue.append((mesh, wm))
                 except Exception:

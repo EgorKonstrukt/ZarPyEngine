@@ -118,6 +118,7 @@ uniform float u_glitch_block;
 uniform float u_glitch_rgb;
 uniform vec3 u_obj_center;
 uniform float u_obj_scale;
+uniform int u_double_sided;
 
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -326,6 +327,7 @@ void main() {
         vec3 tangentNormal = texture(u_normal_tex, v_uv).rgb * 2.0 - 1.0;
         normal = normalize(normal + tangentNormal * 0.5);
     }
+    if (u_double_sided == 1 && !gl_FrontFacing) normal = -normal;
     float roughness = u_smoothness;
     if (u_use_roughness_tex == 1) {
         float r = texture(u_roughness_tex, v_uv).r;
