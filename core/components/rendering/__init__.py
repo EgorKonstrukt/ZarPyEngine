@@ -19,6 +19,7 @@ from core.components.rendering.effects.object_effect import ObjectEffect
 from core.components.rendering.effects.dissolve_effect import DissolveEffect
 from core.components.rendering.effects.polygon_disintegration_effect import PolygonDisintegrationEffect
 from core.components.rendering.effects.spike_growth_effect import SpikeGrowthEffect
+from core.components.rendering.effects.voxelize_effect import VoxelizeEffect
 from core.components.rendering.effects.hologram_effect import HologramEffect
 from core.components.rendering.effects.frost_effect import FrostEffect
 from core.components.rendering.effects.emissive_pulse_effect import EmissivePulseEffect
@@ -30,5 +31,5 @@ __all__ = [
     "SpriteRenderer", "VideoRenderer", "SvgRenderer", "ParticleSystem", "ParticleForceField",
     "Sky", "Cloud", "TextRenderer",
     "ObjectEffect", "DissolveEffect", "PolygonDisintegrationEffect", "SpikeGrowthEffect",
-    "HologramEffect", "FrostEffect", "EmissivePulseEffect", "GlitchEffect", "WindSwayEffect",
+    "VoxelizeEffect", "HologramEffect", "FrostEffect", "EmissivePulseEffect", "GlitchEffect", "WindSwayEffect",
 ]
