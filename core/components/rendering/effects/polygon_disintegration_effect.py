@@ -24,13 +24,19 @@ class PolygonDisintegrationEffect(ObjectEffect):
             InspectorField("amount", "Amount", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("direction", "Eject Direction", FieldType.VEC3, min_val=-1.0, max_val=1.0, step=0.05, decimals=3),
             InspectorField("speed", "Eject Speed", FieldType.FLOAT, min_val=0.0, max_val=10.0, step=0.1, decimals=3),
+            InspectorField("sp_variance", "Speed Variance", FieldType.FLOAT, min_val=0.0, max_val=4.0, step=0.05, decimals=3),
+            InspectorField("outward", "Outward Force", FieldType.FLOAT, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
+            InspectorField("scatter", "Scatter", FieldType.FLOAT, min_val=0.0, max_val=3.0, step=0.05, decimals=3),
+            InspectorField("jitter", "Jitter", FieldType.FLOAT, min_val=0.0, max_val=3.0, step=0.05, decimals=3),
             InspectorField("drag", "Drag", FieldType.SLIDER, min_val=0.5, max_val=12.0, step=0.1, decimals=3),
             InspectorField("gravity", "Gravity", FieldType.FLOAT, min_val=0.0, max_val=20.0, step=0.1, decimals=3),
             InspectorField("rotation", "Spin", FieldType.FLOAT, min_val=0.0, max_val=30.0, step=0.1, decimals=3),
+            InspectorField("twist", "Twist", FieldType.FLOAT, min_val=0.0, max_val=30.0, step=0.1, decimals=3),
             InspectorField("fade", "Fade Out", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
             InspectorField("cell_size", "Cell Size", FieldType.FLOAT, min_val=0.01, max_val=5.0, step=0.01, decimals=3),
             InspectorField("noise_scale", "Shatter Noise", FieldType.FLOAT, min_val=0.1, max_val=20.0, step=0.1, decimals=2),
             InspectorField("stagger", "Cell Stagger", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("thr_scale", "Threshold Scale", FieldType.FLOAT, min_val=0.5, max_val=3.0, step=0.05, decimals=3),
             InspectorField("edge_width", "Dissolve Edge", FieldType.SLIDER, min_val=0.0, max_val=0.5, step=0.01, decimals=3),
             InspectorField("edge_color", "Edge Color", FieldType.COLOR),
             InspectorField("edge_emission", "Edge Emission", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
@@ -44,13 +50,19 @@ class PolygonDisintegrationEffect(ObjectEffect):
         self.amount: float = 0.0
         self.direction: Vec3 = Vec3(0.0, -1.0, 0.0)
         self.speed: float = 2.0
+        self.sp_variance: float = 1.2
+        self.outward: float = 1.3
+        self.scatter: float = 0.6
+        self.jitter: float = 0.6
         self.drag: float = 4.0
         self.gravity: float = 0.0
         self.rotation: float = 0.0
+        self.twist: float = 0.0
         self.fade: float = 0.0
         self.cell_size: float = 0.15
         self.noise_scale: float = 1.0
         self.stagger: float = 0.5
+        self.thr_scale: float = 1.3
         self.edge_width: float = 0.06
         self.edge_color: list[float] = [1.0, 0.55, 0.15]
         self.edge_emission: float = 2.0
@@ -100,12 +112,18 @@ class PolygonDisintegrationEffect(ObjectEffect):
         self._set(prog, "u_disint_amount", float(self.amount))
         self._set_vec_bytes(prog, "u_disint_dir", self._dir_buf)
         self._set(prog, "u_disint_speed", float(self.speed))
+        self._set(prog, "u_disint_sp_variance", float(self.sp_variance))
+        self._set(prog, "u_disint_outward", float(self.outward))
+        self._set(prog, "u_disint_scatter", float(self.scatter))
+        self._set(prog, "u_disint_jitter", float(self.jitter))
         self._set(prog, "u_disint_drag", float(self.drag))
         self._set(prog, "u_disint_gravity", float(self.gravity))
         self._set(prog, "u_disint_rot", float(self.rotation))
+        self._set(prog, "u_disint_twist", float(self.twist))
         self._set(prog, "u_disint_cell", float(self.cell_size))
         self._set(prog, "u_disint_noise_scale", float(self.noise_scale))
         self._set(prog, "u_disint_stagger", float(self.stagger))
+        self._set(prog, "u_disint_thr_scale", float(self.thr_scale))
         self._set(prog, "u_disint_fade", float(self.fade))
         self._set(prog, "u_disint_edge", float(self.edge_width))
         self._set_vec_bytes(prog, "u_disint_edge_color", self._edge_buf)
@@ -117,13 +135,19 @@ class PolygonDisintegrationEffect(ObjectEffect):
             "amount": self.amount,
             "direction": [self.direction.x, self.direction.y, self.direction.z],
             "speed": self.speed,
+            "sp_variance": self.sp_variance,
+            "outward": self.outward,
+            "scatter": self.scatter,
+            "jitter": self.jitter,
             "drag": self.drag,
             "gravity": self.gravity,
             "rotation": self.rotation,
+            "twist": self.twist,
             "fade": self.fade,
             "cell_size": self.cell_size,
             "noise_scale": self.noise_scale,
             "stagger": self.stagger,
+            "thr_scale": self.thr_scale,
             "edge_width": self.edge_width,
             "edge_color": list(self.edge_color),
             "edge_emission": self.edge_emission,
@@ -141,13 +165,19 @@ class PolygonDisintegrationEffect(ObjectEffect):
         fd = data.get("direction", [0.0, -1.0, 0.0])
         fx.direction = Vec3(*fd[:3])
         fx.speed = data.get("speed", 2.0)
+        fx.sp_variance = data.get("sp_variance", 1.2)
+        fx.outward = data.get("outward", 1.3)
+        fx.scatter = data.get("scatter", 0.6)
+        fx.jitter = data.get("jitter", 0.6)
         fx.drag = data.get("drag", 4.0)
         fx.gravity = data.get("gravity", 0.0)
         fx.rotation = data.get("rotation", 0.0)
+        fx.twist = data.get("twist", 0.0)
         fx.fade = data.get("fade", 0.0)
         fx.cell_size = data.get("cell_size", 0.15)
         fx.noise_scale = data.get("noise_scale", 1.0)
         fx.stagger = data.get("stagger", 0.5)
+        fx.thr_scale = data.get("thr_scale", 1.3)
         fx.edge_width = data.get("edge_width", 0.06)
         fc = data.get("edge_color", [1.0, 0.55, 0.15])
         fx.edge_color = list(fc)

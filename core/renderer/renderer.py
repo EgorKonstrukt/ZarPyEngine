@@ -567,11 +567,13 @@ void main() {
         try:
             fx_vert = read_shader("object_fx.vert")
             fx_frag = read_shader("object_fx.frag")
+            fx_geom = read_shader("object_fx.geom")
             fx_frag = ShaderManager._inject_area_shadows(fx_frag)
             fx_frag = ShaderManager._inject_caustics(fx_frag)
             self._object_fx_prog = self._ctx.program(
                 vertex_shader=fx_vert,
-                fragment_shader=fx_frag
+                fragment_shader=fx_frag,
+                geometry_shader=fx_geom
             )
         except Exception as e:
             Logger.error(f"Failed to compile object_fx shader: {e}", e)
