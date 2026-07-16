@@ -5,9 +5,9 @@
 // Copyright (c) 2026 Zarrakun
 //
 // GPU height-field water simulation. Runs as a ping-pong fragment pass on an
-// RG32F texture: R = water height (relative to rest), G = vertical velocity.
-// Physically integrates a damped 2D wave equation and injects disturbances
-// from every scene collider that dips into / moves through the surface, so
+// RG16F texture: R = water height (relative to rest), G = vertical velocity.
+// Physically integrates a damped 2D wave equation and injects a signed
+// velocity impulse from every scene collider that crosses the surface, so
 // the ripples are generated entirely on the GPU and are not authored by hand.
 //
 // MAX_INTERACTORS must match the Renderer's interaction source limit (64).
@@ -66,37 +66,62 @@ Shader "Zarin/WaterSim"
                 float h = c.r;
                 float v = c.g;
 
+                // --- Wave propagation --------------------------------------------------
+                // lap is an *unnormalized* discrete Laplacian (no /dx^2), so _Propagation
+                // already plays the role of c^2/dx^2 for this grid. It must NOT be
+                // multiplied by dt^2 again -- the Verlet-style integration below
+                // (v += accel*dt, h += v*dt) already contributes the dt^2 factor to h.
+                // We only clamp k when a frame hitch makes the explicit integrator
+                // unstable (CFL condition for the 5-point stencil), so ripple speed on
+                // a normal frame is the real configured speed, not a fraction of it.
                 float lap = (x1.r + x2.r + y1.r + y2.r) - 4.0 * h;
-                float k = _Propagation * _Dt * _Dt;
-                k = min(k, 0.20);
+                float dt2 = max(_Dt * _Dt, 1e-8);
+                float maxK = 0.45 / dt2;
+                float k = min(_Propagation, maxK);
                 float accel = k * lap - _Damping * v;
                 v += accel * _Dt;
-                h += v * _Dt;
 
-                float disturb = 0.0;
-                float cell = _GridSize / 512.0;
+                // --- Interaction forcing -------------------------------------------
+                // Injected into velocity (not height) so the wave equation itself
+                // carries it outward as an expanding ring, and signed by what the
+                // collider is actually doing at the surface instead of always
+                // lifting the water on contact.
+                float cell = _GridSize * _Texel.x;
+                float impulse = 0.0;
                 for (int i = 0; i < MAX_INTERACTORS; i++) {
                     if (i >= _InteractorCount) break;
-                    vec4 it = _Interactors[i];
-                    vec4 iv = _InteractorVel[i];
-                    float reach = max(it.z, cell * 1.5);
-                    vec2 d = world - it.xy;
-                    float dd = length(d);
-                    float fall = exp(-dd * dd / (reach * reach));
-                    float vd = it.w;
-                    float vrad = max(iv.w, 0.05);
-                    float slab = max(cell * 1.5, 0.5) + vrad;
-                    float surface_dist = abs(vd) - vrad;
-                    float vgate = 1.0 - smoothstep(0.0, slab, surface_dist);
-                    float vvel = iv.y;
-                    float hvel = length(iv.xz);
-                    float speed = length(iv.xyz);
-                    float norm = speed / (speed + 3.0);
-                    float push = _InteractionStrength * norm * fall * vgate;
-                    disturb += push;
-                }
+                    vec4 it = _Interactors[i];   // xy = world xz, z = radius, w = center.y - rest_y
+                    vec4 iv = _InteractorVel[i]; // xyz = velocity, w = vertical extent
 
-                h += disturb * _Dt;
+                    vec2 d = world - it.xy;
+                    float dd2 = dot(d, d);
+                    float reach = max(it.z, cell * 1.5);
+                    float fall = exp(-dd2 / (reach * reach));
+                    if (fall < 0.001) continue;
+
+                    float vrad = max(iv.w, 0.05);
+                    float surface_dist = abs(it.w) - vrad;
+                    float slab = max(cell * 1.5, 0.5) + vrad;
+                    float gate = 1.0 - smoothstep(0.0, slab, surface_dist);
+                    if (gate <= 0.0) continue;
+
+                    float vy = iv.y;
+                    // Entering (vy<0) presses the surface into a trough; leaving
+                    // (vy>0) drags it back up, weaker, since a free surface resists
+                    // being pulled up far less cleanly than being pushed down.
+                    float dirScale = vy < 0.0 ? 1.0 : 0.6;
+                    impulse += vy * dirScale * fall * gate;
+
+                    // Horizontal motion through the surface (wading, boat hulls)
+                    // still displaces water, but only ever pushes down -- an
+                    // upward "lift" from pure sideways motion isn't physical.
+                    float hvel = length(iv.xz);
+                    impulse -= 0.25 * hvel * fall * gate;
+                }
+                v += impulse * _InteractionStrength * _Dt;
+
+                h += v * _Dt;
+
                 if (_InteractorCount <= 0) {
                     h *= 0.6;
                     v *= 0.6;
