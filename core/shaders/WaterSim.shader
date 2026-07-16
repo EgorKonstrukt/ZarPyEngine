@@ -66,7 +66,6 @@ Shader "Zarin/WaterSim"
                 float h = c.r;
                 float v = c.g;
 
-                // --- Wave propagation --------------------------------------------------
                 // lap is an *unnormalized* discrete Laplacian (no /dx^2), so _Propagation
                 // already plays the role of c^2/dx^2 for this grid. It must NOT be
                 // multiplied by dt^2 again -- the Verlet-style integration below
@@ -81,7 +80,7 @@ Shader "Zarin/WaterSim"
                 float accel = k * lap - _Damping * v;
                 v += accel * _Dt;
 
-                // --- Interaction forcing -------------------------------------------
+                // Interaction forcing
                 // Injected into velocity (not height) so the wave equation itself
                 // carries it outward as an expanding ring, and signed by what the
                 // collider is actually doing at the surface instead of always
