@@ -37,7 +37,7 @@ class VoxelizeEffect(ObjectEffect):
         self.show_base_mesh: bool = True
         self.world_grid: bool = False
         self.voxel_size: float = 0.3
-        self.height: float = 1.0
+        self.scale: Vec3 = Vec3(1.0, 1.0, 1.0)
         self.jitter: float = 0.0
         self.emission: float = 2.5
         self.color: list[float] = [0.4, 1.0, 0.6]
@@ -92,7 +92,7 @@ class VoxelizeEffect(ObjectEffect):
             "show_base_mesh": self.show_base_mesh,
             "world_grid": self.world_grid,
             "voxel_size": self.voxel_size,
-            "height": self.height,
+            "scale": [self.scale.x, self.scale.y, self.scale.z],
             "jitter": self.jitter,
             "emission": self.emission,
             "color": list(self.color),
@@ -113,8 +113,13 @@ class VoxelizeEffect(ObjectEffect):
         fx.show_base_mesh = data.get("show_base_mesh", True)
         fx.world_grid = data.get("world_grid", False)
         fx.voxel_size = data.get("voxel_size", 0.3)
-        fx.height = data.get("height", 1.0)
+        sc = data.get("scale", [1.0, 1.0, 1.0])
+        if len(sc) == 3:
+            fx.scale = Vec3(float(sc[0]), float(sc[1]), float(sc[2]))
+        else:
+            fx.scale = Vec3(float(sc[0]), float(sc[0]), float(sc[0]))
         fx.jitter = data.get("jitter", 0.0)
+
         fx.emission = data.get("emission", 2.5)
         fc = data.get("color", [0.4, 1.0, 0.6])
         fx.color = list(fc)
@@ -133,7 +138,7 @@ class VoxelizeEffect(ObjectEffect):
             InspectorField("show_base_mesh", "Show Base Mesh", FieldType.BOOL),
             InspectorField("world_grid", "World Grid", FieldType.BOOL),
             InspectorField("voxel_size", "Voxel Size", FieldType.FLOAT, step=0.01, decimals=3),
-            InspectorField("height", "Voxel Height", FieldType.FLOAT, step=0.05, decimals=3),
+            InspectorField("scale", "Voxel Scale XYZ", FieldType.VEC3, step=0.01, decimals=3),
             InspectorField("jitter", "Jitter", FieldType.FLOAT, step=0.01, decimals=3),
             InspectorField("emission", "Glow", FieldType.FLOAT, step=0.05, decimals=3),
             InspectorField("color", "Voxel Color", FieldType.COLOR),

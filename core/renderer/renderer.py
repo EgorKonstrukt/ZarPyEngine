@@ -616,7 +616,7 @@ uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_proj;
 uniform float u_vox_size;
-uniform float u_vox_height;
+uniform vec3 u_vox_scale;
 
 out vec3 v_world_pos;
 out vec3 v_normal;
@@ -625,10 +625,10 @@ out vec3 v_view_pos;
 out vec3 v_local_pos;
 
     void main() {
-        float h = u_vox_size * 0.9;
-        float hy = h * max(0.01, u_vox_height);
+        vec3 s = max(vec3(0.01), u_vox_scale);
+        vec3 h = u_vox_size * 0.9 * s;
     vec3 center = i_cell.xyz;
-    vec3 local = center + vec3(in_position.x * h, in_position.y * hy, in_position.z * h);
+    vec3 local = center + vec3(in_position.x * h.x, in_position.y * h.y, in_position.z * h.z);
     vec4 world = u_model * vec4(local, 1.0);
     v_world_pos = world.xyz;
     v_local_pos = local;
@@ -832,7 +832,14 @@ out vec4 frag_color;
         else:
             prog["u_model"].write(model.tobytes())
         prog["u_vox_size"].value = size
-        prog["u_vox_height"].value = max(0.01, float(fx.height))
+        sc = fx.scale
+        if hasattr(sc, "x"):
+            sc = np.array([sc.x, sc.y, sc.z], dtype=np.float32)
+        else:
+            sc = np.asarray(sc, dtype=np.float32)
+            if sc.shape[0] < 3:
+                sc = np.full(3, float(sc[0]) if sc.shape[0] else 1.0, dtype=np.float32)
+        prog["u_vox_scale"].write(sc[:3].tobytes())
         col = np.array(fx.color, dtype=np.float32)
         if col.shape[0] < 3:
             col = np.array([0.4, 1.0, 0.6], dtype=np.float32)
