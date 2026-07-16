@@ -768,6 +768,14 @@ out vec4 frag_color;
         need_inst = min(total, self._VOX_MAX_INSTANCES)
         if res is None or res["nverts"] != nverts or res["nidx"] != nidx \
                 or res["grid_cap"] < total or res["inst_cap"] < need_inst:
+            if res is not None:
+                for k in ("pos", "idx", "grid", "inst", "vao"):
+                    obj = res.get(k)
+                    if obj is not None:
+                        try:
+                            obj.release()
+                        except Exception:
+                            pass
             pos = self._ctx.buffer(reserve=max(1, nverts) * 16)
             idxf = self._ctx.buffer(reserve=max(1, nidx) * 4)
             grid_cap = max(total, res["grid_cap"] if res else 0)
