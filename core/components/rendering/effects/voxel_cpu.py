@@ -47,7 +47,7 @@ def tri_box_overlap(center: np.ndarray, half: np.ndarray, v0: np.ndarray, v1: np
     return True
 
 
-def compute_voxel_instances(verts, idx, model, size: float, world_grid: bool, jitter: float, seed: int = 0) -> np.ndarray:
+def compute_voxel_instances(verts, idx, model, size: float, world_grid: bool, jitter: float, seed: int = 0, grid_min=None) -> np.ndarray:
     if verts is None or size <= 1e-5:
         return np.zeros((0, 4), dtype=np.float32)
 
@@ -58,6 +58,11 @@ def compute_voxel_instances(verts, idx, model, size: float, world_grid: bool, ji
         m = np.asarray(model, dtype=np.float32).reshape(4, 4)
         ones = np.ones((V.shape[0], 1), dtype=np.float32)
         V = (m @ np.concatenate([V, ones], axis=1).T).T[:, :3]
+
+    if grid_min is None:
+        grid_min = V.min(axis=0)
+    else:
+        grid_min = np.asarray(grid_min, dtype=np.float32).reshape(3)
 
     if idx is not None and len(idx) >= 3:
         nt = (len(idx) // 3) * 3
@@ -97,7 +102,7 @@ def compute_voxel_instances(verts, idx, model, size: float, world_grid: bool, ji
         return np.zeros((0, 4), dtype=np.float32)
 
     cells = np.array(list(cell_set), dtype=np.int64)
-    centers = (cells.astype(np.float32) + 0.5) * size
+    centers = grid_min + (cells.astype(np.float32) + 0.5) * size
     rnd = (rng.random((len(cells), 3)).astype(np.float32) - 0.5) * jitter * size
 
     out = np.zeros((len(cells), 4), dtype=np.float32)

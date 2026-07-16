@@ -56,16 +56,17 @@ class VoxelizeEffect(ObjectEffect):
         super().on_awake()
         self._time_offset = time.time()
 
-    def get_voxel_instances(self, verts, idx, model, size: float, world_grid: bool, jitter: float) -> np.ndarray:
+    def get_voxel_instances(self, verts, idx, model, size: float, world_grid: bool, jitter: float, grid_min=None) -> np.ndarray:
         model_arr = np.asarray(model, dtype=np.float32).reshape(4, 4)
         if world_grid:
             mkey = tuple(np.round(model_arr, 2).reshape(16).tolist())
         else:
             mkey = None
-        key = (id(verts), len(verts), size, world_grid, jitter, mkey)
+        gkey = tuple(np.round(np.asarray(grid_min, dtype=np.float32).reshape(3), 3).tolist()) if grid_min is not None else None
+        key = (id(verts), len(verts), size, world_grid, jitter, mkey, gkey)
         if self._vox_cache_key == key and self._vox_cells is not None:
             return self._vox_cells
-        cells = compute_voxel_instances(verts, idx, model_arr, size, world_grid, jitter, seed=(id(verts) & 0xFFFF))
+        cells = compute_voxel_instances(verts, idx, model_arr, size, world_grid, jitter, seed=(id(verts) & 0xFFFF), grid_min=grid_min)
         self._vox_cache_key = key
         self._vox_cells = cells
         return cells

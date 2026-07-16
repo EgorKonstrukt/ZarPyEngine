@@ -806,7 +806,8 @@ out vec4 frag_color;
         ctx = self._ctx
         prev_cull = ctx.cull_face
         ctx.disable(moderngl.DEPTH_TEST)
-        ctx.disable(moderngl.CULL_FACE)
+        ctx.enable(moderngl.CULL_FACE)
+        ctx.cull_face = 'back'
         ctx.disable(moderngl.BLEND)
         try:
             if self._vox_compute is not None:
@@ -842,7 +843,14 @@ out vec4 frag_color;
 
     def _render_voxel_cpu(self, entry, fx, verts, idx, model, size, world_grid, view_f32, proj_f32, cam_pos):
         wm = entry[4]
-        cells = fx.get_voxel_instances(verts, idx, model, size, world_grid, float(fx.jitter))
+        grid_min = None
+        if world_grid:
+            V = np.asarray(verts, dtype=np.float32).reshape(-1, 3)
+            m = np.asarray(getattr(wm, "_d", np.eye(4)), dtype=np.float32).reshape(4, 4)
+            ones = np.ones((V.shape[0], 1), dtype=np.float32)
+            S = (m @ np.concatenate([V, ones], axis=1).T).T[:, :3]
+            grid_min = S.min(axis=0)
+        cells = fx.get_voxel_instances(verts, idx, model, size, world_grid, float(fx.jitter), grid_min)
         n = cells.shape[0]
         if n == 0 or self._vox_vao is None:
             return
