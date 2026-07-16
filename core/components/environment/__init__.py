@@ -3,3 +3,6 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2026 Zarrakun
+
+from core.components.environment.wind_zone import WindZone
+from core.components.environment.water_volume import WaterVolume

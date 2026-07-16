@@ -286,6 +286,10 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
             solver.set_body_transform(bid, pos, rot)
         else:
             if flags & 2:
+                try:
+                    solver.activate(bid)
+                except Exception:
+                    pass
                 _, _, vel, ang_vel = shared.read_entity_data(slot)
                 solver.set_velocities(bid, linear=vel, angular=ang_vel)
                 shared.set_dirty(slot, False)

@@ -475,9 +475,10 @@ class PhysicsPlugin(PluginBase):
                     tr._local_rot._z = math.sin(hz)
                     tr._local_rot._w = math.cos(hz)
                     tr._dirty = True
-                    rb2d._velocity._x = row[6]
-                    rb2d._velocity._y = row[7]
-                    rb2d._angular_velocity = row[11]
+                    if not getattr(rb2d, "_velocity_dirty", False):
+                        rb2d._velocity._x = row[6]
+                        rb2d._velocity._y = row[7]
+                        rb2d._angular_velocity = row[11]
                     rb2d._force_accum._x = 0.0
                     rb2d._force_accum._y = 0.0
                     rb2d._torque_accum = 0.0
@@ -494,18 +495,13 @@ class PhysicsPlugin(PluginBase):
                     tr._local_rot._z = cr * cp * sy - sr * sp * cy
                     tr._local_rot._w = cr * cp * cy + sr * sp * sy
                     tr._dirty = True
-                    rb._velocity._x = row[6]
-                    rb._velocity._y = row[7]
-                    rb._velocity._z = row[8]
-                    rb._angular_velocity._x = row[9]
-                    rb._angular_velocity._y = row[10]
-                    rb._angular_velocity._z = row[11]
-                    rb._force_accum._x = 0.0
-                    rb._force_accum._y = 0.0
-                    rb._force_accum._z = 0.0
-                    rb._torque_accum._x = 0.0
-                    rb._torque_accum._y = 0.0
-                    rb._torque_accum._z = 0.0
+                    if not getattr(rb, "_velocity_dirty", False):
+                        rb._velocity._x = row[6]
+                        rb._velocity._y = row[7]
+                        rb._velocity._z = row[8]
+                        rb._angular_velocity._x = row[9]
+                        rb._angular_velocity._y = row[10]
+                        rb._angular_velocity._z = row[11]
 
         # 3) Accumulate collision events from all pending results
         events_accum = []
@@ -540,7 +536,12 @@ class PhysicsPlugin(PluginBase):
                 shared._fdata_nd[slot, 3] = 0.0
                 shared._fdata_nd[slot, 4] = 0.0
                 shared._fdata_nd[slot, 5] = rb2d._torque_accum
-                shared._flags_nd[slot] = 11 if not rb2d.is_kinematic else 15
+                kin = rb2d.is_kinematic
+                if kin:
+                    shared._flags_nd[slot] = 15
+                else:
+                    dirty = rb2d.consume_velocity_dirty()
+                    shared._flags_nd[slot] = (11 if dirty else 9)
             elif rb:
                 fa = rb._force_accum
                 ta = rb._torque_accum
@@ -564,7 +565,18 @@ class PhysicsPlugin(PluginBase):
                 shared._fdata_nd[slot, 3] = ta._x
                 shared._fdata_nd[slot, 4] = ta._y
                 shared._fdata_nd[slot, 5] = ta._z
-                shared._flags_nd[slot] = 3 if not rb.is_kinematic else 7
+                rb._force_accum._x = 0.0
+                rb._force_accum._y = 0.0
+                rb._force_accum._z = 0.0
+                rb._torque_accum._x = 0.0
+                rb._torque_accum._y = 0.0
+                rb._torque_accum._z = 0.0
+                kin = rb.is_kinematic
+                if kin:
+                    shared._flags_nd[slot] = 7
+                else:
+                    dirty = rb.consume_velocity_dirty()
+                    shared._flags_nd[slot] = (3 if dirty else 1)
             if slot > max_slot:
                 max_slot = slot
 

@@ -43,15 +43,20 @@ class Rigidbody(Component):
         self._force_accum: Vec3 = Vec3.zero()
         self._torque_accum: Vec3 = Vec3.zero()
         self._body_id: int = -1
+        self._velocity_dirty: bool = False
 
     @property
     def velocity(self) -> Vec3: return self._velocity
     @velocity.setter
-    def velocity(self, v: Vec3): self._velocity = v
+    def velocity(self, v: Vec3):
+        self._velocity = v
+        self._velocity_dirty = True
     @property
     def angular_velocity(self) -> Vec3: return self._angular_velocity
     @angular_velocity.setter
-    def angular_velocity(self, v: Vec3): self._angular_velocity = v
+    def angular_velocity(self, v: Vec3):
+        self._angular_velocity = v
+        self._velocity_dirty = True
     def add_force(self, force: Vec3, world_space: bool = True):
         self._force_accum = self._force_accum + force
     def add_torque(self, torque: Vec3):
@@ -59,6 +64,11 @@ class Rigidbody(Component):
     def add_impulse(self, impulse: Vec3):
         if self.mass > 0 and not self.is_kinematic:
             self._velocity = self._velocity + impulse * (1.0 / self.mass)
+            self._velocity_dirty = True
+    def consume_velocity_dirty(self) -> bool:
+        d = self._velocity_dirty
+        self._velocity_dirty = False
+        return d
     def _clear_forces(self):
         self._force_accum._x = 0.0; self._force_accum._y = 0.0; self._force_accum._z = 0.0
         self._torque_accum._x = 0.0; self._torque_accum._y = 0.0; self._torque_accum._z = 0.0

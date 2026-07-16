@@ -476,6 +476,15 @@ class CulverinSolver(IPhysicsSolver):
             return
         self._world.apply_torque(handle, torque[0], torque[1], torque[2])
 
+    def activate(self, body_id: int):
+        handle = self._id_to_handle.get(body_id)
+        if handle is None or self._world is None:
+            return
+        try:
+            self._world.activate(handle)
+        except Exception:
+            pass
+
     def apply_impulse(
         self, body_id: int, impulse: tuple[float, float, float], local: bool = False
     ):
