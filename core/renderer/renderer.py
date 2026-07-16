@@ -802,10 +802,10 @@ out vec4 frag_color;
         if size <= 0.0:
             return
         world_grid = bool(fx.world_grid)
-        model = np.asarray(getattr(wm, "_d", np.eye(4)), dtype=np.float32).reshape(4, 4)
+        model = np.asarray(wm._d, dtype=np.float32).T
         ctx = self._ctx
         prev_cull = ctx.cull_face
-        ctx.disable(moderngl.DEPTH_TEST)
+        ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
         ctx.cull_face = 'back'
         ctx.disable(moderngl.BLEND)
@@ -823,7 +823,7 @@ out vec4 frag_color;
             ctx.disable(moderngl.BLEND)
 
     def _set_vox_uniforms(self, prog, fx, wm, world_grid, size, view_f32, proj_f32, cam_pos):
-        model = np.asarray(getattr(wm, "_d", np.eye(4)), dtype=np.float32).reshape(4, 4)
+        model = np.asarray(wm.to_f32(), dtype=np.float32).reshape(4, 4)
         prog["u_view"].write(view_f32.tobytes())
         prog["u_proj"].write(proj_f32.tobytes())
         prog["u_camera_pos"].write(np.array([cam_pos.x, cam_pos.y, cam_pos.z], dtype=np.float32).tobytes())
@@ -846,9 +846,8 @@ out vec4 frag_color;
         grid_min = None
         if world_grid:
             V = np.asarray(verts, dtype=np.float32).reshape(-1, 3)
-            m = np.asarray(getattr(wm, "_d", np.eye(4)), dtype=np.float32).reshape(4, 4)
             ones = np.ones((V.shape[0], 1), dtype=np.float32)
-            S = (m @ np.concatenate([V, ones], axis=1).T).T[:, :3]
+            S = (model @ np.concatenate([V, ones], axis=1).T).T[:, :3]
             grid_min = S.min(axis=0)
         cells = fx.get_voxel_instances(verts, idx, model, size, world_grid, float(fx.jitter), grid_min)
         n = cells.shape[0]
@@ -875,7 +874,7 @@ out vec4 frag_color;
             return
 
         if world_grid:
-            m = model.reshape(4, 4)
+            m = model
             ones = np.ones((nverts, 1), dtype=np.float32)
             S = (m @ np.concatenate([V, ones], axis=1).T).T[:, :3]
         else:
@@ -887,7 +886,7 @@ out vec4 frag_color;
         dims = np.ceil(extent / cell).astype(np.int64)
         over = np.maximum(dims - self._VOX_MAX_DIM, 0)
         if np.any(over > 0):
-            factor = float(np.max((dims + over) / self._VOX_MAX_DIM))
+            factor = float(np.max(dims)) / self._VOX_MAX_DIM
             cell = cell * factor
             dims = np.ceil(extent / cell).astype(np.int64)
         dims = np.clip(dims, 1, self._VOX_MAX_DIM).astype(np.int32)
@@ -919,7 +918,7 @@ out vec4 frag_color;
         cs["u_grid_dims"].write(dims.astype(np.int32).tobytes())
         cs["u_jitter"].value = 0.0
         cs["u_world_grid"].value = 1 if world_grid else 0
-        cs["u_model"].write(model.tobytes())
+        cs["u_model"].write(wm.to_f32().tobytes())
         res["pos"].bind_to_storage_buffer(0)
         res["idx"].bind_to_storage_buffer(1)
         res["grid"].bind_to_storage_buffer(2)

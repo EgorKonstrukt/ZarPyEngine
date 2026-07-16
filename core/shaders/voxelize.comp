@@ -90,7 +90,7 @@ void main() {
         ivec3 cmin = ivec3(floor(tmn * inv));
         ivec3 cmax = ivec3(floor(tmx * inv));
         ivec3 span = cmax - cmin + ivec3(1);
-        if (span.x > 64 || span.y > 64 || span.z > 64)
+        if (span.x > 128 || span.y > 128 || span.z > 128)
             return;
         vec3 boxhalf = vec3(u_cell_size * 0.5);
         int dx = u_grid_dims.x;

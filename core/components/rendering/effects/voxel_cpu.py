@@ -84,17 +84,17 @@ def compute_voxel_instances(verts, idx, model, size: float, world_grid: bool, ji
         c = V[t[2]]
         tmn = np.minimum(np.minimum(a, b), c)
         tmx = np.maximum(np.maximum(a, b), c)
-        cmin = np.floor(tmn * inv).astype(np.int64)
-        cmax = np.floor(tmx * inv).astype(np.int64)
+        cmin = np.floor((tmn - grid_min) * inv).astype(np.int64)
+        cmax = np.floor((tmx - grid_min) * inv).astype(np.int64)
         span = (cmax[0] - cmin[0] + 1) * (cmax[1] - cmin[1] + 1) * (cmax[2] - cmin[2] + 1)
         if span > 4096:
             continue
         for ix in range(cmin[0], cmax[0] + 1):
-            cx = (ix + 0.5) * size
+            cx = grid_min[0] + (ix + 0.5) * size
             for iy in range(cmin[1], cmax[1] + 1):
-                cy = (iy + 0.5) * size
+                cy = grid_min[1] + (iy + 0.5) * size
                 for iz in range(cmin[2], cmax[2] + 1):
-                    cz = (iz + 0.5) * size
+                    cz = grid_min[2] + (iz + 0.5) * size
                     if tri_box_overlap(np.array([cx, cy, cz], dtype=np.float32), half, a, b, c):
                         cell_set.add((int(ix), int(iy), int(iz)))
 
