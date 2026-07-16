@@ -1632,6 +1632,7 @@ out vec4 frag_color;
                 and self._snap_struct_version == struct_version
                 and self._snap_mesh_gen == mesh_gen):
             self._refresh_snapshot_world_matrices(scene, n_updated)
+            self._collect_interactors(self._snap_cache, scene)
             return self._snap_cache
         snap = _RenderSnapshot()
         if not self._import_meta_cache:
