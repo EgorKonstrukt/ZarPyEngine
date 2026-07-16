@@ -1158,12 +1158,13 @@ out vec4 frag_color;
         vel_arr = np.zeros((64, 4), dtype=np.float32)
         for i in range(count):
             ent, center, radius, vel = interactors[i][:4]
+            vradius = interactors[i][4] if len(interactors[i]) > 4 else radius
             vy = vel.y if vel is not None else 0.0
             vx = vel.x if vel is not None else 0.0
             vz = vel.z if vel is not None else 0.0
             depth = center.y - rest_y
             pos_arr[i] = [center.x, center.z, max(radius, 0.05), depth]
-            vel_arr[i] = [vx, vy, vz, 0.0]
+            vel_arr[i] = [vx, vy, vz, max(vradius, 0.05)]
         prev = self._water_sim_a
         dst_fbo = self._water_sim_fbo_b
         prev.use(10)
@@ -1827,7 +1828,7 @@ out vec4 frag_color;
             rb = ent.get_component(Rigidbody)
             vel = rb.velocity if rb else Vec3.zero()
             center = tr.position + c.scaled_center
-            interactors.append((ent, center, c.scaled_radius, vel))
+            interactors.append((ent, center, c.scaled_radius, vel, c.scaled_radius))
         for ent in scene.get_entities_with_component(BoxCollider):
             c = ent.get_component(BoxCollider)
             if not c or not c.enabled or not ent.active:
@@ -1853,7 +1854,7 @@ out vec4 frag_color;
             rb = ent.get_component(Rigidbody)
             vel = rb.velocity if rb else Vec3.zero()
             center = tr.position + c.scaled_center
-            interactors.append((ent, center, c.scaled_radius, vel))
+            interactors.append((ent, center, c.scaled_radius, vel, c.scaled_radius))
         capped = sorted(interactors, key=lambda it: abs(it[1].y), reverse=False)[:64]
         snap.interactors = capped
 

@@ -84,15 +84,15 @@ Shader "Zarin/WaterSim"
                     float dd = length(d);
                     float fall = exp(-dd * dd / (reach * reach));
                     float vd = it.w;
-                    float vr = max(it.z, 0.05);
-                    float vgate = exp(-vd * vd / (vr * vr));
+                    float vrad = max(iv.w, 0.05);
+                    float slab = max(cell * 1.5, 0.5) + vrad;
+                    float surface_dist = abs(vd) - vrad;
+                    float vgate = 1.0 - smoothstep(0.0, slab, surface_dist);
                     float vvel = iv.y;
                     float hvel = length(iv.xz);
-                    float push = (_InteractionStrength * (vvel * 0.5 + 1.0) + hvel * 0.6) * fall * vgate;
-                    if (vd < 0.0) {
-                        float sub = clamp(-vd / max(it.z, 0.001), 0.0, 1.0);
-                        push += _InteractionStrength * 1.5 * fall * vgate * sub;
-                    }
+                    float speed = length(iv.xyz);
+                    float norm = speed / (speed + 3.0);
+                    float push = _InteractionStrength * norm * fall * vgate;
                     disturb += push;
                 }
 
