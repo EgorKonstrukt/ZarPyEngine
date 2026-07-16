@@ -122,6 +122,13 @@ Shader "Zarin/Water"
             uniform float _MacroWave;
             uniform float _Chaos;
 
+            uniform sampler2D _SimTex;
+            uniform float _HasSim;
+            uniform vec2 _SimGridCenter;
+            uniform float _SimGridSize;
+            uniform float _SimDispScale;
+            uniform float _SimNormalScale;
+
             out vec3 v_world_pos;
             out vec3 v_normal;
             out vec2 v_screen_uv;
@@ -168,6 +175,15 @@ Shader "Zarin/Water"
                 float c = 0.5 * sin((p.x + p.y) * 0.015 + t * 0.17);
                 float d = 0.4 * sin((p.x - p.y) * 0.019 - t * 0.13);
                 return (a + b + c + d);
+            }
+
+            float sim_height(vec2 world) {
+                if (_HasSim < 0.5) return 0.0;
+                vec2 uv = (world - _SimGridCenter) / _SimGridSize + 0.5;
+                if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 0.0;
+                float h = texture(_SimTex, uv).r * _SimDispScale;
+                if (!(h == h)) h = 0.0;
+                return clamp(h, -8.0, 8.0);
             }
 
             void main() {
@@ -287,13 +303,15 @@ Shader "Zarin/Water"
 
                 if (isTop) {
                     // Top surface: full Gerstner displacement.
+                    float sh = sim_height(p);
                     world += disp;
-                    v_world_pos = world;
-                    v_crest = disp.y;
-                    v_chop = chop;
-                    v_foamMask = foamMask;
-                    v_detail_coord = wp;
+                    world.y += sh;
                     v_normal = normalize(cross(binormal, tangent));
+                    v_world_pos = world;
+                    v_crest = disp.y + sh;
+                    v_chop = chop;
+                    v_foamMask = foamMask + clamp(abs(sh) * 3.0, 0.0, 1.5);
+                    v_detail_coord = wp;
                 } else if (isBottom) {
                     // Bottom: no displacement.
                     v_world_pos = world;
@@ -307,14 +325,16 @@ Shader "Zarin/Water"
                     // the waterline stays connected. Blend factor is 0 at
                     // the bottom (floor stays rigid) and 1 at the top rim.
                     float blend = clamp(v_local_y + 0.5, 0.0, 1.0);
+                    float sh = sim_height(p);
                     world.x += disp.x * blend;
                     world.z += disp.z * blend;
                     world.y += disp.y * blend;
+                    world.y += sh * blend;
                     v_world_pos = world;
                     v_normal = in_normal;
-                    v_crest = disp.y * blend;
+                    v_crest = disp.y * blend + sh * blend;
                     v_chop = 0.0;
-                    v_foamMask = foamMask * blend;
+                    v_foamMask = foamMask * blend + clamp(abs(sh) * 3.0, 0.0, 1.5) * blend;
                     v_detail_coord = wp;
                 }
 
@@ -380,6 +400,12 @@ Shader "Zarin/Water"
             uniform float _DetailOctaves;
             uniform float _DetailFade;
             uniform int _IsBox;
+            uniform sampler2D _SimTex;
+            uniform float _HasSim;
+            uniform vec2 _SimGridCenter;
+            uniform float _SimGridSize;
+            uniform float _SimDispScale;
+            uniform float _SimNormalScale;
             uniform float _CamNear;
             uniform float _CamFar;
             uniform vec2 _ViewportSize;
@@ -592,7 +618,21 @@ Shader "Zarin/Water"
                 oct = int(clamp(float(oct) * mix(0.35, 1.0, detailFade), 1.0, 12.0));
                 vec3 dn = detail_normal(dc * _WaveTiling * _DetailScale, _Time * _DetailSpeed, oct, _Chaos);
                 vec3 N = normalize(v_normal);
-                N = normalize(N + vec3(dn.x, 0.0, dn.z));
+                if (_HasSim > 0.5) {
+                    vec2 suv = (v_world_pos.xz - _SimGridCenter) / _SimGridSize + 0.5;
+                    if (suv.x >= 0.0 && suv.x <= 1.0 && suv.y >= 0.0 && suv.y <= 1.0) {
+                        float e = _SimGridSize / 512.0;
+                        float hx = (texture(_SimTex, suv + vec2(e / _SimGridSize, 0.0)).r - texture(_SimTex, suv - vec2(e / _SimGridSize, 0.0)).r) * _SimDispScale;
+                        float hz = (texture(_SimTex, suv + vec2(0.0, e / _SimGridSize)).r - texture(_SimTex, suv - vec2(0.0, e / _SimGridSize)).r) * _SimDispScale;
+                        if (!(hx == hx)) hx = 0.0;
+                        if (!(hz == hz)) hz = 0.0;
+                        vec3 simN = normalize(vec3(-hx * _SimNormalScale, 2.0 * e, -hz * _SimNormalScale));
+                        N = normalize(mix(N, simN, clamp(_SimNormalScale, 0.0, 1.0) * 0.5));
+                    }
+                    N = normalize(N + vec3(dn.x, 0.0, dn.z) * 0.5);
+                } else {
+                    N = normalize(N + vec3(dn.x, 0.0, dn.z));
+                }
 
                 vec3 V = normalize(u_camera_pos - v_world_pos);
                 bool backface = dot(V, N) < 0.0;

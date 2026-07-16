@@ -1,4 +1,4 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
@@ -46,6 +46,10 @@ from core.components.rendering.environment.sky import Sky
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.environment.water import Water
 from core.components.environment.wind_zone import WindZone
+from core.components.physics.sphere_collider import SphereCollider
+from core.components.physics.box_collider import BoxCollider
+from core.components.physics.capsule_collider import CapsuleCollider
+from core.components.physics.rigidbody import Rigidbody
 from core.renderer.particles import ParticleRenderer
 from core.renderer.sprites import SpriteRendererGL
 from core.renderer.svgs import SvgRendererGL
@@ -155,6 +159,7 @@ class _RenderSnapshot:
         'water_components', 'wind_zones', 'renderable', 'shadow_renderables',         'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors', 'skinned_renderables', 'skinned_shadow_renderables',
+        'interactors',
     )
     def __init__(self):
         self.lights: list = []
@@ -175,6 +180,7 @@ class _RenderSnapshot:
         self.particle_systems: list = []
         self.force_fields: list = []
         self.projectors: list = []
+        self.interactors: list = []
 
 
 class Renderer:
@@ -300,6 +306,14 @@ class Renderer:
         self._water_mesh_cache: dict = {}
         self._water_fbo: Optional[moderngl.Framebuffer] = None
         self._water_color_tex: Optional[moderngl.Texture] = None
+        self._water_sim_prog: Optional[moderngl.Program] = None
+        self._water_sim_vao: Optional[moderngl.VertexArray] = None
+        self._water_sim_a: Optional[moderngl.Texture] = None
+        self._water_sim_b: Optional[moderngl.Texture] = None
+        self._water_sim_fbo_a: Optional[moderngl.Framebuffer] = None
+        self._water_sim_fbo_b: Optional[moderngl.Framebuffer] = None
+        self._water_sim_size: int = 512
+        self._water_sim_world: dict = {}
         self._water_depth_rb: Optional[moderngl.Renderbuffer] = None
         self._water_fbo_size: tuple = (0, 0)
         self._batcher: Optional[RenderBatcher] = None
@@ -558,6 +572,7 @@ void main() {
             self._water_plane = self._get_water_plane_mesh(200)
             self._water_chunk_mesh = self._get_water_plane_mesh(32)
             self._water_box_mesh = self._get_water_box_mesh(128)
+            self._init_water_sim()
             self._particles = ParticleRenderer(self._ctx, self._particle_prog)
             self._particles.load_compute_shader(
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "particle.compute")
@@ -1074,6 +1089,114 @@ out vec4 frag_color;
         self._water_depth_rb = None
         self._water_fbo_size = (0, 0)
 
+    def _init_water_sim(self):
+        try:
+            self._water_sim_prog = self._ctx.program(
+                vertex_shader=read_shader("shadow_overlay.vert"),
+                fragment_shader=self._load_water_sim_frag(),
+            )
+        except Exception as e:
+            Logger.error(f"Failed to init water sim: {e}", e)
+            self._water_sim_prog = None
+        if self._water_sim_prog is not None:
+            quad_verts = np.array([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0], dtype=np.float32)
+            quad_indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.int32)
+            vbo = self._ctx.buffer(quad_verts.tobytes())
+            ibo = self._ctx.buffer(quad_indices.tobytes())
+            self._sim_quad_vbo = vbo
+            self._sim_quad_ibo = ibo
+            self._water_sim_vao = self._ctx.vertex_array(
+                self._water_sim_prog,
+                [(vbo, '2f', 'in_position')],
+                ibo
+            )
+        self._ensure_water_sim_textures(self._water_sim_size)
+
+    def _load_water_sim_frag(self) -> str:
+        from core.assets.material import _extract_glsl_from_shader
+        import os as _os
+        path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), "core", "shaders", "WaterSim.shader")
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        _, frag = _extract_glsl_from_shader(text)
+        return frag
+
+    def _ensure_water_sim_textures(self, size: int):
+        if self._water_sim_a is not None and self._water_sim_size == size:
+            return
+        for obj in [self._water_sim_a, self._water_sim_b, self._water_sim_fbo_a, self._water_sim_fbo_b]:
+            if obj:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self._water_sim_a = self._ctx.texture((size, size), 2, dtype='f2')
+        self._water_sim_b = self._ctx.texture((size, size), 2, dtype='f2')
+        self._water_sim_a.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self._water_sim_b.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        self._water_sim_a.repeat_x = False
+        self._water_sim_a.repeat_y = False
+        self._water_sim_b.repeat_x = False
+        self._water_sim_b.repeat_y = False
+        self._water_sim_fbo_a = self._ctx.framebuffer(self._water_sim_a)
+        self._water_sim_fbo_b = self._ctx.framebuffer(self._water_sim_b)
+        self._water_sim_size = size
+        self._water_sim_fbo_a.clear(color=(0.0, 0.0, 0.0, 1.0))
+        self._water_sim_fbo_b.clear(color=(0.0, 0.0, 0.0, 1.0))
+
+    def _step_water_sim(self, water_component, grid_center, grid_size, rest_y, dt):
+        prog = self._water_sim_prog
+        if prog is None or self._water_sim_vao is None:
+            return None
+        if not getattr(water_component, "interaction_enabled", True):
+            return None
+        size = self._water_sim_size
+        self._ensure_water_sim_textures(size)
+        interactors = getattr(self, "_last_interactors", [])
+        count = min(len(interactors), 64)
+        pos_arr = np.zeros((64, 4), dtype=np.float32)
+        vel_arr = np.zeros((64, 4), dtype=np.float32)
+        for i in range(count):
+            ent, center, radius, vel = interactors[i][:4]
+            vy = vel.y if vel is not None else 0.0
+            vx = vel.x if vel is not None else 0.0
+            vz = vel.z if vel is not None else 0.0
+            depth = center.y - rest_y
+            pos_arr[i] = [center.x, center.z, max(radius, 0.05), depth]
+            vel_arr[i] = [vx, vy, vz, 0.0]
+        prev = self._water_sim_a
+        dst_fbo = self._water_sim_fbo_b
+        prev.use(10)
+        prog["_PrevState"] = 10
+        prog["_Texel"] = (1.0 / size, 1.0 / size)
+        prog["_Dt"] = float(min(dt, 0.05))
+        prog["_Damping"] = float(getattr(water_component, "sim_damping", 0.04))
+        prog["_Propagation"] = float(getattr(water_component, "sim_propagation", 18.0))
+        prog["_Saturation"] = float(getattr(water_component, "sim_saturation", 4.0))
+        prog["_GridSize"] = float(grid_size)
+        prog["_GridCenter"] = (float(grid_center[0]), float(grid_center[2]))
+        prog["_InteractionStrength"] = float(getattr(water_component, "interaction_strength", 1.0))
+        prog["_InteractorCount"] = int(count)
+        try:
+            prog["_Interactors"].write(pos_arr.tobytes())
+            prog["_InteractorVel"].write(vel_arr.tobytes())
+        except Exception:
+            pass
+        old_fbo = self._ctx.fbo
+        old_vp = self._ctx.viewport
+        dst_fbo.use()
+        dst_fbo.viewport = (0, 0, size, size)
+        self._ctx.viewport = (0, 0, size, size)
+        self._ctx.disable(moderngl.DEPTH_TEST)
+        self._ctx.disable(moderngl.BLEND)
+        self._water_sim_vao.render()
+        old_fbo.use()
+        self._ctx.viewport = old_vp
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        self._water_sim_a, self._water_sim_b = self._water_sim_b, self._water_sim_a
+        self._water_sim_fbo_a, self._water_sim_fbo_b = self._water_sim_fbo_b, self._water_sim_fbo_a
+        return self._water_sim_a
+
     def _get_water_plane_mesh(self, res: int) -> MeshData:
         key = ("plane", int(res))
         m = self._water_mesh_cache.get(key)
@@ -1541,6 +1664,7 @@ out vec4 frag_color;
                 wz = ent.get_component(WindZone)
                 if wz and wz.enabled:
                     snap.wind_zones.append(wz)
+        self._collect_interactors(snap, scene)
         self._sync_probuilder_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         if not needs_shadow:
@@ -1689,6 +1813,49 @@ out vec4 frag_color;
         self._snap_mesh_gen = mesh_gen
         self._snap_scene = scene
         return snap
+
+    def _collect_interactors(self, snap, scene):
+        interactors = []
+        collider_types = (SphereCollider, BoxCollider, CapsuleCollider)
+        for ent in scene.get_entities_with_component(SphereCollider):
+            c = ent.get_component(SphereCollider)
+            if not c or not c.enabled or not ent.active:
+                continue
+            tr = ent.transform
+            if not tr:
+                continue
+            rb = ent.get_component(Rigidbody)
+            vel = rb.velocity if rb else Vec3.zero()
+            center = tr.position + c.scaled_center
+            interactors.append((ent, center, c.scaled_radius, vel))
+        for ent in scene.get_entities_with_component(BoxCollider):
+            c = ent.get_component(BoxCollider)
+            if not c or not c.enabled or not ent.active:
+                continue
+            tr = ent.transform
+            if not tr:
+                continue
+            rb = ent.get_component(Rigidbody)
+            vel = rb.velocity if rb else Vec3.zero()
+            center = tr.position + c.scaled_center
+            hsize = c.scaled_size * 0.5
+            radius = max(hsize.x, hsize.z)
+            if radius <= 0.0:
+                continue
+            interactors.append((ent, center, radius, vel, hsize.y))
+        for ent in scene.get_entities_with_component(CapsuleCollider):
+            c = ent.get_component(CapsuleCollider)
+            if not c or not c.enabled or not ent.active:
+                continue
+            tr = ent.transform
+            if not tr:
+                continue
+            rb = ent.get_component(Rigidbody)
+            vel = rb.velocity if rb else Vec3.zero()
+            center = tr.position + c.scaled_center
+            interactors.append((ent, center, c.scaled_radius, vel))
+        capped = sorted(interactors, key=lambda it: abs(it[1].y), reverse=False)[:64]
+        snap.interactors = capped
 
     def _refresh_snapshot_world_matrices(self, scene, n_updated: int):
         snap = self._snap_cache
@@ -2090,34 +2257,59 @@ out vec4 frag_color;
             self._ctx.enable(moderngl.DEPTH_TEST)
             self._ctx.enable(moderngl.CULL_FACE)
             self._ctx.cull_face = 'back'
+            self._last_interactors = snap.interactors
+            now_t = time.time()
+            sim_dt = max(0.001, min(now_t - getattr(self, "_last_water_sim_time", now_t - 0.016), 0.05))
+            self._last_water_sim_time = now_t
             for water_component in water_components:
+                tr = water_component.transform
+                water_y = tr.position.y if tr else 0.0
                 if water_component.infinite_ocean and water_component.surface_type == "Ocean":
-                    tr = water_component.transform
-                    water_y = tr.position.y if tr else 0.0
                     chunk_models = self._compute_water_chunk_models(cam_pos, water_y, water_component.ocean_size)
                     res = int(getattr(water_component, "mesh_resolution", 32.0))
                     mesh = self._get_water_plane_mesh(max(2, res))
+                    grid_center = cam_pos
+                    grid_size = float(getattr(water_component, "ocean_size", 2000.0))
+                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
                                                  (rw, rh), cam_near, cam_far,
-                                                 snap.wind_zones, snap.lights, chunk_models)
+                                                 snap.wind_zones, snap.lights, chunk_models,
+                                                 sim_tex=sim_tex, sim_grid_center=grid_center,
+                                                 sim_grid_size=grid_size,
+                                                 sim_disp_scale=getattr(water_component, "sim_disp_scale", 1.0),
+                                                 sim_normal_scale=getattr(water_component, "sim_normal_scale", 1.0))
                 elif water_component.surface_type == "Pond":
                     res = int(getattr(water_component, "mesh_resolution", 128.0))
                     mesh = self._get_water_box_mesh(res)
+                    grid_center = tr.position if tr else cam_pos
+                    grid_size = float(getattr(water_component, "pond_size", 20.0))
+                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
                                                  (rw, rh), cam_near, cam_far,
-                                                 snap.wind_zones, snap.lights, None, is_box=True)
+                                                 snap.wind_zones, snap.lights, None, is_box=True,
+                                                 sim_tex=sim_tex, sim_grid_center=grid_center,
+                                                 sim_grid_size=grid_size,
+                                                 sim_disp_scale=getattr(water_component, "sim_disp_scale", 1.0),
+                                                 sim_normal_scale=getattr(water_component, "sim_normal_scale", 1.0))
                 else:
                     res = int(getattr(water_component, "mesh_resolution", 200.0))
                     mesh = self._get_water_plane_mesh(res)
+                    grid_center = tr.position if tr else cam_pos
+                    grid_size = float(getattr(water_component, "pond_size", 200.0))
+                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
                                                  (rw, rh), cam_near, cam_far,
-                                                 snap.wind_zones, snap.lights, None)
+                                                 snap.wind_zones, snap.lights, None,
+                                                 sim_tex=sim_tex, sim_grid_center=grid_center,
+                                                 sim_grid_size=grid_size,
+                                                 sim_disp_scale=getattr(water_component, "sim_disp_scale", 1.0),
+                                                 sim_normal_scale=getattr(water_component, "sim_normal_scale", 1.0))
             self._scene_fbo.use()
             self._scene_fbo.viewport = (0, 0, rw, rh)
             self._ctx.viewport = (0, 0, rw, rh)

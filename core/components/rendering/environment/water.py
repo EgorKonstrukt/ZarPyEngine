@@ -89,6 +89,15 @@ class Water(Component):
             InspectorField("detail_scale", "Detail Scale", FieldType.SLIDER, min_val=0.1, max_val=4.0, step=0.01, decimals=3),
             InspectorField("detail_octaves", "Detail Octaves", FieldType.SLIDER, min_val=1.0, max_val=12.0, step=1.0, decimals=0),
             InspectorField("detail_fade", "Detail Fade Dist", FieldType.FLOAT, min_val=20.0, max_val=2000.0, step=10.0, decimals=0),
+            InspectorField("interaction_enabled", "Object Interaction", FieldType.BOOL),
+            InspectorField("interaction_strength", "Interaction Strength", FieldType.SLIDER, min_val=0.0, max_val=8.0, step=0.05, decimals=2),
+            InspectorField("interaction_radius", "Interaction Radius", FieldType.SLIDER, min_val=0.1, max_val=4.0, step=0.05, decimals=2),
+            InspectorField("sim_damping", "Wave Damping", FieldType.SLIDER, min_val=0.0, max_val=0.3, step=0.005, decimals=3),
+            InspectorField("sim_propagation", "Wave Propagation", FieldType.SLIDER, min_val=2.0, max_val=60.0, step=0.5, decimals=1),
+            InspectorField("sim_saturation", "Wave Saturation", FieldType.SLIDER, min_val=0.5, max_val=10.0, step=0.1, decimals=1),
+            InspectorField("sim_disp_scale", "Ripple Height", FieldType.SLIDER, min_val=0.0, max_val=4.0, step=0.05, decimals=2),
+            InspectorField("sim_normal_scale", "Ripple Normal", FieldType.SLIDER, min_val=0.0, max_val=4.0, step=0.05, decimals=2),
+            InspectorField("pond_size", "Pond Size", FieldType.FLOAT, min_val=2.0, max_val=4000.0, step=1.0, decimals=1),
         ]
 
     def __init__(self):
@@ -128,6 +137,15 @@ class Water(Component):
         self.detail_scale: float = 1.0
         self.detail_octaves: float = 6.0
         self.detail_fade: float = 350.0
+        self.interaction_enabled: bool = True
+        self.interaction_strength: float = 1.5
+        self.interaction_radius: float = 1.0
+        self.sim_damping: float = 0.04
+        self.sim_propagation: float = 18.0
+        self.sim_saturation: float = 4.0
+        self.sim_disp_scale: float = 1.0
+        self.sim_normal_scale: float = 1.0
+        self.pond_size: float = 200.0
 
     def _resolve_wind(self, wind_zones, wx, wz, t):
         best = None
@@ -205,7 +223,8 @@ class Water(Component):
 
     def render_water(self, ctx, shaders, view_mat, proj_mat, dir_light, cam_pos,
                       water_mesh, scene_color_tex, scene_depth_tex, viewport_size, cam_near, cam_far,
-                      wind_zones=None, lights=None, chunk_models=None, is_box=False):
+                      wind_zones=None, lights=None, chunk_models=None, is_box=False,
+                      sim_tex=None, sim_grid_center=None, sim_grid_size=None, sim_disp_scale=1.0, sim_normal_scale=1.0):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
@@ -277,6 +296,17 @@ class Water(Component):
         _set_float(prog, "_DetailFade", self.detail_fade)
         if "_IsBox" in prog:
             prog["_IsBox"].value = 1 if is_box else 0
+
+        if sim_tex is not None and "_SimTex" in prog and sim_grid_center is not None and sim_grid_size is not None:
+            sim_tex.use(17)
+            prog["_SimTex"] = 17
+            prog["_HasSim"].value = 1.0
+            prog["_SimGridCenter"] = (float(sim_grid_center[0]), float(sim_grid_center[2]))
+            prog["_SimGridSize"].value = float(sim_grid_size)
+            prog["_SimDispScale"].value = float(sim_disp_scale)
+            prog["_SimNormalScale"].value = float(sim_normal_scale)
+        elif "_HasSim" in prog:
+            prog["_HasSim"].value = 0.0
 
         if "_LightCount" in prog:
             from core.components.lighting import LightType
@@ -401,6 +431,15 @@ class Water(Component):
             "detail_scale": self.detail_scale,
             "detail_octaves": self.detail_octaves,
             "detail_fade": self.detail_fade,
+            "interaction_enabled": self.interaction_enabled,
+            "interaction_strength": self.interaction_strength,
+            "interaction_radius": self.interaction_radius,
+            "sim_damping": self.sim_damping,
+            "sim_propagation": self.sim_propagation,
+            "sim_saturation": self.sim_saturation,
+            "sim_disp_scale": self.sim_disp_scale,
+            "sim_normal_scale": self.sim_normal_scale,
+            "pond_size": self.pond_size,
         })
         return d
 
@@ -446,4 +485,13 @@ class Water(Component):
         c.detail_scale = data.get("detail_scale", 1.0)
         c.detail_octaves = data.get("detail_octaves", 6.0)
         c.detail_fade = data.get("detail_fade", 350.0)
+        c.interaction_enabled = data.get("interaction_enabled", True)
+        c.interaction_strength = data.get("interaction_strength", 1.5)
+        c.interaction_radius = data.get("interaction_radius", 1.0)
+        c.sim_damping = data.get("sim_damping", 0.04)
+        c.sim_propagation = data.get("sim_propagation", 18.0)
+        c.sim_saturation = data.get("sim_saturation", 4.0)
+        c.sim_disp_scale = data.get("sim_disp_scale", 1.0)
+        c.sim_normal_scale = data.get("sim_normal_scale", 1.0)
+        c.pond_size = data.get("pond_size", 200.0)
         return c
