@@ -848,7 +848,7 @@ out vec4 frag_color;
             V = np.asarray(verts, dtype=np.float32).reshape(-1, 3)
             ones = np.ones((V.shape[0], 1), dtype=np.float32)
             S = (model @ np.concatenate([V, ones], axis=1).T).T[:, :3]
-            grid_min = S.min(axis=0)
+            grid_min = np.floor(S.min(axis=0) / size) * size
         cells = fx.get_voxel_instances(verts, idx, model, size, world_grid, float(fx.jitter), grid_min)
         n = cells.shape[0]
         if n == 0 or self._vox_vao is None:
@@ -877,10 +877,12 @@ out vec4 frag_color;
             m = model
             ones = np.ones((nverts, 1), dtype=np.float32)
             S = (m @ np.concatenate([V, ones], axis=1).T).T[:, :3]
+            smin = np.floor(S.min(axis=0) / size) * size
+            smax = np.floor(S.max(axis=0) / size) * size + size
         else:
             S = V
-        smin = S.min(axis=0)
-        smax = S.max(axis=0)
+            smin = S.min(axis=0)
+            smax = S.max(axis=0)
         extent = np.maximum(smax - smin, 1e-4)
         cell = float(size)
         dims = np.ceil(extent / cell).astype(np.int64)
