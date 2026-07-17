@@ -202,52 +202,5 @@ class Transform(Component):
 
     @staticmethod
     def batch_update_world_matrices(transforms: list):
-        from core._transform_batch import batch_update_world_matrices as _batch_cy
-        n = len(transforms)
-        if n == 0: return
-        id_to_idx = {}
-        for i, t in enumerate(transforms):
-            e = t._entity
-            if e:
-                id_to_idx[e.id] = i
-        pos_x = np.zeros(n, dtype=FLOAT_TYPE)
-        pos_y = np.zeros(n, dtype=FLOAT_TYPE)
-        pos_z = np.zeros(n, dtype=FLOAT_TYPE)
-        rot_x = np.zeros(n, dtype=FLOAT_TYPE)
-        rot_y = np.zeros(n, dtype=FLOAT_TYPE)
-        rot_z = np.zeros(n, dtype=FLOAT_TYPE)
-        rot_w = np.zeros(n, dtype=FLOAT_TYPE)
-        sc_x = np.zeros(n, dtype=FLOAT_TYPE)
-        sc_y = np.zeros(n, dtype=FLOAT_TYPE)
-        sc_z = np.zeros(n, dtype=FLOAT_TYPE)
-        has_parent = np.zeros(n, dtype=np.int32)
-        parent_idx = np.zeros(n, dtype=np.int32)
-        parent_outside = np.zeros((n, 4, 4), dtype=FLOAT_TYPE)
-        for i, t in enumerate(transforms):
-            p = t._local_pos
-            q = t._local_rot
-            s = t._local_scale
-            pos_x[i] = p.x; pos_y[i] = p.y; pos_z[i] = p.z
-            rot_x[i] = q.x; rot_y[i] = q.y; rot_z[i] = q.z; rot_w[i] = q.w
-            sc_x[i] = s.x; sc_y[i] = s.y; sc_z[i] = s.z
-            if t._entity and t._entity.parent:
-                pi = id_to_idx.get(t._entity.parent.id)
-                if pi is not None:
-                    has_parent[i] = 1
-                    parent_idx[i] = pi
-                else:
-                    pt = t._entity.parent.transform
-                    if pt is not None:
-                        has_parent[i] = 1
-                        parent_idx[i] = -1
-                        parent_outside[i] = pt._world_matrix._d
-        world_mats = _batch_cy(
-            n, pos_x, pos_y, pos_z,
-            rot_x, rot_y, rot_z, rot_w,
-            sc_x, sc_y, sc_z,
-            has_parent, parent_idx, parent_outside,
-        )
-        for i, t in enumerate(transforms):
-            t._world_matrix = Mat4(world_mats[i])
-            t._world_target = None
-            t._dirty = False
+        from core._ecs_batch import batch_update_from_transforms
+        batch_update_from_transforms(transforms)

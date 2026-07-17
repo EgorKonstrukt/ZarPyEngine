@@ -98,10 +98,36 @@ class Curve:
         return (2 * t3 - 3 * t2 + 1) * k0.value + (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) * k1.value + (t3 - t2) * m1
 
     def evaluate_array(self, times: np.ndarray) -> np.ndarray:
-        out = np.zeros_like(times)
-        for i, t in enumerate(times):
-            out[i] = self.evaluate(t)
-        return out
+        if not self.keys:
+            return np.zeros_like(times)
+        if len(self.keys) == 1:
+            return np.full_like(times, self.keys[0].value)
+        try:
+            from core._curve_batch import evaluate_curve_batch
+            nk = len(self.keys)
+            key_times = np.empty(nk, dtype=np.float64)
+            key_values = np.empty(nk, dtype=np.float64)
+            key_in = np.empty(nk, dtype=np.float64)
+            key_out = np.empty(nk, dtype=np.float64)
+            key_modes = np.empty(nk, dtype=np.int32)
+            for i, k in enumerate(self.keys):
+                key_times[i] = k.time
+                key_values[i] = k.value
+                key_in[i] = k.in_tangent
+                key_out[i] = k.out_tangent
+                key_modes[i] = 0 if k.tangent_mode == TangentMode.FREE else (
+                    1 if k.tangent_mode == TangentMode.LINEAR else (
+                    2 if k.tangent_mode == TangentMode.CONSTANT else 0))
+            return evaluate_curve_batch(
+                np.asarray(times, dtype=np.float64),
+                key_times, key_values, key_in, key_out, key_modes,
+                self.pre_wrap, self.post_wrap,
+            )
+        except ImportError:
+            out = np.zeros_like(times)
+            for i, t in enumerate(times):
+                out[i] = self.evaluate(t)
+            return out
 
     def to_list(self) -> list[list[float]]:
         return [[k.time, k.value] for k in self.keys]

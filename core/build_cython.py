@@ -29,6 +29,11 @@ EXTENSIONS = [
     _ext("core._types", "_types.pyx"),
     _ext("core._ecs_batch", "_ecs_batch.pyx"),
     _ext("core._render_batch", "_render_batch.pyx"),
+    _ext("core._octree_batch", "_octree_batch.pyx"),
+    _ext("core._constraint_batch", "_constraint_batch.pyx"),
+    _ext("core._curve_batch", "_curve_batch.pyx"),
+    _ext("core._constraint_update", "_constraint_update.pyx"),
+    _ext("core._physics_sync", "_physics_sync.pyx"),
 ]
 
 def build():

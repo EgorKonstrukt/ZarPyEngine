@@ -206,6 +206,14 @@ class OctreeNode:
         self.children.clear()
         self._is_leaf = True
 
+    def _collect_all(self, eids: list, aabbs: list):
+        for eid, aabb in self.objects.items():
+            eids.append(eid)
+            aabbs.append(aabb)
+        if not self._is_leaf:
+            for child in self.children:
+                child._collect_all(eids, aabbs)
+
 
 class Octree:
     def __init__(self, world_size: float = 500.0, max_depth: int = 8, max_objects: int = 8):
@@ -245,6 +253,111 @@ class Octree:
     def clear(self):
         self._root.clear()
         self._object_count = 0
+
+    def batch_query_aabb(
+        self,
+        q_min_x: list[float], q_min_y: list[float], q_min_z: list[float],
+        q_max_x: list[float], q_max_y: list[float], q_max_z: list[float],
+    ) -> list[list[str]]:
+        import numpy as np
+        from core._octree_batch import aabb_intersects_point_batch
+        n = len(q_min_x)
+        results = [[] for _ in range(n)]
+        node_aabb = self._root.aabb()
+        all_eids = []
+        all_aabbs = []
+        self._root._collect_all(all_eids, all_aabbs)
+        if not all_eids:
+            return results
+        count = len(all_eids)
+        ax = np.empty(count, dtype=np.float64)
+        ay = np.empty(count, dtype=np.float64)
+        az = np.empty(count, dtype=np.float64)
+        bx = np.empty(count, dtype=np.float64)
+        by = np.empty(count, dtype=np.float64)
+        bz = np.empty(count, dtype=np.float64)
+        for i, a in enumerate(all_aabbs):
+            ax[i] = a.min.x; ay[i] = a.min.y; az[i] = a.min.z
+            bx[i] = a.max.x; by[i] = a.max.y; bz[i] = a.max.z
+        for qi in range(n):
+            hits = aabb_intersects_point_batch(ax, ay, az, bx, by, bz, q_min_x[qi], q_min_y[qi], q_min_z[qi])
+            for j in range(count):
+                if hits[j]:
+                    a = all_aabbs[j]
+                    if (a.min.x <= q_max_x[qi] and a.min.y <= q_max_y[qi] and a.min.z <= q_max_z[qi] and
+                            a.max.x >= q_min_x[qi] and a.max.y >= q_min_y[qi] and a.max.z >= q_min_z[qi]):
+                        results[qi].append(all_eids[j])
+        return results
+
+    def batch_query_point(
+        self,
+        px: list[float], py: list[float], pz: list[float],
+    ) -> list[list[str]]:
+        import numpy as np
+        from core._octree_batch import aabb_intersects_point_batch
+        n = len(px)
+        results = [[] for _ in range(n)]
+        all_eids = []
+        all_aabbs = []
+        self._root._collect_all(all_eids, all_aabbs)
+        if not all_eids:
+            return results
+        count = len(all_eids)
+        ax = np.empty(count, dtype=np.float64)
+        ay = np.empty(count, dtype=np.float64)
+        az = np.empty(count, dtype=np.float64)
+        bx = np.empty(count, dtype=np.float64)
+        by = np.empty(count, dtype=np.float64)
+        bz = np.empty(count, dtype=np.float64)
+        for i, a in enumerate(all_aabbs):
+            ax[i] = a.min.x; ay[i] = a.min.y; az[i] = a.min.z
+            bx[i] = a.max.x; by[i] = a.max.y; bz[i] = a.max.z
+        for qi in range(n):
+            hits = aabb_intersects_point_batch(ax, ay, az, bx, by, bz, px[qi], py[qi], pz[qi])
+            for j in range(count):
+                if hits[j]:
+                    results[qi].append(all_eids[j])
+        return results
+
+    def batch_raycast(
+        self,
+        ox: list[float], oy: list[float], oz: list[float],
+        dx: list[float], dy: list[float], dz: list[float],
+        max_dist: float = 100.0,
+    ) -> list[list[tuple[str, float]]]:
+        import numpy as np
+        from core._octree_batch import aabb_ray_batch
+        n = len(ox)
+        results = [[] for _ in range(n)]
+        all_eids = []
+        all_aabbs = []
+        self._root._collect_all(all_eids, all_aabbs)
+        if not all_eids:
+            return results
+        count = len(all_eids)
+        ax = np.empty(count, dtype=np.float64)
+        ay = np.empty(count, dtype=np.float64)
+        az = np.empty(count, dtype=np.float64)
+        bx = np.empty(count, dtype=np.float64)
+        by = np.empty(count, dtype=np.float64)
+        bz = np.empty(count, dtype=np.float64)
+        for i, a in enumerate(all_aabbs):
+            ax[i] = a.min.x; ay[i] = a.min.y; az[i] = a.min.z
+            bx[i] = a.max.x; by[i] = a.max.y; bz[i] = a.max.z
+        for qi in range(n):
+            dists = aabb_ray_batch(ax, ay, az, bx, by, bz,
+                                   np.array([ox[qi]], dtype=np.float64),
+                                   np.array([oy[qi]], dtype=np.float64),
+                                   np.array([oz[qi]], dtype=np.float64),
+                                   np.array([dx[qi]], dtype=np.float64),
+                                   np.array([dy[qi]], dtype=np.float64),
+                                   np.array([dz[qi]], dtype=np.float64),
+                                   max_dist)
+            for j in range(count):
+                if dists[j] >= 0:
+                    results[qi].append((all_eids[j], dists[j]))
+            results[qi].sort(key=lambda x: x[1])
+        return results
 
     @property
     def object_count(self) -> int:

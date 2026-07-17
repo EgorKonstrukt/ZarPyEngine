@@ -312,83 +312,105 @@ class PhysicsScene:
         return self._body_items
 
     def _sync_ecs_to_physics(self):
-        from core.math_helpers import quat_to_euler_rad
-        cache = self._entity_body_cache
-        for entity_id, body_id in self._entity_to_body.items():
-            cached = cache.get(entity_id)
-            if not cached:
-                continue
-            entity, rb, tr, is_2d = cached
-            if not entity._active:
-                continue
-            if rb.is_kinematic:
-                p = tr._local_pos
+        try:
+            from core._physics_sync import batch_sync_ecs_to_physics
+            cache = self._entity_body_cache
+            items = []
+            for entity_id, body_id in self._entity_to_body.items():
+                cached = cache.get(entity_id)
+                if cached is not None:
+                    items.append((entity_id, body_id, cached[0], cached[1], cached[2], cached[3]))
+            if items:
+                batch_sync_ecs_to_physics(items, self._solver)
+        except ImportError:
+            from core.math_helpers import quat_to_euler_rad
+            cache = self._entity_body_cache
+            for entity_id, body_id in self._entity_to_body.items():
+                cached = cache.get(entity_id)
+                if not cached:
+                    continue
+                entity, rb, tr, is_2d = cached
+                if not entity._active:
+                    continue
+                if rb.is_kinematic:
+                    p = tr._local_pos
+                    if is_2d:
+                        self._solver.set_body_transform(body_id,
+                            (p._x, p._y, 0.0),
+                            (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
+                                                          tr._local_rot._z, tr._local_rot._w)[2]))
+                    else:
+                        e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
+                                              tr._local_rot._z, tr._local_rot._w)
+                        self._solver.set_body_transform(body_id,
+                            (p._x, p._y, p._z), e)
+                fa = rb._force_accum
                 if is_2d:
-                    self._solver.set_body_transform(body_id,
-                        (p._x, p._y, 0.0),
-                        (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
-                                                      tr._local_rot._z, tr._local_rot._w)[2]))
+                    if fa._x != 0.0 or fa._y != 0.0:
+                        self._solver.apply_force(body_id, (fa._x, fa._y, 0.0))
+                    if abs(rb._torque_accum) > 1e-10:
+                        self._solver.apply_torque(body_id, (0.0, 0.0, rb._torque_accum))
                 else:
-                    e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
-                                          tr._local_rot._z, tr._local_rot._w)
-                    self._solver.set_body_transform(body_id,
-                        (p._x, p._y, p._z), e)
-            fa = rb._force_accum
-            if is_2d:
-                if fa._x != 0.0 or fa._y != 0.0:
-                    self._solver.apply_force(body_id, (fa._x, fa._y, 0.0))
-                if abs(rb._torque_accum) > 1e-10:
-                    self._solver.apply_torque(body_id, (0.0, 0.0, rb._torque_accum))
-            else:
-                if fa._x * fa._x + fa._y * fa._y + fa._z * fa._z > 1e-10:
-                    self._solver.apply_force(body_id, (fa._x, fa._y, fa._z))
-                ta = rb._torque_accum
-                if ta._x * ta._x + ta._y * ta._y + ta._z * ta._z > 1e-10:
-                    self._solver.apply_torque(body_id, (ta._x, ta._y, ta._z))
+                    if fa._x * fa._x + fa._y * fa._y + fa._z * fa._z > 1e-10:
+                        self._solver.apply_force(body_id, (fa._x, fa._y, fa._z))
+                    ta = rb._torque_accum
+                    if ta._x * ta._x + ta._y * ta._y + ta._z * ta._z > 1e-10:
+                        self._solver.apply_torque(body_id, (ta._x, ta._y, ta._z))
 
     def _sync_physics_to_ecs(self):
-        from core.math_helpers import quat_from_euler_rad
-        cache = self._entity_body_cache
-        for entity_id, body_id in self._entity_to_body.items():
-            cached = cache.get(entity_id)
-            if not cached:
-                continue
-            entity, rb, tr, is_2d = cached
-            if not entity._active or rb.is_kinematic:
-                continue
-            pos, rot = self._solver.get_body_transform(body_id)
-            vel = self._solver.get_velocity(body_id)
-            ang_vel = self._solver.get_angular_velocity(body_id)
-            tr._local_pos._x = pos[0]
-            tr._local_pos._y = pos[1]
-            tr._local_pos._z = 0.0 if is_2d else pos[2]
-            if is_2d:
-                q = quat_from_euler_rad(0.0, 0.0, rot[2])
-            else:
-                q = quat_from_euler_rad(rot[0], rot[1], rot[2])
-            tr._local_rot._x = q[0]
-            tr._local_rot._y = q[1]
-            tr._local_rot._z = q[2]
-            tr._local_rot._w = q[3]
-            tr._dirty = True
-            rb._velocity._x = vel[0]
-            rb._velocity._y = vel[1]
-            if not is_2d:
-                rb._velocity._z = vel[2]
-                rb._angular_velocity._x = ang_vel[0]
-                rb._angular_velocity._y = ang_vel[1]
-                rb._angular_velocity._z = ang_vel[2]
-            else:
-                rb._angular_velocity = ang_vel[2]
-            rb._force_accum._x = 0.0
-            rb._force_accum._y = 0.0
-            if not is_2d:
-                rb._force_accum._z = 0.0
-                rb._torque_accum._x = 0.0
-                rb._torque_accum._y = 0.0
-                rb._torque_accum._z = 0.0
-            else:
-                rb._torque_accum = 0.0
+        try:
+            from core._physics_sync import batch_sync_physics_to_ecs
+            cache = self._entity_body_cache
+            items = []
+            for entity_id, body_id in self._entity_to_body.items():
+                cached = cache.get(entity_id)
+                if cached is not None:
+                    items.append((entity_id, body_id, cached[0], cached[1], cached[2], cached[3]))
+            if items:
+                batch_sync_physics_to_ecs(items, self._solver)
+        except ImportError:
+            from core.math_helpers import quat_from_euler_rad
+            cache = self._entity_body_cache
+            for entity_id, body_id in self._entity_to_body.items():
+                cached = cache.get(entity_id)
+                if not cached:
+                    continue
+                entity, rb, tr, is_2d = cached
+                if not entity._active or rb.is_kinematic:
+                    continue
+                pos, rot = self._solver.get_body_transform(body_id)
+                vel = self._solver.get_velocity(body_id)
+                ang_vel = self._solver.get_angular_velocity(body_id)
+                tr._local_pos._x = pos[0]
+                tr._local_pos._y = pos[1]
+                tr._local_pos._z = 0.0 if is_2d else pos[2]
+                if is_2d:
+                    q = quat_from_euler_rad(0.0, 0.0, rot[2])
+                else:
+                    q = quat_from_euler_rad(rot[0], rot[1], rot[2])
+                tr._local_rot._x = q[0]
+                tr._local_rot._y = q[1]
+                tr._local_rot._z = q[2]
+                tr._local_rot._w = q[3]
+                tr._dirty = True
+                rb._velocity._x = vel[0]
+                rb._velocity._y = vel[1]
+                if not is_2d:
+                    rb._velocity._z = vel[2]
+                    rb._angular_velocity._x = ang_vel[0]
+                    rb._angular_velocity._y = ang_vel[1]
+                    rb._angular_velocity._z = ang_vel[2]
+                else:
+                    rb._angular_velocity = ang_vel[2]
+                rb._force_accum._x = 0.0
+                rb._force_accum._y = 0.0
+                if not is_2d:
+                    rb._force_accum._z = 0.0
+                    rb._torque_accum._x = 0.0
+                    rb._torque_accum._y = 0.0
+                    rb._torque_accum._z = 0.0
+                else:
+                    rb._torque_accum = 0.0
 
     def _create_entity_joints(self, entity: Entity):
         from core.components import Joint

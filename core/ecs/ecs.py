@@ -965,21 +965,56 @@ class Scene:
         self._scene_prof = False
         return None
 
+    _CONSTRAINT_TYPES = frozenset({
+        "PositionConstraint", "RotationConstraint", "ScaleConstraint",
+        "ParentConstraint", "MoveTowardsConstraint", "RotateTowardsConstraint",
+        "ScaleToConstraint", "AimConstraint", "LookAtConstraint",
+        "FollowTransformConstraint",
+    })
+
     def update(self, dt: float):
         prof = self._get_profiler()
         if prof is None:
             return
         prof.start("scene_update")
         log_error = None
-        for c in self._get_update_list():
-            try:
-                c.on_update(dt)
-            except Exception as ex:
-                if log_error is None:
-                    from core.foundation.logger import Logger
-                    log_error = Logger.error
-                ent = c._entity
-                log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+        update_list = self._get_update_list()
+        try:
+            from core._constraint_update import batch_update_constraints
+            constraints = []
+            others = []
+            for c in update_list:
+                if type(c).__name__ in self._CONSTRAINT_TYPES:
+                    constraints.append(c)
+                else:
+                    others.append(c)
+            if constraints:
+                try:
+                    batch_update_constraints(constraints, dt)
+                except Exception as ex:
+                    if log_error is None:
+                        from core.foundation.logger import Logger
+                        log_error = Logger.error
+                    log_error(f"Constraint batch update error: {ex}")
+            for c in others:
+                try:
+                    c.on_update(dt)
+                except Exception as ex:
+                    if log_error is None:
+                        from core.foundation.logger import Logger
+                        log_error = Logger.error
+                    ent = c._entity
+                    log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+        except ImportError:
+            for c in update_list:
+                try:
+                    c.on_update(dt)
+                except Exception as ex:
+                    if log_error is None:
+                        from core.foundation.logger import Logger
+                        log_error = Logger.error
+                    ent = c._entity
+                    log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
         prof.stop("scene_update")
 
     def fixed_update(self, dt: float):
