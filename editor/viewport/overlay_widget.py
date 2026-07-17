@@ -7,13 +7,12 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QPen, QColor
 
 from editor.viewport.overlay import draw_stats_overlay, draw_delta_label
 from editor.viewport.navigation_gizmo import draw_navigation_gizmo_overlay
 from editor.viewport.collaboration import draw_remote_cursors
-from core.config.config import get_global_config
 
 
 class OverlayWidget(QWidget):
@@ -25,31 +24,9 @@ class OverlayWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setStyleSheet("background: transparent;")
         self.setAutoFillBackground(False)
-        self._refresh_timer = QTimer(self)
-        self._refresh_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._refresh_timer.timeout.connect(self.update)
-        self._apply_fps()
-
-    def _apply_fps(self):
-        try:
-            cfg = get_global_config()
-            fps = int(cfg.get("viewport.overlay_fps", 60))
-        except Exception:
-            fps = 60
-        fps = max(1, min(240, fps))
-        if fps >= 240:
-            self._refresh_timer.stop()
-        else:
-            self._refresh_timer.setInterval(int(1000 / fps))
-            if not self._refresh_timer.isActive():
-                self._refresh_timer.start()
 
     def set_visible(self, visible: bool):
         self.setVisible(visible)
-        if visible:
-            self._apply_fps()
-        else:
-            self._refresh_timer.stop()
 
     def paintEvent(self, event):
         vp = self._vp

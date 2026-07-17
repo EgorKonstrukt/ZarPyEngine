@@ -375,9 +375,6 @@ def mat4_normal_matrix(model: np.ndarray) -> np.ndarray:
 
 def batch_matrices_to_f32(matrices: np.ndarray) -> np.ndarray:
     n = matrices.shape[0]
-    out = np.empty((n, 16), dtype=np.float32)
-    for i in range(n):
-        for r in range(4):
-            for c in range(4):
-                out[i, r*4 + c] = np.float32(matrices[i, r, c])
-    return out
+    if n == 0:
+        return np.zeros((0, 16), dtype=np.float32)
+    return matrices.reshape(n, 16).astype(np.float32)

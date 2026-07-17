@@ -4,14 +4,15 @@ import time
 import numpy as np
 import moderngl
 from typing import Any, Optional
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from core.math.math3d import Mat4
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 
 from core.renderer.gpu_culling import WORLD_MATRIX_BINDING, INDEX_BINDING
 
-_MAX_SHARED_INSTANCES = 16384
+_INITIAL_INST_VBO_CAPACITY = 4096
+_MAX_VAO_CACHE = 512
 
 
 def _supports_instancing(prog: moderngl.Program) -> bool:
@@ -49,20 +50,64 @@ def _make_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
     return ctx.vertex_array(prog, content)
 
 
+def _extract_frustum_planes_f32(view_f32, proj_f32):
+    view_4 = view_f32.reshape(4, 4).T
+    proj_4 = proj_f32.reshape(4, 4).T
+    vp = np.dot(proj_4, view_4)
+    planes = np.empty((6, 4), dtype=np.float32)
+    planes[0] = vp[3] + vp[0]
+    planes[1] = vp[3] - vp[0]
+    planes[2] = vp[3] + vp[1]
+    planes[3] = vp[3] - vp[1]
+    planes[4] = vp[3] + vp[2]
+    planes[5] = vp[3] - vp[2]
+    norms = np.linalg.norm(planes[:, :3], axis=1, keepdims=True)
+    norms[norms < 1e-10] = 1.0
+    planes /= norms
+    return planes
+
+
+def _frustum_cull_instances(group, planes, mesh_radius):
+    n = len(group)
+    if n == 0:
+        return group
+    centers = np.empty((n, 3), dtype=np.float64)
+    radii = np.empty(n, dtype=np.float64)
+    for i, item in enumerate(group):
+        wm = item[6]
+        d = wm._d
+        centers[i, 0] = d[3, 0]
+        centers[i, 1] = d[3, 1]
+        centers[i, 2] = d[3, 2]
+        sx = (d[0, 0] * d[0, 0] + d[1, 0] * d[1, 0] + d[2, 0] * d[2, 0]) ** 0.5
+        sy = (d[0, 1] * d[0, 1] + d[1, 1] * d[1, 1] + d[2, 1] * d[2, 1]) ** 0.5
+        sz = (d[0, 2] * d[0, 2] + d[1, 2] * d[1, 2] + d[2, 2] * d[2, 2]) ** 0.5
+        radii[i] = max(sx, sy, sz) * mesh_radius
+    distances = planes[:, :3] @ centers.T + planes[:, 3, None]
+    visible_mask = np.all(distances > -radii[None, :], axis=0)
+    if np.all(visible_mask):
+        return group
+    indices = np.where(visible_mask)[0]
+    return [group[i] for i in indices]
+
+
 class RenderBatcher:
     """Groups renderables by mesh+material+shader and renders instanced."""
 
     def __init__(self, ctx: moderngl.Context, default_prog: moderngl.Program):
         self._ctx = ctx
         self._default_prog = self._ensure_instancing_prog(default_prog)
-        self._vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
-        self._shared_inst_vbo = ctx.buffer(reserve=_MAX_SHARED_INSTANCES * 64)
+        self._vao_cache: OrderedDict[tuple[int, int], moderngl.VertexArray] = OrderedDict()
+        self._inst_vbo_capacity: int = _INITIAL_INST_VBO_CAPACITY
+        self._shared_inst_vbo = ctx.buffer(reserve=_INITIAL_INST_VBO_CAPACITY * 64)
         self._index_buf: Optional[moderngl.Buffer] = None
         self._index_buf_capacity: int = 0
         self._stats_batches: int = 0
         self._stats_draw_calls: int = 0
         self._stats_instanced: int = 0
         self._total_instances: int = 0
+        self._frustum_planes_cache = None
+        self._frustum_cache_key = None
 
     @staticmethod
     def _ensure_instancing_prog(prog: moderngl.Program) -> moderngl.Program:
@@ -118,23 +163,56 @@ class RenderBatcher:
         return self._index_buf
 
     def _write_shared_vbo(self, matrices: list[Mat4]):
-        data = Mat4.batch_to_f32(matrices).tobytes()
-        buf = self._shared_inst_vbo
-        if buf.size < len(data):
-            buf.release()
-            self._shared_inst_vbo = self._ctx.buffer(reserve=len(data) + 64)
-            buf = self._shared_inst_vbo
-        buf.write(data)
-        return buf
+        n = len(matrices)
+        needed_cap = n
+        if needed_cap > self._inst_vbo_capacity:
+            new_cap = self._inst_vbo_capacity
+            while new_cap < needed_cap:
+                new_cap *= 2
+            try:
+                self._shared_inst_vbo.release()
+            except Exception:
+                pass
+            self._inst_vbo_capacity = new_cap
+            self._shared_inst_vbo = self._ctx.buffer(reserve=new_cap * 64)
+            for vao in self._vao_cache.values():
+                try:
+                    vao.release()
+                except Exception:
+                    pass
+            self._vao_cache.clear()
+        try:
+            from core._render_utils import batch_mat4_to_f32_flat
+            data = batch_mat4_to_f32_flat(matrices).tobytes()
+        except ImportError:
+            data = Mat4.batch_to_f32(matrices).tobytes()
+        self._shared_inst_vbo.write(data)
+        return self._shared_inst_vbo
 
     def _get_vao(self, prog: moderngl.Program, mesh) -> moderngl.VertexArray:
         key = (id(mesh), id(prog))
         cached = self._vao_cache.get(key)
         if cached is not None:
+            self._vao_cache.move_to_end(key)
             return cached
         vao = _make_instanced_vao(self._ctx, prog, mesh, self._shared_inst_vbo)
         self._vao_cache[key] = vao
+        if len(self._vao_cache) > _MAX_VAO_CACHE:
+            _, old_vao = self._vao_cache.popitem(last=False)
+            try:
+                old_vao.release()
+            except Exception:
+                pass
         return vao
+
+    def _get_frustum_planes(self, view_f32, proj_f32):
+        key = (view_f32.tobytes(), proj_f32.tobytes())
+        if self._frustum_cache_key == key and self._frustum_planes_cache is not None:
+            return self._frustum_planes_cache
+        planes = _extract_frustum_planes_f32(view_f32, proj_f32)
+        self._frustum_planes_cache = planes
+        self._frustum_cache_key = key
+        return planes
 
     def render_groups(self, groups: dict, view_f32, proj_f32, cam_pos, lights,
                       disable_shadows: bool, set_scene_uniforms_fn,
@@ -143,6 +221,7 @@ class RenderBatcher:
                       gpu_storage=None):
         self.reset_stats()
         scene_done = set()
+        frustum_planes = self._get_frustum_planes(view_f32, proj_f32)
         for (prog_id, mat_path, mesh_id, receive_shadows, sub_idx), group in groups.items():
             _, _, mesh, _, mat, prog, _, _ = group[0]
             self._stats_batches += 1
@@ -161,12 +240,25 @@ class RenderBatcher:
                                     selected_entities, outline_queue,
                                     set_scene=False)
             elif _supports_instancing(prog):
-                self._render_instanced(group, prog, mesh, mat,
-                                       view_f32, proj_f32, cam_pos, lights,
-                                       group_disable_shadows, set_scene_uniforms_fn,
-                                       apply_material_fn,
-                                       selected_entities, outline_queue,
-                                       gpu_storage=gpu_storage, set_scene=False)
+                visible = _frustum_cull_instances(group, frustum_planes,
+                                                  mesh.bounding_radius)
+                if len(visible) == 0:
+                    self._stats_draw_calls += 1
+                    continue
+                if len(visible) == 1:
+                    self._render_single(visible[0], prog, mesh, mat,
+                                        view_f32, proj_f32, cam_pos, lights,
+                                        group_disable_shadows, set_scene_uniforms_fn,
+                                        apply_material_fn, normal_cache,
+                                        selected_entities, outline_queue,
+                                        set_scene=False)
+                else:
+                    self._render_instanced(visible, prog, mesh, mat,
+                                           view_f32, proj_f32, cam_pos, lights,
+                                           group_disable_shadows, set_scene_uniforms_fn,
+                                           apply_material_fn,
+                                           selected_entities, outline_queue,
+                                           gpu_storage=gpu_storage, set_scene=False)
             else:
                 for item in group:
                     self._render_single(item, prog, mesh, mat,
@@ -312,6 +404,11 @@ class RenderBatcher:
         return self._stats_instanced
 
     def release(self):
+        for vao in self._vao_cache.values():
+            try:
+                vao.release()
+            except Exception:
+                pass
         self._vao_cache.clear()
         if self._shared_inst_vbo:
             try:

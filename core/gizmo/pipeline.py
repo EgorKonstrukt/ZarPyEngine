@@ -71,10 +71,14 @@ class GizmoPipeline:
         result = []
         for shape_type, instances in self._instance_batches.items():
             n = len(instances)
-            buf = np.empty((n, 20), dtype=np.float32)
-            for i, (tf, col) in enumerate(instances):
-                buf[i, :16] = tf
-                buf[i, 16:20] = col
+            try:
+                from core._render_utils import pack_gizmo_instance_data
+                buf = pack_gizmo_instance_data(instances, n)
+            except ImportError:
+                buf = np.empty((n, 20), dtype=np.float32)
+                for i, (tf, col) in enumerate(instances):
+                    buf[i, :16] = tf
+                    buf[i, 16:20] = col
             result.append((shape_type, buf, n))
         self._instance_batches.clear()
         return result
