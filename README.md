@@ -1,9 +1,9 @@
 <p align="center">
   <img src="zarin_logo.svg" alt="Zarin Engine Logo">
   <br>
-  <img src="Qt_logo.svg" alt="Qt Logo" height="120">
-  <img src="Bullet_Physics_Logo.svg" alt="Bullet Physics Logo" height="120">
-  <img src="NVIDIA_PhysX_Logo.png" alt="PhysX Logo" height="120">
+  <img src="Qt_logo.svg" alt="Qt Logo" height="80">
+  <img src="Bullet_Physics_Logo.svg" alt="Bullet Physics Logo" height="80">
+  <img src="NVIDIA_PhysX_Logo.png" alt="PhysX Logo" height="80">
 </p>
 **Zarin Engine** is a 3D game and simulation engine built entirely in Python — ECS-based, with a full visual editor, real-time 3D rendering, physics, audio, scripting, and a UI system. It runs on ModernGL and PyQt6.
 
@@ -68,7 +68,7 @@ The editor is a full PyQt6 application with:
 
 ### Rendering
 
-- OpenGL 3.3 Core Profile
+- OpenGL 4.6 Core Profile
 - Custom `.shader` file format with `Properties { }` block (similar to Unity's ShaderLab)
 - Materials with runtime property editing (colors, floats, textures, vectors, ranges)
 - MeshRenderer with cast/receive shadows
@@ -146,22 +146,6 @@ A full immediate-mode-like UI that lives as ECS components:
 - Widget events (click, change, selection) propagate as Python signals
 - Works both in-editor and at runtime
 
-### Constraints
-
-10 constraint components, matching Unity's constraint system:
-
-- **AimConstraint** — aims the entity toward a target with configurable axes, offsets, and world/local space
-- **FollowTransformConstraint** — follows another transform with position/rotation weight
-- **LookAtConstraint** — looks at a target with up vector control
-- **MoveTowardsConstraint** — moves toward target position at configurable speed
-- **ParentConstraint** — maintains offset from a source transform (weighted per-axis position/rotation)
-- **PositionConstraint** — locks position relative to a source (weighted per-axis)
-- **RotateTowardsConstraint** — rotates toward target rotation
-- **RotationConstraint** — locks rotation relative to a source (weighted per-axis)
-- **ScaleConstraint** — locks scale relative to a source
-- **ScaleToConstraint** — scales toward target scale
-
-All constraints support multiple sources with weight blending.
 
 ### Math Library
 
@@ -185,15 +169,6 @@ All constraints support multiple sources with weight blending.
 - Instantiate into any scene with GUID remapping
 - Prefab overrides are preserved (per-instance field modifications are serialized alongside the prefab GUID)
 - PrefabLibrary for managing prefab assets
-
-### Undo / Redo
-
-Full command-pattern undo system:
-
-- `CreateEntityCommand`, `DeleteEntityCommand`, `SetComponentCommand`, `CompoundCommand`
-- Commands can merge (e.g., consecutive value changes combine into one undo step)
-- Undo stack in the editor with a history panel
-- Keyboard shortcuts: Ctrl+Z (undo), Ctrl+Shift+Z (redo)
 
 ### Networking
 
@@ -248,26 +223,6 @@ All engine math uses `numpy.float64`. Positions, rotations, scales, matrices —
 
 ---
 
-## Editor Controls
-
-| Action | Input |
-|---|---|
-| Orbit camera | Right mouse drag |
-| Pan camera | Middle mouse drag |
-| Zoom | Scroll wheel |
-| Fly (while RMB held) | WASD + QE |
-| Translate gizmo | W |
-| Rotate gizmo | E |
-| Scale gizmo | R |
-| No gizmo | Q |
-| Focus entity | F |
-| Delete entity | Delete |
-| Undo | Ctrl+Z |
-| Redo | Ctrl+Shift+Z |
-| Create entity (context menu) | Right-click in viewport |
-
----
-
 ## Requirements
 
 - **Python** 3.13+
@@ -292,7 +247,7 @@ See `requirements.txt` for the full list.
 ## Why you might NOT use this
 
 - It is not optimized for shipping AAA titles. It is a Python engine.
-- OpenGL 3.3 core — no Vulkan, no DX12, no raytracing
+- OpenGL 4.6 core — no Vulkan, no DX12, no raytracing
 - The networking layer is mostly stubs for the gameplay side
 - It is a single-developer project and the API is still stabilizing
 

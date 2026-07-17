@@ -405,12 +405,23 @@ class CommandHistory:
         self._last_affected_entity = None
         self._current_selection = None
         self._recording = True
-        self._on_undo: Optional[Callable[[Command], None]] = None
-        self._on_redo: Optional[Callable[[Command], None]] = None
+        self._on_undo: list[Callable[[Command], None]] = []
+        self._on_redo: list[Callable[[Command], None]] = []
     def set_on_undo(self, cb: Optional[Callable[[Command], None]]):
-        self._on_undo = cb
+        if cb is None:
+            self._on_undo = []
+        elif cb not in self._on_undo:
+            self._on_undo.append(cb)
     def set_on_redo(self, cb: Optional[Callable[[Command], None]]):
-        self._on_redo = cb
+        if cb is None:
+            self._on_redo = []
+        elif cb not in self._on_redo:
+            self._on_redo.append(cb)
+    def add_on_change(self, cb: Callable[[Command], None]):
+        if cb not in self._on_undo:
+            self._on_undo.append(cb)
+        if cb not in self._on_redo:
+            self._on_redo.append(cb)
     @property
     def can_undo(self) -> bool: return len(self._undo_stack) > 0
     @property
@@ -464,6 +475,7 @@ class CommandHistory:
         command.execute()
         self._undo_stack.append(command)
         self._redo_stack.clear()
+        self._undo_sel.clear()
         self._redo_sel.clear()
         if len(self._undo_stack) > self._max_size:
             self._undo_stack.pop(0)
@@ -471,6 +483,15 @@ class CommandHistory:
                 self._undo_sel.pop(0)
             if self._saved_index > 0:
                 self._saved_index -= 1
+        self._emit_history_changed()
+    def _emit_history_changed(self):
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+            if eng:
+                eng._emit_event("history_changed", None)
+        except Exception:
+            pass
     def undo(self):
         if not self._undo_stack:
             return
@@ -485,7 +506,9 @@ class CommandHistory:
         self._last_affected_entity = self._extract_entity(cmd) or pre_sel
         self._recording = was_recording
         if was_recording and self._on_undo:
-            self._on_undo(cmd)
+            for cb in self._on_undo:
+                cb(cmd)
+            self._emit_history_changed()
     def redo(self):
         if not self._redo_stack:
             return
@@ -500,7 +523,9 @@ class CommandHistory:
         self._last_affected_entity = self._extract_entity(cmd) or post_sel
         self._recording = was_recording
         if was_recording and self._on_redo:
-            self._on_redo(cmd)
+            for cb in self._on_redo:
+                cb(cmd)
+            self._emit_history_changed()
     @property
     def undo_count(self) -> int:
         return len(self._undo_stack)
@@ -541,11 +566,12 @@ class CommandHistory:
                 cmd.redo()
                 self._undo_stack.append(cmd)
                 self._current_selection = post_sel
-            self._last_affected_entity = (
-                self._extract_entity(self._undo_stack[-1])
-                if self._undo_stack else None
-            ) or post_sel
+                self._last_affected_entity = (
+                    self._extract_entity(self._undo_stack[-1])
+                    if self._undo_stack else None
+                ) or post_sel
         self._recording = was_recording
+        self._emit_history_changed()
     def mark_saved(self):
         self._saved_index = len(self._undo_stack)
     def clear(self):

@@ -266,6 +266,7 @@ class HierarchyPanel(QDockWidget):
         self._setup_ui()
         engine.on("scene_loaded", self._on_scene_loaded)
         engine.on("scene_saved", lambda _: self._refresh())
+        engine.on("history_changed", lambda _: self._on_history_changed())
     def _setup_ui(self):
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -341,9 +342,13 @@ class HierarchyPanel(QDockWidget):
         self._last_render_version = -1
         self._update_scene_header()
         self._refresh()
+    def _on_history_changed(self, cmd=None):
+        QTimer.singleShot(0, self._refresh)
+
     def _refresh(self):
         if not self._scene:
             self._tree.clear()
+            self._selected_entity = None
             return
         self._last_render_version = getattr(self._scene, '_render_version', -1)
         old_expanded = self._get_expanded_ids()
@@ -352,20 +357,26 @@ class HierarchyPanel(QDockWidget):
         self._tree.clear()
         filter_text = self._search.text().strip().lower()
         root_entities = self._scene.get_root_entities()
+        live_ids = set(self._scene._entities.keys())
         for entity in root_entities:
-            self._add_entity_item(entity, self._tree.invisibleRootItem(), filter_text)
+            if entity.id not in live_ids:
+                continue
+            self._add_entity_item(entity, self._tree.invisibleRootItem(), filter_text, live_ids)
         self._restore_expanded(old_expanded)
-        if old_selection:
+        if old_selection and old_selection in live_ids:
             self._restore_selection(old_selection)
+        else:
+            self._selected_entity = None
         self._tree.blockSignals(False)
-    def _add_entity_item(self, entity: Entity, parent_item, filter_text: str) -> bool:
+    def _add_entity_item(self, entity: Entity, parent_item, filter_text: str, live_ids: set) -> bool:
         name = entity.name
         if entity.is_prefab_instance:
             from core.ecs.prefab import Prefab
             overrides = Prefab.compute_overrides(entity)
             override_mark = " *" if overrides else ""
             name = f"{name}{override_mark}"
-        has_visible_child = any(self._entity_matches_filter(c, filter_text) for c in entity.children)
+        children = [c for c in entity.children if c.id in live_ids]
+        has_visible_child = any(self._entity_matches_filter(c, filter_text, live_ids) for c in children)
         matches_filter = (not filter_text) or (filter_text in name.lower()) or has_visible_child
         if not matches_filter:
             return False
@@ -387,16 +398,19 @@ class HierarchyPanel(QDockWidget):
             gray = self._tree.palette().color(self._tree.palette().ColorRole.PlaceholderText)
             item.setForeground(0, QBrush(gray))
         child_filter = "" if (has_visible_child and filter_text) else filter_text
-        for child in entity.children:
-            self._add_entity_item(child, item, child_filter)
+        for child in children:
+            self._add_entity_item(child, item, child_filter, live_ids)
         item.setExpanded(True)
         return True
-    def _entity_matches_filter(self, entity: Entity, filter_text: str) -> bool:
+    def _entity_matches_filter(self, entity: Entity, filter_text: str, live_ids: set = None) -> bool:
+        if live_ids is not None and entity.id not in live_ids:
+            return False
         if not filter_text:
             return True
         if filter_text in entity.name.lower():
             return True
-        return any(self._entity_matches_filter(c, filter_text) for c in entity.children)
+        children = entity.children if live_ids is None else [c for c in entity.children if c.id in live_ids]
+        return any(self._entity_matches_filter(c, filter_text, live_ids) for c in children)
     def _get_expanded_ids(self) -> set:
         expanded = set()
         self._collect_expanded(self._tree.invisibleRootItem(), expanded)
