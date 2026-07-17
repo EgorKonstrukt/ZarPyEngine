@@ -128,6 +128,8 @@ class ComponentPickerDialog(QDialog):
         self._all_components = []
         self._categories.clear()
         for name, cls in all_reg.items():
+            if getattr(cls, "_editor_hidden", False):
+                continue
             cats = ComponentRegistry.get_categories(name)
             display_cat = cats[0] if cats else "Other"
             can_multiple = getattr(cls, '_allow_multiple', False)
@@ -220,6 +222,8 @@ class ComponentPickerDialog(QDialog):
         lower = text.lower()
         from core.ecs.ecs import ComponentRegistry
         for name, cls, already in self._all_components:
+            if getattr(cls, "_editor_hidden", False):
+                continue
             if lower not in name.lower():
                 continue
             pix = get_component_icon_pixmap(cls, 16)

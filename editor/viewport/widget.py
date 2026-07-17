@@ -34,7 +34,6 @@ from core.input.constants import (KEY_Q, KEY_W, KEY_E, KEY_R, KEY_F, KEY_DELETE,
                               KEY_SPACE, KEY_S, KEY_D, KEY_A, MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE,
                               MOUSE_L, MOUSE_R, MOUSE_M)
 from editor.viewport.overlay_widget import OverlayWidget
-from editor.viewport.axis_gizmo import draw_axis_gizmo_api
 
 from editor.viewport.rendering import (
     render_component_gizmos,
@@ -202,11 +201,27 @@ class SceneViewport(QOpenGLWidget):
         except Exception:
             self._im = None
         self._focused: bool = False
-        self._axis_gizmo_enabled = True
-        self._axis_gizmo_hover = -1
+        self._navigation_gizmo_enabled = True
+        self._navigation_gizmo_hover = -1
+        self._navigation_gizmo_center = (0.0, 0.0)
+        self._navigation_gizmo_interacting = False
+        self._ng_mouse_pos = (0.0, 0.0)
+        self._ng_mouse_down = False
+        self._ng_clicked = False
+        self._ng_released = False
+        self._ng_mouse_delta = (0.0, 0.0)
+        self._ng_last_mouse = (0.0, 0.0)
+        from core.components.navigation_gizmo.navigation_gizmo import NavigationGizmo
+        self._navigation_gizmo = NavigationGizmo()
+        self._navigation_gizmo_orbit = False
         self._gizmo_visible = True
         self._gizmo_icons_visible = True
         self._overlay_widget = OverlayWidget(self, self)
+        try:
+            from core.config.config import get_global_config
+            get_global_config().on_changed(self._on_overlay_config_changed)
+        except Exception:
+            pass
         self._last_mouse_pos: tuple[int, int] = (0, 0)
         self._entity_clipboard: list[dict] = []
         self._multi_entity_initial_transforms: dict[str, dict] = {}
@@ -248,7 +263,7 @@ class SceneViewport(QOpenGLWidget):
     def _refresh_no_qt_overlay(self):
         no = self._no_qt_overlay
         if hasattr(self, '_overlay_widget') and self._overlay_widget:
-            self._overlay_widget.setVisible(not no)
+            self._overlay_widget.set_visible(not no)
         if hasattr(self, '_toolbar') and self._toolbar:
             self._toolbar.setVisible(not no)
 
@@ -257,6 +272,10 @@ class SceneViewport(QOpenGLWidget):
             self._render_timer.start(1)
         else:
             self._render_timer.stop()
+
+    def _on_overlay_config_changed(self, key: str, value):
+        if key == "viewport.overlay_fps" and hasattr(self, "_overlay_widget"):
+            self._overlay_widget._apply_fps()
 
     def _on_render_tick(self):
         if getattr(self, '_in_render_tick', False):
@@ -663,7 +682,6 @@ class SceneViewport(QOpenGLWidget):
                 if self._show_bvh_debug:
                     self._render_bvh_debug()
                 with eng._scene_lock:
-                    draw_axis_gizmo_api(self, vp_mat)
                     self._render_api_gizmos()
                 if self._pb_scale_gizmo and self._pb_scale_gizmo.active:
                     self._pb_scale_gizmo.render()
@@ -767,14 +785,20 @@ class SceneViewport(QOpenGLWidget):
         btn = MOUSE_L if qt_btn == Qt.MouseButton.LeftButton else (MOUSE_R if qt_btn == Qt.MouseButton.RightButton else MOUSE_M)
         if self._im:
             self._im.feed_mouse_button(btn, True)
+        if btn == MOUSE_L:
+            self._ng_mouse_down = True
+            self._ng_clicked = True
+            self._ng_mouse_pos = (float(lx), float(ly))
+            self._ng_last_mouse = (lx, ly)
         self._cam.on_mouse_press(btn, lx, ly, alt)
         from editor.viewport.collaboration import send_collab_cursor
         send_collab_cursor(self, lx, ly)
         if btn == MOUSE_L and not alt:
-            from editor.viewport.axis_gizmo import hit_test_axis_gizmo, snap_camera_to_axis
-            axis_hit = hit_test_axis_gizmo(self, lx, ly)
-            if axis_hit >= 0:
-                snap_camera_to_axis(self, axis_hit)
+            cx, cy = getattr(self, "_navigation_gizmo_center", (0.0, 0.0))
+            interacting = getattr(self, "_navigation_gizmo_interacting", False)
+            if interacting and (cx, cy) != (0.0, 0.0):
+                self._navigation_gizmo_orbit = True
+                self._cam.on_mouse_press(btn, lx, ly, alt)
                 return
             if self._pb_scale_gizmo and self._pb_scale_gizmo.active and self._pb_scale_gizmo.on_mouse_press(lx, ly):
                 return
@@ -840,11 +864,12 @@ class SceneViewport(QOpenGLWidget):
         ctrl = self._im.is_key_pressed(KEY_CTRL) if self._im else False
         self._gizmo.ctrl_down = ctrl
         self._cam.on_mouse_move(lx, ly)
-        from editor.viewport.axis_gizmo import hit_test_axis_gizmo
-        new_hover = hit_test_axis_gizmo(self, lx, ly)
-        if new_hover != self._axis_gizmo_hover:
-            self._axis_gizmo_hover = new_hover
-            self.update()
+        self._ng_mouse_pos = (float(lx), float(ly))
+        dx = lx - self._ng_last_mouse[0]
+        dy = ly - self._ng_last_mouse[1]
+        self._ng_mouse_delta = (self._ng_mouse_delta[0] + dx, self._ng_mouse_delta[1] + dy)
+        self._ng_last_mouse = (lx, ly)
+        self._ng_mouse_down = bool(event.buttons() & Qt.MouseButton.LeftButton)
         from editor.viewport.collaboration import send_collab_cursor
         send_collab_cursor(self, lx, ly)
         from editor.viewport.projection import screen_to_world
@@ -964,7 +989,12 @@ class SceneViewport(QOpenGLWidget):
         btn = MOUSE_L if qt_btn == Qt.MouseButton.LeftButton else (MOUSE_R if qt_btn == Qt.MouseButton.RightButton else MOUSE_M)
         if self._im:
             self._im.feed_mouse_button(btn, False)
+        if btn == MOUSE_L:
+            self._ng_mouse_down = False
+            self._ng_released = True
+            self._ng_mouse_pos = (float(event.position().x()), float(event.position().y()))
         self._cam.on_mouse_release(btn)
+        self._navigation_gizmo_orbit = False
         if btn == MOUSE_L and self._area_selecting:
             self._area_selecting = False
             x1, y1 = self._area_start

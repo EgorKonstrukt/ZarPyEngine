@@ -195,7 +195,8 @@ def get_global_config() -> Config:
                 "no_scene_g": 0.12,
                 "no_scene_b": 0.12,
                 "update_interval": 16,
-                "grid_step": 10.0
+                "grid_step": 10.0,
+                "overlay_fps": 60
             },
             "collab": {
                 "cursor_rate": 30.0,

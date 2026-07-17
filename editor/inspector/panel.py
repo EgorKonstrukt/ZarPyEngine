@@ -941,6 +941,8 @@ class InspectorPanel(QDockWidget):
             rev_map = {id(c): k for k, c in self._entity._components.items()}
             comps = self._entity.get_all_components()
             for idx, comp in enumerate(comps):
+                if getattr(type(comp), "_editor_hidden", False):
+                    continue
                 try:
                     key = rev_map.get(id(comp), "")
                     cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget, component_key=key)
