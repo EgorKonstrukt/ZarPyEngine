@@ -238,6 +238,7 @@ class SceneViewport(QOpenGLWidget):
         self._pb_scale_gizmo: "PbScaleGizmo | None" = None
         self._in_update: bool = False
         self._last_status_update: float = 0.0
+        self._cached_overlay_state: Optional[bool] = None
         # GC deliberately disabled in initializeGL; see gc.disable() below
         from editor.viewport.toolbar import setup_toolbar
         setup_toolbar(self)
@@ -262,10 +263,14 @@ class SceneViewport(QOpenGLWidget):
 
     def _refresh_no_qt_overlay(self):
         no = self._no_qt_overlay
+        want = not no
+        if self._cached_overlay_state == want:
+            return
+        self._cached_overlay_state = want
         if hasattr(self, '_overlay_widget') and self._overlay_widget:
-            self._overlay_widget.set_visible(not no)
+            self._overlay_widget.set_visible(want)
         if hasattr(self, '_toolbar') and self._toolbar:
-            self._toolbar.setVisible(not no)
+            self._toolbar.setVisible(want)
 
     def _apply_config(self):
         if not self._vsync_enabled:
@@ -526,7 +531,7 @@ class SceneViewport(QOpenGLWidget):
             self._pb_scale_gizmo = PbScaleGizmo(self)
             self._engine.on("scene_loaded", self._on_scene_loaded)
             self._engine.on("play_stop", self._on_play_stop)
-            self._engine.on("play_start", self._on_play_stop)
+            self._engine.on("play_start", self._on_play_start)
         except Exception as e:
             import traceback
             print(f"[Zarin Engine] OpenGL init error: {e}\n{traceback.format_exc()}", flush=True)
@@ -547,8 +552,16 @@ class SceneViewport(QOpenGLWidget):
         self.entities_selected.emit(self._selected_entities)
         from editor.viewport.collaboration import send_collab_selection; send_collab_selection(self)
 
+    def _on_play_start(self, data=None):
+        self._gizmos_api.clear()
+        if hasattr(self, '_overlay_widget') and self._overlay_widget:
+            self._overlay_widget._refresh_timer.stop()
+
     def _on_play_stop(self, data=None):
         self._gizmos_api.clear()
+        self._cached_overlay_state = None
+        if hasattr(self, '_overlay_widget') and self._overlay_widget:
+            self._overlay_widget._apply_fps()
 
     def resizeGL(self, w: int, h: int):
         dpr = self.devicePixelRatio()
@@ -625,9 +638,12 @@ class SceneViewport(QOpenGLWidget):
                 self._update_editor_particles(dt, self._selected_entities)
                 with eng._scene_lock:
                     self._gizmos_api.update(dt)
-            self._cam.update(dt)
-            send_collab_camera(self)
-        self._update_status_labels()
+                self._cam.update(dt)
+                send_collab_camera(self)
+            else:
+                self._cam.update(dt)
+        if not eng.play_mode:
+            self._update_status_labels()
         prof = eng._profiler if hasattr(eng, '_profiler') else None
         in_frame = prof is not None and len(prof._stack) > 0 and prof._stack[0][0] == "frame"
         try:
@@ -650,71 +666,73 @@ class SceneViewport(QOpenGLWidget):
                 self._renderer.grid_2d_mode = self._cam.is_2d_mode
                 self._renderer.grid_zoom_distance = self._cam._ortho_zoom_distance
                 t0 = time.perf_counter()
+                sel_set = set(self._selected_entities) if not eng.play_mode else None
                 self._renderer.render_scene(scene, view, proj, cam_pos, rw, rh, self._screen_fbo,
-                                            set(self._selected_entities), self._cam.near, self._cam.far, self._cam.fov,
+                                            sel_set, self._cam.near, self._cam.far, self._cam.fov,
                                             display_w=fw, display_h=fh)
                 render_ms = (time.perf_counter() - t0) * 1000.0
                 self._last_render_ms = render_ms
                 eng.set_profiler_data("render_ms", render_ms)
-                vp_mat = view * proj
-                dpr = self.devicePixelRatio()
-                self._renderer._line_width = max(1.0, float(dpr) * 1.0)
-                t1 = time.perf_counter()
-                if in_frame:
-                    prof.start("gizmo_wireframes")
-                if self._gizmo_visible:
+                if not eng.play_mode:
+                    vp_mat = view * proj
+                    dpr = self.devicePixelRatio()
+                    self._renderer._line_width = max(1.0, float(dpr) * 1.0)
+                    t1 = time.perf_counter()
+                    if in_frame:
+                        prof.start("gizmo_wireframes")
+                    if self._gizmo_visible:
+                        with eng._scene_lock:
+                            render_component_gizmos(self, vp_mat)
+                    if in_frame:
+                        prof.stop("gizmo_wireframes")
                     with eng._scene_lock:
-                        render_component_gizmos(self, vp_mat)
-                if in_frame:
-                    prof.stop("gizmo_wireframes")
-                with eng._scene_lock:
-                    render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
-                if in_frame:
-                    prof.start("gizmo_icons")
-                try:
+                        render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
+                    if in_frame:
+                        prof.start("gizmo_icons")
+                    try:
+                        with eng._scene_lock:
+                            render_component_icons_gl(self)
+                    except Exception:
+                        pass
+                    if self._debug_lines:
+                        self._renderer.render_gizmo_lines(self._debug_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
+                        self._debug_lines.clear()
+                    if self._show_bvh_debug:
+                        self._render_bvh_debug()
                     with eng._scene_lock:
-                        render_component_icons_gl(self)
-                except Exception:
-                    pass
-                if self._debug_lines:
-                    self._renderer.render_gizmo_lines(self._debug_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
-                    self._debug_lines.clear()
-                if self._show_bvh_debug:
-                    self._render_bvh_debug()
-                with eng._scene_lock:
-                    self._render_api_gizmos()
-                if self._pb_scale_gizmo and self._pb_scale_gizmo.active:
-                    self._pb_scale_gizmo.render()
-                if in_frame:
-                    prof.stop("gizmo_icons")
-                if in_frame:
-                    prof.start("gizmo_collab")
-                try:
-                    with eng._scene_lock:
-                        render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
-                except Exception:
-                    pass
-                if in_frame:
-                    prof.stop("gizmo_collab")
-                if self._gizmo_visible:
-                    gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
-                    if gizmo_result is not None:
-                        gs, ge, gcol = gizmo_result
-                        self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.0)
-                    else:
-                        gizmo_lines = self._gizmo.get_gizmo_lines(self._cam, fw, fh)
-                        if gizmo_lines:
-                            self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
-                eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
-                t2 = time.perf_counter()
-                if in_frame:
-                    prof.start("overlay_draw")
-                if not self._no_qt_overlay:
-                    if self._overlay_widget.width() != self.width() or self._overlay_widget.height() != self.height():
-                        self._overlay_widget.resize(self.width(), self.height())
-                if in_frame:
-                    prof.stop("overlay_draw")
-                eng.set_profiler_data("overlay_time", (time.perf_counter() - t2) * 1000.0)
+                        self._render_api_gizmos()
+                    if self._pb_scale_gizmo and self._pb_scale_gizmo.active:
+                        self._pb_scale_gizmo.render()
+                    if in_frame:
+                        prof.stop("gizmo_icons")
+                    if in_frame:
+                        prof.start("gizmo_collab")
+                    try:
+                        with eng._scene_lock:
+                            render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
+                    except Exception:
+                        pass
+                    if in_frame:
+                        prof.stop("gizmo_collab")
+                    if self._gizmo_visible:
+                        gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
+                        if gizmo_result is not None:
+                            gs, ge, gcol = gizmo_result
+                            self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.0)
+                        else:
+                            gizmo_lines = self._gizmo.get_gizmo_lines(self._cam, fw, fh)
+                            if gizmo_lines:
+                                self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
+                    eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
+                    t2 = time.perf_counter()
+                    if in_frame:
+                        prof.start("overlay_draw")
+                    if not self._no_qt_overlay:
+                        if self._overlay_widget.width() != self.width() or self._overlay_widget.height() != self.height():
+                            self._overlay_widget.resize(self.width(), self.height())
+                    if in_frame:
+                        prof.stop("overlay_draw")
+                    eng.set_profiler_data("overlay_time", (time.perf_counter() - t2) * 1000.0)
             eng.set_profiler_data("paint_total_ms", (time.perf_counter() - _p0) * 1000.0)
         except Exception as e:
             traceback.print_exc()
