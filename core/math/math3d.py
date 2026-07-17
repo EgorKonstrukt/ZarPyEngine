@@ -382,8 +382,33 @@ class Mat4:
 FLT_EPSILON = 1.1920928955078125e-07
 
 
-def mat4_mul_flat(l: list[float], r: list[float]) -> list[float]:
-    """Multiply two column-major 4x4 matrices stored as flat lists of 16 floats."""
+def _get_core_batch():
+    try:
+        from core import _core_batch as _cb
+        return _cb
+    except ImportError:
+        return None
+
+_CB = None
+
+
+def _ensure_cb():
+    global _CB
+    if _CB is None:
+        _CB = _get_core_batch()
+    return _CB
+
+
+def _to_f64_array(v):
+    if hasattr(v, '__len__') and not isinstance(v, np.ndarray):
+        return np.asarray(v, dtype=np.float64)
+    return np.asarray(v, dtype=np.float64)
+
+
+def mat4_mul_flat(l, r):
+    cb = _ensure_cb()
+    if cb is not None:
+        return list(cb.mat4_mul_flat(_to_f64_array(l), _to_f64_array(r)))
     out = [0.0] * 16
     out[0] = l[0] * r[0] + l[1] * r[4] + l[2] * r[8] + l[3] * r[12]
     out[1] = l[0] * r[1] + l[1] * r[5] + l[2] * r[9] + l[3] * r[13]
@@ -404,8 +429,10 @@ def mat4_mul_flat(l: list[float], r: list[float]) -> list[float]:
     return out
 
 
-def mat4_mul_vec_flat(m: list[float], x: float, y: float, z: float, w: float = 1.0):
-    """Transform a column vector (x, y, z, w) by a column-major 4x4 flat matrix."""
+def mat4_mul_vec_flat(m, x, y, z, w=1.0):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.mat4_mul_vec_flat(_to_f64_array(m), x, y, z, w)
     return (
         m[0] * x + m[4] * y + m[8] * z + m[12] * w,
         m[1] * x + m[5] * y + m[9] * z + m[13] * w,
@@ -414,11 +441,17 @@ def mat4_mul_vec_flat(m: list[float], x: float, y: float, z: float, w: float = 1
     )
 
 
-def dot3_flat(ax, ay, az, bx, by, bz) -> float:
+def dot3_flat(ax, ay, az, bx, by, bz):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.dot3_flat(ax, ay, az, bx, by, bz)
     return ax * bx + ay * by + az * bz
 
 
 def cross3_flat(ax, ay, az, bx, by, bz):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.cross3_flat(ax, ay, az, bx, by, bz)
     return (
         ay * bz - az * by,
         az * bx - ax * bz,
@@ -427,6 +460,9 @@ def cross3_flat(ax, ay, az, bx, by, bz):
 
 
 def normalize3_flat(x, y, z):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.normalize3_flat(x, y, z)
     l = math.sqrt(x * x + y * y + z * z)
     if l > 1e-10:
         inv = 1.0 / l
@@ -435,6 +471,9 @@ def normalize3_flat(x, y, z):
 
 
 def rotate_around_axis_flat(vx, vy, vz, ax, ay, az, angle):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.rotate_around_axis_flat(vx, vy, vz, ax, ay, az, angle)
     n = normalize3_flat(ax, ay, az)
     c = math.cos(angle)
     s = math.sin(angle)
@@ -447,6 +486,9 @@ def rotate_around_axis_flat(vx, vy, vz, ax, ay, az, angle):
 
 
 def axis_vector_flat(axis: int, sign: float = 1.0):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.axis_vector_flat(axis, sign)
     if axis == 0:
         return (sign, 0.0, 0.0)
     if axis == 1:
@@ -454,7 +496,10 @@ def axis_vector_flat(axis: int, sign: float = 1.0):
     return (0.0, 0.0, sign)
 
 
-def coordinate_system_axes(cs: int) -> tuple[int, int, int]:
+def coordinate_system_axes(cs: int):
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.coordinate_system_axes(cs)
     if cs == 1:
         return (1, 2, 0)
     if cs == 2:
@@ -469,10 +514,19 @@ def coordinate_system_axes(cs: int) -> tuple[int, int, int]:
 
 
 def is_right_handed_cs(cs: int) -> bool:
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.is_right_handed_cs(cs)
     return cs in (0, 1, 2)
 
 
-def look_at_flat(eye, at, up, cs: int) -> list[float]:
+def look_at_flat(eye, at, up, cs: int):
+    cb = _ensure_cb()
+    if cb is not None:
+        return list(cb.look_at_flat(
+            eye[0], eye[1], eye[2], at[0], at[1], at[2],
+            up[0], up[1], up[2], int(cs),
+        ))
     right_handed = is_right_handed_cs(cs)
     fx, fy, fz = normalize3_flat(at[0] - eye[0], at[1] - eye[1], at[2] - eye[2])
     if right_handed:
@@ -497,13 +551,18 @@ def look_at_flat(eye, at, up, cs: int) -> list[float]:
 
 
 def point_in_circle(cx, cy, radius, px, py) -> bool:
+    cb = _ensure_cb()
+    if cb is not None:
+        return cb.point_in_circle(cx, cy, radius, px, py)
     dx = px - cx
     dy = py - cy
     return dx * dx + dy * dy <= radius * radius
 
 
-def mat4_invert_flat(m: list[float]) -> list[float]:
-    """Invert a column-major 4x4 flat matrix (general 4x4, cofactor method)."""
+def mat4_invert_flat(m):
+    cb = _ensure_cb()
+    if cb is not None:
+        return list(cb.mat4_invert_flat(_to_f64_array(m)))
     out = [0.0] * 16
     out[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10]
     out[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10]

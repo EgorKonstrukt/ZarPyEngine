@@ -10,7 +10,7 @@ from Cython.Build import cythonize
 import numpy
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_CYTHON = os.path.join(_HERE, "cython")
+_CYTHON = os.path.join(_HERE, "pyx")
 
 def _ext(name, src):
     return Extension(name, sources=[os.path.join(_CYTHON, src)],
@@ -25,6 +25,10 @@ EXTENSIONS = [
     _ext("core._transform_batch", "_transform_batch.pyx"),
     _ext("core._render_utils", "_render_utils.pyx"),
     _ext("core._physics_utils", "_physics_utils.pyx"),
+    _ext("core._core_batch", "_core_batch.pyx"),
+    _ext("core._types", "_types.pyx"),
+    _ext("core._ecs_batch", "_ecs_batch.pyx"),
+    _ext("core._render_batch", "_render_batch.pyx"),
 ]
 
 def build():

@@ -32,6 +32,7 @@ class Widget(QWidget):
 
 if __name__ == '__main__':
     app = QApplication([])
+    # app.setStyle('Windows')
     w = Widget()
     w.show()
     app.exec()

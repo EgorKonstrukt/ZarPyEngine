@@ -26,6 +26,7 @@ from core.math.math3d import (
     point_in_circle,
 )
 from core.components.navigation_gizmo.navigation_gizmo import CoordinateSystem
+import core._core_batch as _core_batch
 
 
 class _DrawList:
@@ -205,11 +206,17 @@ def draw_gizmo(view_matrix, projection_matrix, pivot_distance=0.0, cs=Coordinate
     view_proj[8] *= aspect_ratio
 
     axis_length = size * cfg.axisLengthScale
-    axes = [
-        Vec4(*mat4_mul_vec_flat(view_proj, axis_length, 0.0, 0.0, 0.0)),
-        Vec4(*mat4_mul_vec_flat(view_proj, 0.0, axis_length, 0.0, 0.0)),
-        Vec4(*mat4_mul_vec_flat(view_proj, 0.0, 0.0, axis_length, 0.0)),
-    ]
+    vp_arr = np.asarray(view_proj, dtype=np.float64).reshape(1, 16)
+    ax_arr = np.array([
+        [axis_length, 0.0, 0.0, 0.0],
+        [0.0, axis_length, 0.0, 0.0],
+        [0.0, 0.0, axis_length, 0.0],
+    ], dtype=np.float64)
+    proj_batch = _core_batch.mat4_mul_vec_flat_batch(
+        np.broadcast_to(vp_arr, (3, 16)).copy(),
+        ax_arr[:, 0], ax_arr[:, 1], ax_arr[:, 2], ax_arr[:, 3],
+    )
+    axes = [Vec4(*proj_batch[i]) for i in range(3)]
 
     interactive = pivot_distance > 0.0
     mx, my = mouse_pos
