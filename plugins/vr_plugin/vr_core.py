@@ -1,0 +1,1125 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2026 Zarrakun
+
+from __future__ import annotations
+import math
+import ctypes
+import numpy as np
+import moderngl
+
+try:
+    import xr
+    _XR_AVAILABLE = True
+except ImportError:
+    _XR_AVAILABLE = False
+
+EYE_LEFT = 0
+EYE_RIGHT = 1
+IPD_DEFAULT = 0.063
+FOV_VERT_DEFAULT = math.radians(90.0)
+FOV_HORIZ_DEFAULT = math.radians(100.0)
+EYE_TEX_W = 1440
+EYE_TEX_H = 1600
+GL_RGBA8 = 0x8058
+GL_SRGB8_ALPHA8 = 0x8C43
+
+GRIP_THRESHOLD = 0.5
+IPD_SCALE = 0.5
+
+_COMPOSE_VERT = """#version 330 core
+in vec2 in_position;
+out vec2 v_uv;
+void main() { v_uv = in_position * 0.5 + 0.5; gl_Position = vec4(in_position, 0.0, 1.0); }"""
+
+_COMPOSE_FRAG = """#version 330 core
+in vec2 v_uv;
+out vec4 fragColor;
+uniform sampler2D u_eye_left;
+uniform sampler2D u_eye_right;
+uniform vec2 u_resolution;
+void main() {
+    float hx = 0.5;
+    if (v_uv.x < hx)
+        fragColor = texture(u_eye_left,  vec2(v_uv.x / hx, v_uv.y));
+    else
+        fragColor = texture(u_eye_right, vec2((v_uv.x - hx) / hx, v_uv.y));
+}"""
+
+_CTRL_VERT = """#version 330 core
+in vec3 in_pos;
+in vec3 in_normal;
+uniform mat4 u_mvp;
+uniform mat3 u_normal_mat;
+out vec3 v_normal;
+void main() {
+    v_normal = normalize(u_normal_mat * in_normal);
+    gl_Position = u_mvp * vec4(in_pos, 1.0);
+}"""
+
+_CTRL_FRAG = """#version 330 core
+in vec3 v_normal;
+uniform vec3 u_color;
+uniform float u_grip;
+out vec4 fragColor;
+void main() {
+    vec3 light = normalize(vec3(0.5, 1.0, 0.7));
+    float diff = max(dot(v_normal, light), 0.0);
+    vec3 ambient = u_color * 0.3;
+    vec3 col = u_color * diff + ambient;
+    col = mix(col, vec3(1.0, 0.5, 0.1), u_grip * 0.6);
+    fragColor = vec4(col, 1.0);
+}"""
+
+
+def _quat_to_mat3(qx, qy, qz, qw):
+    x2, y2, z2 = qx * 2, qy * 2, qz * 2
+    xx, yy, zz = qx * x2, qy * y2, qz * z2
+    xy, xz, yz = qx * y2, qx * z2, qy * z2
+    wx, wy, wz = qw * x2, qw * y2, qw * z2
+    return (1-(yy+zz), xy-wz, xz+wy, xy+wz, 1-(xx+zz), yz-wx, xz-wy, yz+wx, 1-(xx+yy))
+
+
+def _fov_to_tangents(al, ar, au, ad):
+    return (math.tan(al), math.tan(ar), math.tan(au), math.tan(ad))
+
+
+def _mat3_mul(a, b):
+    result = []
+    for r in range(3):
+        for c in range(3):
+            val = sum(a[r*3+k] * b[k*3+c] for k in range(3))
+            result.append(val)
+    return tuple(result)
+
+
+def _rot_y_mat3(a):
+    c, s = math.cos(a), math.sin(a)
+    return (c, 0, s, 0, 1, 0, -s, 0, c)
+
+
+def _rot_x_mat3(a):
+    c, s = math.cos(a), math.sin(a)
+    return (1, 0, 0, 0, c, -s, 0, s, c)
+
+
+def _normalize3(v):
+    l = math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
+    if l < 1e-9:
+        return (0.0, 0.0, 1.0)
+    return (v[0]/l, v[1]/l, v[2]/l)
+
+
+def _get_wgl_handles():
+    try:
+        opengl32 = ctypes.windll.opengl32
+        opengl32.wglGetCurrentDC.restype = ctypes.c_void_p
+        opengl32.wglGetCurrentContext.restype = ctypes.c_void_p
+        hdc = opengl32.wglGetCurrentDC()
+        hglrc = opengl32.wglGetCurrentContext()
+        if not hdc or not hglrc:
+            return None, None
+        return hdc, hglrc
+    except Exception:
+        return None, None
+
+
+def _call_get_graphics_requirements(instance, system_id):
+    pfn = ctypes.cast(
+        xr.get_instance_proc_addr(instance, 'xrGetOpenGLGraphicsRequirementsKHR'),
+        xr.PFN_xrGetOpenGLGraphicsRequirementsKHR
+    )
+    gl_reqs = xr.GraphicsRequirementsOpenGLKHR()
+    result = pfn(instance, system_id, ctypes.byref(gl_reqs))
+    xr.check_result(xr.Result(result))
+
+
+def _make_binding(hdc, hglrc):
+    binding = xr.GraphicsBindingOpenGLWin32KHR()
+    fields = [f[0] for f in binding._fields_]
+    dc_field = next((f for f in fields if f.lower().replace('_', '') == 'hdc'), None)
+    gl_field = next((f for f in fields if f.lower().replace('_', '') == 'hglrc'), None)
+    if dc_field is None or gl_field is None:
+        raise RuntimeError(f'Unknown GraphicsBindingOpenGLWin32KHR fields: {fields}')
+    setattr(binding, dc_field, hdc)
+    setattr(binding, gl_field, hglrc)
+    return binding
+
+
+class VREyeSwapchain:
+    def __init__(self, session, w: int, h: int):
+        self.w, self.h = w, h
+        formats = xr.enumerate_swapchain_formats(session)
+        chosen = GL_SRGB8_ALPHA8 if GL_SRGB8_ALPHA8 in formats else (GL_RGBA8 if GL_RGBA8 in formats else formats[0])
+        sc_info = xr.SwapchainCreateInfo(
+            usage_flags=xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT | xr.SwapchainUsageFlags.SAMPLED_BIT,
+            format=chosen,
+            sample_count=1,
+            width=w,
+            height=h,
+            face_count=1,
+            array_size=1,
+            mip_count=1,
+        )
+        self.swapchain = xr.create_swapchain(session, sc_info)
+        self.images = xr.enumerate_swapchain_images(self.swapchain, xr.SwapchainImageOpenGLKHR)
+        self.format = chosen
+
+    def acquire(self):
+        idx = xr.acquire_swapchain_image(self.swapchain, xr.SwapchainImageAcquireInfo())
+        xr.wait_swapchain_image(self.swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
+        return int(self.images[idx].image)
+
+    def release_image(self):
+        xr.release_swapchain_image(self.swapchain, xr.SwapchainImageReleaseInfo())
+
+    def destroy(self):
+        xr.destroy_swapchain(self.swapchain)
+
+
+class VREyeFramebuffer:
+    def __init__(self, ctx: moderngl.Context, w: int, h: int):
+        self.w, self.h = w, h
+        self.tex = ctx.texture((w, h), 4)
+        self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self.depth = ctx.depth_renderbuffer((w, h))
+        self.fbo = ctx.framebuffer(color_attachments=[self.tex], depth_attachment=self.depth)
+
+    def release(self):
+        self.fbo.release()
+        self.tex.release()
+        self.depth.release()
+
+
+class ControllerState:
+    def __init__(self):
+        self.pos = (0.0, 0.0, 0.0)
+        self.quat = (0.0, 0.0, 0.0, 1.0)
+        self.grip = 0.0
+        self.valid = False
+
+
+class VRState:
+    IPD = IPD_DEFAULT
+    EYE_TEX_W = EYE_TEX_W
+    EYE_TEX_H = EYE_TEX_H
+
+    def __init__(self):
+        self.active = False
+        self.session = None
+        self.instance = None
+        self.system_id = None
+        self.space = None
+        self._hmd_quat = (0.0, 0.0, 0.0, 1.0)
+        self._hmd_pos = (0.0, 0.0, 0.0)
+        self._eye_fovs = [
+            (-FOV_HORIZ_DEFAULT*0.5, FOV_HORIZ_DEFAULT*0.5, FOV_VERT_DEFAULT*0.5, -FOV_VERT_DEFAULT*0.5),
+            (-FOV_HORIZ_DEFAULT*0.5, FOV_HORIZ_DEFAULT*0.5, FOV_VERT_DEFAULT*0.5, -FOV_VERT_DEFAULT*0.5),
+        ]
+        self._eye_offsets = [(-self.IPD*0.5, 0.0, 0.0), (self.IPD*0.5, 0.0, 0.0)]
+        self._eye_poses = [None, None]
+        self._eye_positions = [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)]
+        self._eye_quats = [(0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0)]
+        self._session_running = False
+        self._frame_state = None
+        self._swapchains: list = []
+        self._display_time = 0
+        self._binding = None
+        self._hmd_pos_offset = (0.0, 0.0, 0.0)
+        self._hmd_pos_origin = None
+        self.controllers = [ControllerState(), ControllerState()]
+        self._action_set = None
+        self._grip_actions = [None, None]
+        self._pose_actions = [None, None]
+        self._pose_spaces = [None, None]
+        self._ipd_pinch_active = False
+        self._ipd_pinch_dist0 = 0.0
+        self._ipd_pinch_ipd0 = IPD_DEFAULT
+        self.ipd_override = IPD_DEFAULT
+        self._xr_origin = (0.0, 0.0, 0.0)
+        self._xr_mid = (0.0, 0.0, 0.0)
+        self._xr_scale = 1.0
+
+
+_gl = None
+
+
+def _load_gl_funcs():
+    global _gl
+    if _gl is not None:
+        return _gl
+    lib = ctypes.windll.opengl32
+    def _get(name, restype, *argtypes):
+        ptr = lib.wglGetProcAddress(name.encode())
+        if not ptr:
+            raise RuntimeError(f'wglGetProcAddress({name}) returned NULL')
+        return ctypes.WINFUNCTYPE(restype, *argtypes)(ptr)
+    _gl = type('GL', (), {
+        'GenFramebuffers':      _get('glGenFramebuffers',      None, ctypes.c_int, ctypes.POINTER(ctypes.c_uint)),
+        'DeleteFramebuffers':   _get('glDeleteFramebuffers',   None, ctypes.c_int, ctypes.POINTER(ctypes.c_uint)),
+        'BindFramebuffer':      _get('glBindFramebuffer',      None, ctypes.c_uint, ctypes.c_uint),
+        'FramebufferTexture2D': _get('glFramebufferTexture2D', None, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int),
+        'BlitFramebuffer':      _get('glBlitFramebuffer',      None, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint),
+    })()
+    return _gl
+
+
+_vr_state = VRState()
+
+
+def is_available() -> bool:
+    return _XR_AVAILABLE
+
+
+def is_active() -> bool:
+    return _vr_state.active
+
+
+def _setup_input(instance, session):
+    try:
+        action_set_info = xr.ActionSetCreateInfo(
+            action_set_name='zarin_vr_actions',
+            localized_action_set_name='Zarin VR Actions',
+            priority=0,
+        )
+        action_set = xr.create_action_set(instance, action_set_info)
+        _vr_state._action_set = action_set
+
+        hand_paths = [
+            xr.string_to_path(instance, '/user/hand/left'),
+            xr.string_to_path(instance, '/user/hand/right'),
+        ]
+
+        for i, side in enumerate(['left', 'right']):
+            grip_info = xr.ActionCreateInfo(
+                action_type=xr.ActionType.FLOAT_INPUT,
+                action_name=f'grip_{side}',
+                localized_action_name=f'Grip {side.capitalize()}',
+                count_subaction_paths=1,
+                subaction_paths=ctypes.cast(
+                    (xr.Path * 1)(hand_paths[i]), ctypes.POINTER(xr.Path)
+                ),
+            )
+            _vr_state._grip_actions[i] = xr.create_action(action_set, grip_info)
+
+            pose_info = xr.ActionCreateInfo(
+                action_type=xr.ActionType.POSE_INPUT,
+                action_name=f'hand_pose_{side}',
+                localized_action_name=f'Hand Pose {side.capitalize()}',
+                count_subaction_paths=1,
+                subaction_paths=ctypes.cast(
+                    (xr.Path * 1)(hand_paths[i]), ctypes.POINTER(xr.Path)
+                ),
+            )
+            _vr_state._pose_actions[i] = xr.create_action(action_set, pose_info)
+
+        for profile_str, grip_l, grip_r in [
+            ('/interaction_profiles/khr/simple_controller',
+             '', ''),
+            ('/interaction_profiles/oculus/touch_controller',
+             '/user/hand/left/input/squeeze/value',
+             '/user/hand/right/input/squeeze/value'),
+            ('/interaction_profiles/valve/index_controller',
+             '/user/hand/left/input/squeeze/value',
+             '/user/hand/right/input/squeeze/value'),
+            ('/interaction_profiles/htc/vive_controller',
+             '/user/hand/left/input/squeeze/click',
+             '/user/hand/right/input/squeeze/click'),
+            ('/interaction_profiles/microsoft/motion_controller',
+             '/user/hand/left/input/squeeze/click',
+             '/user/hand/right/input/squeeze/click'),
+        ]:
+            try:
+                prof_path = xr.string_to_path(instance, profile_str)
+                pl = xr.string_to_path(instance, '/user/hand/left/input/grip/pose')
+                pr = xr.string_to_path(instance, '/user/hand/right/input/grip/pose')
+                bindings = []
+                if grip_l:
+                    gl = xr.string_to_path(instance, grip_l)
+                    bindings.append(xr.ActionSuggestedBinding(action=_vr_state._grip_actions[0], binding=gl))
+                if grip_r:
+                    gr = xr.string_to_path(instance, grip_r)
+                    bindings.append(xr.ActionSuggestedBinding(action=_vr_state._grip_actions[1], binding=gr))
+                bindings.append(xr.ActionSuggestedBinding(action=_vr_state._pose_actions[0], binding=pl))
+                bindings.append(xr.ActionSuggestedBinding(action=_vr_state._pose_actions[1], binding=pr))
+                if bindings:
+                    xr.suggest_interaction_profile_bindings(instance, xr.InteractionProfileSuggestedBinding(
+                        interaction_profile=prof_path,
+                        count_suggested_bindings=len(bindings),
+                        suggested_bindings=bindings,
+                    ))
+            except Exception:
+                pass
+
+        attach_info = xr.SessionActionSetsAttachInfo(
+            count_action_sets=1,
+            action_sets=ctypes.cast((xr.ActionSet * 1)(action_set), ctypes.POINTER(xr.ActionSet)),
+        )
+        xr.attach_session_action_sets(session, attach_info)
+
+        for i, side in enumerate(['left', 'right']):
+            hand_path = xr.string_to_path(instance, f'/user/hand/{side}')
+            space_info = xr.ActionSpaceCreateInfo(
+                action=_vr_state._pose_actions[i],
+                subaction_path=hand_path,
+                pose_in_action_space=xr.Posef(),
+            )
+            _vr_state._pose_spaces[i] = xr.create_action_space(session, space_info)
+    except Exception:
+        pass
+
+
+def initialize(ctx: moderngl.Context) -> bool:
+    global _vr_state
+    if not _XR_AVAILABLE:
+        return False
+    if _vr_state.active:
+        return True
+    try:
+        hdc, hglrc = _get_wgl_handles()
+        if hdc is None or hglrc is None:
+            return False
+        exts = xr.enumerate_instance_extension_properties()
+        avail = {
+            e.extension_name.decode('utf-8') if isinstance(e.extension_name, bytes) else e.extension_name
+            for e in exts
+        }
+        if "XR_KHR_opengl_enable" not in avail:
+            return False
+        app_info = xr.ApplicationInfo(
+            application_name='ZarinEngine_VR',
+            application_version=1,
+            engine_name='ZarinEngine',
+            engine_version=1,
+            api_version=xr.Version(1, 0, 0)
+        )
+        create_info = xr.InstanceCreateInfo(
+            application_info=app_info,
+            enabled_extension_names=["XR_KHR_opengl_enable"]
+        )
+        try:
+            _vr_state.instance = xr.create_instance(create_info)
+        except Exception as e:
+            msg = str(e)
+            if "simultaneous XrInstances" in msg:
+                from core.foundation.logger import Logger
+                Logger.error(f"[VR] OpenXR loader does not support multiple instances. Close other VR apps.")
+            raise
+        sys_info = xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY)
+        _vr_state.system_id = xr.get_system(_vr_state.instance, sys_info)
+        _call_get_graphics_requirements(_vr_state.instance, _vr_state.system_id)
+        binding = _make_binding(hdc, hglrc)
+        session_info = xr.SessionCreateInfo(
+            system_id=_vr_state.system_id,
+            create_flags=xr.SessionCreateFlags(0),
+        )
+        session_info.next = ctypes.cast(ctypes.pointer(binding), ctypes.c_void_p)
+        _vr_state._binding = binding
+        _vr_state.session = xr.create_session(_vr_state.instance, session_info)
+        space_info = xr.ReferenceSpaceCreateInfo(
+            reference_space_type=xr.ReferenceSpaceType.LOCAL,
+            pose_in_reference_space=xr.Posef()
+        )
+        _vr_state.space = xr.create_reference_space(_vr_state.session, space_info)
+        _setup_input(_vr_state.instance, _vr_state.session)
+        _vr_state.active = True
+        return True
+    except Exception:
+        _vr_state.active = False
+        _vr_state.instance = None
+        return False
+
+
+def _create_swapchains():
+    if _vr_state._swapchains:
+        return
+    try:
+        views = xr.enumerate_view_configuration_views(
+            _vr_state.instance,
+            _vr_state.system_id,
+            xr.ViewConfigurationType.PRIMARY_STEREO
+        )
+        for i in range(2):
+            w = views[i].recommended_image_rect_width if i < len(views) else EYE_TEX_W
+            h = views[i].recommended_image_rect_height if i < len(views) else EYE_TEX_H
+            VRState.EYE_TEX_W = w
+            VRState.EYE_TEX_H = h
+            sc = VREyeSwapchain(_vr_state.session, w, h)
+            _vr_state._swapchains.append(sc)
+    except Exception:
+        pass
+
+
+def shutdown():
+    global _vr_state
+    try:
+        for space in _vr_state._pose_spaces:
+            if space is not None:
+                try:
+                    xr.destroy_space(space)
+                except Exception:
+                    pass
+        _vr_state._pose_spaces = [None, None]
+        if _vr_state._action_set is not None:
+            try:
+                xr.destroy_action_set(_vr_state._action_set)
+            except Exception:
+                pass
+            _vr_state._action_set = None
+        for sc in _vr_state._swapchains:
+            try:
+                sc.destroy()
+            except Exception:
+                pass
+        _vr_state._swapchains.clear()
+        if _vr_state._session_running and _vr_state.session:
+            try:
+                xr.end_session(_vr_state.session)
+            except Exception:
+                pass
+            _vr_state._session_running = False
+        if _vr_state.session:
+            xr.destroy_session(_vr_state.session)
+        if _vr_state.instance:
+            xr.destroy_instance(_vr_state.instance)
+    except Exception:
+        pass
+    _vr_state.active = False
+    _vr_state.session = None
+    _vr_state.instance = None
+    _vr_state.space = None
+    _vr_state.system_id = None
+
+
+def _sync_controller_input():
+    if not (_vr_state.active and _vr_state._session_running and _vr_state._action_set is not None):
+        return
+    hand_paths = [
+        xr.string_to_path(_vr_state.instance, '/user/hand/left'),
+        xr.string_to_path(_vr_state.instance, '/user/hand/right'),
+    ]
+    try:
+        active_sets = (xr.ActiveActionSet * 1)(
+            xr.ActiveActionSet(action_set=_vr_state._action_set, subaction_path=xr.NULL_PATH)
+        )
+        xr.sync_actions(
+            _vr_state.session,
+            xr.ActionsSyncInfo(
+                count_active_action_sets=1,
+                active_action_sets=ctypes.cast(active_sets, ctypes.POINTER(xr.ActiveActionSet)),
+            )
+        )
+    except xr.exception.SessionNotFocused:
+        pass
+    except Exception:
+        pass
+    for i in range(2):
+        ctrl = _vr_state.controllers[i]
+        ctrl.valid = False
+        if _vr_state._grip_actions[i] is not None:
+            try:
+                state = xr.get_action_state_float(
+                    _vr_state.session,
+                    xr.ActionStateGetInfo(
+                        action=_vr_state._grip_actions[i],
+                        subaction_path=hand_paths[i],
+                    ),
+                )
+                ctrl.grip = float(state.current_state) if state.is_active else 0.0
+            except Exception:
+                ctrl.grip = 0.0
+        if _vr_state._pose_spaces[i] is not None:
+            try:
+                loc = xr.locate_space(
+                    _vr_state._pose_spaces[i],
+                    _vr_state.space,
+                    _vr_state._display_time,
+                )
+                flags = loc.location_flags
+                pos_valid = bool(flags & xr.SpaceLocationFlags.POSITION_VALID_BIT.value)
+                ori_valid = bool(flags & xr.SpaceLocationFlags.ORIENTATION_VALID_BIT.value)
+                if pos_valid and ori_valid:
+                    p = loc.pose.position
+                    o = loc.pose.orientation
+                    ctrl.pos = (p.x, p.y, p.z)
+                    ctrl.quat = (o.x, o.y, o.z, o.w)
+                    ctrl.valid = True
+            except Exception:
+                pass
+
+
+def get_eye_transforms(cam_pos, cam_yaw, cam_pitch) -> list[dict]:
+    eyes = []
+    p0 = _vr_state._eye_positions[0]
+    p1 = _vr_state._eye_positions[1]
+    xr_ipd = math.sqrt(sum((p1[k]-p0[k])**2 for k in range(3)))
+    use_xr_positions = 0.01 < xr_ipd < 0.12
+    if use_xr_positions:
+        mid = tuple((p0[k] + p1[k]) * 0.5 for k in range(3))
+
+    hx, hy, hz = _vr_state._hmd_pos_offset
+    base_pos = (
+        cam_pos[0] + hx,
+        cam_pos[1] + hy,
+        cam_pos[2] + hz,
+    )
+    _vr_state._xr_origin = base_pos
+    if use_xr_positions:
+        xr_ipd_safe = max(xr_ipd, 1e-4)
+        _vr_state._xr_mid = mid
+        _vr_state._xr_scale = _vr_state.ipd_override / xr_ipd_safe
+    else:
+        _vr_state._xr_mid = (0.0, 0.0, 0.0)
+        _vr_state._xr_scale = 1.0
+
+    for i in range(2):
+        if _vr_state.active:
+            qx, qy, qz, qw = _vr_state._eye_quats[i]
+            rot = _quat_to_mat3(qx, qy, qz, qw)
+            r = ( rot[0],  rot[3],  rot[6])
+            u = ( rot[1],  rot[4],  rot[7])
+            f = (-rot[2], -rot[5], -rot[8])
+            if use_xr_positions:
+                exi, eyi, ezi = _vr_state._eye_positions[i]
+                dx = exi - mid[0]
+                dy = eyi - mid[1]
+                dz = ezi - mid[2]
+                ipd_scale = _vr_state.ipd_override / max(xr_ipd, 1e-4)
+                ep = (
+                    base_pos[0] + dx * ipd_scale,
+                    base_pos[1] + dy * ipd_scale,
+                    base_pos[2] + dz * ipd_scale,
+                )
+            else:
+                sign = -0.5 if i == 0 else 0.5
+                half_ipd = _vr_state.ipd_override * sign
+                ep = (
+                    base_pos[0] + r[0]*half_ipd,
+                    base_pos[1] + r[1]*half_ipd,
+                    base_pos[2] + r[2]*half_ipd,
+                )
+        else:
+            yaw, pitch = cam_yaw, cam_pitch
+            bf = (math.cos(pitch)*math.sin(yaw), math.sin(pitch), -math.cos(pitch)*math.cos(yaw))
+            brx, brz = -bf[2], bf[0]
+            rlen = math.sqrt(brx**2 + brz**2) or 1.0
+            br = (brx/rlen, 0.0, brz/rlen)
+            bu = (br[1]*bf[2]-br[2]*bf[1], br[2]*bf[0]-br[0]*bf[2], br[0]*bf[1]-br[1]*bf[0])
+            ulen = math.sqrt(sum(v*v for v in bu)) or 1.0
+            bu = tuple(v/ulen for v in bu)
+            sign = -0.5 if i == 0 else 0.5
+            half_ipd = _vr_state.ipd_override * sign
+            ep = (
+                base_pos[0] + br[0]*half_ipd,
+                base_pos[1] + br[1]*half_ipd,
+                base_pos[2] + br[2]*half_ipd,
+            )
+            rot = _mat3_mul(_rot_y_mat3(yaw), _rot_x_mat3(pitch))
+            r = (rot[0], rot[3], rot[6])
+            u = (rot[1], rot[4], rot[7])
+            f = (rot[2], rot[5], rot[8])
+        eyes.append({
+            'pos': ep,
+            'fwd':   f,
+            'right': r,
+            'up':    u,
+            'fov_angles': _vr_state._eye_fovs[i],
+            'eye_idx': i,
+        })
+    return eyes
+
+
+def _xr_to_world(xr_pos: tuple) -> tuple:
+    ox, oy, oz = _vr_state._xr_origin
+    mx, my, mz = _vr_state._xr_mid
+    s = _vr_state._xr_scale
+    return (
+        ox + (xr_pos[0] - mx) * s,
+        oy + (xr_pos[1] - my) * s,
+        oz + (xr_pos[2] - mz) * s,
+    )
+
+
+def _make_proj_matrix(fov_angles, near=0.01, far=1000.0):
+    al, ar, au, ad = fov_angles
+    tl, tr, tu, td = math.tan(al), math.tan(ar), math.tan(au), math.tan(ad)
+    r_m_l = tr - tl
+    t_m_b = tu - td
+    r_p_l = tr + tl
+    t_p_b = tu + td
+    m = [0.0]*16
+    m[0]  =  2.0 / r_m_l
+    m[5]  =  2.0 / t_m_b
+    m[8]  =  r_p_l / r_m_l
+    m[9]  =  t_p_b / t_m_b
+    m[10] = -(far + near) / (far - near)
+    m[11] = -1.0
+    m[14] = -(2.0 * far * near) / (far - near)
+    return m
+
+
+def _make_view_matrix(eye_pos, fwd, right, up):
+    rx, ry, rz = right
+    ux, uy, uz = up
+    fx, fy, fz = fwd
+    ex, ey, ez = eye_pos
+    tx = -(rx*ex + ry*ey + rz*ez)
+    ty = -(ux*ex + uy*ey + uz*ez)
+    tz =  (fx*ex + fy*ey + fz*ez)
+    return [
+        rx,  ry,  rz, 0.0,
+        ux,  uy,  uz, 0.0,
+       -fx, -fy, -fz, 0.0,
+        tx,  ty,  tz, 1.0,
+    ]
+
+
+def _mat4_mul(a, b):
+    result = [0.0]*16
+    for row in range(4):
+        for col in range(4):
+            s = 0.0
+            for k in range(4):
+                s += a[row + k*4] * b[k + col*4]
+            result[row + col*4] = s
+    return result
+
+
+def _make_model_matrix(pos, quat, scale=1.0):
+    rot = _quat_to_mat3(*quat)
+    s = scale
+    return [
+        rot[0]*s, rot[3]*s, rot[6]*s, 0.0,
+        rot[1]*s, rot[4]*s, rot[7]*s, 0.0,
+        rot[2]*s, rot[5]*s, rot[8]*s, 0.0,
+        pos[0],   pos[1],   pos[2],   1.0,
+    ]
+
+
+def _build_controller_mesh():
+    verts = []
+    indices = []
+
+    def _add_box(cx, cy, cz, sx, sy, sz):
+        hx, hy, hz = sx*0.5, sy*0.5, sz*0.5
+        corners = [
+            (-hx+cx, -hy+cy, -hz+cz),
+            ( hx+cx, -hy+cy, -hz+cz),
+            ( hx+cx,  hy+cy, -hz+cz),
+            (-hx+cx,  hy+cy, -hz+cz),
+            (-hx+cx, -hy+cy,  hz+cz),
+            ( hx+cx, -hy+cy,  hz+cz),
+            ( hx+cx,  hy+cy,  hz+cz),
+            (-hx+cx,  hy+cy,  hz+cz),
+        ]
+        faces = [
+            (0,1,2,3, ( 0, 0,-1)),
+            (5,4,7,6, ( 0, 0, 1)),
+            (1,5,6,2, ( 1, 0, 0)),
+            (4,0,3,7, (-1, 0, 0)),
+            (3,2,6,7, ( 0, 1, 0)),
+            (0,4,5,1, ( 0,-1, 0)),
+        ]
+        for fi, (a,b,c,d, n) in enumerate(faces):
+            base = len(verts) // 6
+            for vi in (a,b,c,d):
+                verts.extend(corners[vi])
+                verts.extend(n)
+            indices.extend([base, base+1, base+2, base, base+2, base+3])
+
+    def _add_capsule(cx, cy, cz, radius, length, segments=8):
+        half = length * 0.5
+        for seg in range(segments):
+            a0 = seg * 2*math.pi / segments
+            a1 = (seg+1) * 2*math.pi / segments
+            x0, z0 = math.cos(a0)*radius, math.sin(a0)*radius
+            x1, z1 = math.cos(a1)*radius, math.sin(a1)*radius
+            base = len(verts) // 6
+            n0 = _normalize3((x0, 0, z0))
+            n1 = _normalize3((x1, 0, z1))
+            for (px, py, pz, nx, ny, nz) in [
+                (cx+x0, cy-half, cz+z0, n0[0], n0[1], n0[2]),
+                (cx+x1, cy-half, cz+z1, n1[0], n1[1], n1[2]),
+                (cx+x1, cy+half, cz+z1, n1[0], n1[1], n1[2]),
+                (cx+x0, cy+half, cz+z0, n0[0], n0[1], n0[2]),
+            ]:
+                verts.extend([px, py, pz, nx, ny, nz])
+            indices.extend([base, base+1, base+2, base, base+2, base+3])
+
+        for cap_y, cap_sign in [(-half, -1.0), (half, 1.0)]:
+            rings = 4
+            for ring in range(rings):
+                phi0 = ring * (math.pi*0.5) / rings
+                phi1 = (ring+1) * (math.pi*0.5) / rings
+                for seg in range(segments):
+                    a0 = seg * 2*math.pi / segments
+                    a1 = (seg+1) * 2*math.pi / segments
+                    r0, r1 = math.cos(phi0)*radius, math.cos(phi1)*radius
+                    h0, h1 = math.sin(phi0)*radius*cap_sign, math.sin(phi1)*radius*cap_sign
+                    x00, z00 = math.cos(a0)*r0, math.sin(a0)*r0
+                    x01, z01 = math.cos(a1)*r0, math.sin(a1)*r0
+                    x10, z10 = math.cos(a0)*r1, math.sin(a0)*r1
+                    x11, z11 = math.cos(a1)*r1, math.sin(a1)*r1
+                    pts = [
+                        (cx+x00, cy+cap_y+h0, cz+z00),
+                        (cx+x01, cy+cap_y+h0, cz+z01),
+                        (cx+x11, cy+cap_y+h1, cz+z11),
+                        (cx+x10, cy+cap_y+h1, cz+z10),
+                    ]
+                    base = len(verts) // 6
+                    for px, py, pz in pts:
+                        nx, ny, nz = _normalize3((px-cx, (py-cy-cap_y)*cap_sign, pz-cz))
+                        verts.extend([px, py, pz, nx, ny, nz])
+                    indices.extend([base, base+1, base+2, base, base+2, base+3])
+
+    _add_capsule(0.0, 0.0, 0.0, 0.018, 0.12)
+    _add_box(0.0, -0.04, 0.022, 0.030, 0.020, 0.012)
+    _add_box(0.0,  0.035, 0.010, 0.022, 0.015, 0.010)
+    _add_box(-0.014, -0.015, 0.016, 0.008, 0.010, 0.008)
+    _add_box( 0.014, -0.015, 0.016, 0.008, 0.010, 0.008)
+
+    return np.array(verts, dtype='f4'), np.array(indices, dtype='i4')
+
+
+class ControllerRenderer:
+    def __init__(self, ctx: moderngl.Context):
+        self._ctx = ctx
+        self._prog = ctx.program(vertex_shader=_CTRL_VERT, fragment_shader=_CTRL_FRAG)
+        self._uloc = {n: self._prog[n] for n in self._prog}
+        verts, indices = _build_controller_mesh()
+        self._vbo = ctx.buffer(verts.tobytes())
+        self._ibo = ctx.buffer(indices.tobytes())
+        self._vao = ctx.vertex_array(
+            self._prog,
+            [(self._vbo, '3f 3f', 'in_pos', 'in_normal')],
+            self._ibo,
+        )
+
+    def _set(self, name, val):
+        if name in self._uloc:
+            self._uloc[name].value = val
+
+    def render_controller(self, ctrl: ControllerState, eye: dict, fov_angles, color):
+        if not ctrl.valid:
+            return
+        proj = _make_proj_matrix(fov_angles, near=0.001, far=50.0)
+        view = _make_view_matrix(eye['pos'], eye['fwd'], eye['right'], eye['up'])
+        model = _make_model_matrix(_xr_to_world(ctrl.pos), ctrl.quat, scale=1.0)
+        mv = _mat4_mul(view, model)
+        mvp = _mat4_mul(proj, mv)
+        rot = _quat_to_mat3(*ctrl.quat)
+        nm = (
+            rot[0], rot[3], rot[6],
+            rot[1], rot[4], rot[7],
+            rot[2], rot[5], rot[8],
+        )
+        self._set('u_mvp', tuple(mvp))
+        self._set('u_normal_mat', nm)
+        self._set('u_color', color)
+        self._set('u_grip', ctrl.grip)
+        self._vao.render(moderngl.TRIANGLES)
+
+    def render_for_eye(self, eye: dict):
+        GL_DEPTH_BUFFER_BIT = 0x00000100
+        opengl32 = ctypes.windll.opengl32
+        opengl32.glClear(GL_DEPTH_BUFFER_BIT)
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        colors = [(0.3, 0.6, 1.0), (1.0, 0.4, 0.3)]
+        for i, ctrl in enumerate(_vr_state.controllers):
+            self.render_controller(ctrl, eye, _vr_state._eye_fovs[eye['eye_idx']], colors[i])
+        self._ctx.disable(moderngl.DEPTH_TEST)
+
+    def release(self):
+        self._vbo.release()
+        self._ibo.release()
+        self._vao.release()
+        self._prog.release()
+
+
+class VRRenderer:
+    def __init__(self, ctx: moderngl.Context):
+        self._ctx = ctx
+        self._fbos = [
+            VREyeFramebuffer(ctx, VRState.EYE_TEX_W, VRState.EYE_TEX_H),
+            VREyeFramebuffer(ctx, VRState.EYE_TEX_W, VRState.EYE_TEX_H),
+        ]
+        self._compose_prog = ctx.program(vertex_shader=_COMPOSE_VERT, fragment_shader=_COMPOSE_FRAG)
+        self._compose_uloc = {n: self._compose_prog[n] for n in self._compose_prog}
+        verts = np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
+        self._compose_vao = ctx.simple_vertex_array(self._compose_prog, ctx.buffer(verts), 'in_position')
+        self._ctrl_renderer = ControllerRenderer(ctx)
+
+    def eye_fbo(self, eye_idx: int) -> VREyeFramebuffer:
+        return self._fbos[eye_idx]
+
+    def render_controllers_for_eye(self, eye: dict):
+        self._fbos[eye['eye_idx']].fbo.use()
+        self._ctrl_renderer.render_for_eye(eye)
+
+    def compose_to_screen(self, screen_fbo, wnd_w: int, wnd_h: int):
+        screen_fbo.use()
+        self._ctx.clear(0.0, 0.0, 0.0)
+        self._fbos[EYE_LEFT].tex.use(location=0)
+        self._fbos[EYE_RIGHT].tex.use(location=1)
+        u = self._compose_uloc
+        if 'u_eye_left' in u:
+            u['u_eye_left'].value = 0
+        if 'u_eye_right' in u:
+            u['u_eye_right'].value = 1
+        if 'u_resolution' in u:
+            u['u_resolution'].value = (float(wnd_w), float(wnd_h))
+        self._compose_vao.render(moderngl.TRIANGLE_STRIP)
+
+    def release(self):
+        for fb in self._fbos:
+            fb.release()
+        self._ctrl_renderer.release()
+        self._compose_prog.release()
+
+
+poll_xr_events_warned = False
+
+
+def poll_xr_events():
+    global poll_xr_events_warned
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state.instance):
+        return
+    try:
+        while True:
+            try:
+                event = xr.poll_event(_vr_state.instance)
+            except xr.EventUnavailable:
+                break
+            if event.type == xr.StructureType.EVENT_DATA_SESSION_STATE_CHANGED:
+                try:
+                    ev = ctypes.cast(
+                        ctypes.addressof(event) if not isinstance(event, xr.EventDataSessionStateChanged) else ctypes.pointer(event),
+                        ctypes.POINTER(xr.EventDataSessionStateChanged)
+                    ).contents
+                except Exception:
+                    break
+                if ev.state == xr.SessionState.READY and not _vr_state._session_running:
+                    try:
+                        xr.begin_session(
+                            _vr_state.session,
+                            xr.SessionBeginInfo(primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO)
+                        )
+                        _vr_state._session_running = True
+                        _create_swapchains()
+                        poll_xr_events_warned = False
+                        from core.foundation.logger import Logger
+                        Logger.info('[VR] OpenXR session started.')
+                    except Exception:
+                        pass
+                elif ev.state in (xr.SessionState.STOPPING, xr.SessionState.EXITING) and _vr_state._session_running:
+                    try:
+                        xr.end_session(_vr_state.session)
+                    except Exception:
+                        pass
+                    _vr_state._session_running = False
+    except Exception:
+        pass
+
+
+def sync_hmd_pose():
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
+        return
+    try:
+        frame_state = xr.wait_frame(_vr_state.session, xr.FrameWaitInfo())
+        _vr_state._frame_state = frame_state
+        _vr_state._display_time = frame_state.predicted_display_time
+        xr.begin_frame(_vr_state.session, xr.FrameBeginInfo())
+        _, views = xr.locate_views(_vr_state.session, xr.ViewLocateInfo(
+            view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+            display_time=frame_state.predicted_display_time,
+            space=_vr_state.space
+        ))
+        for i, view in enumerate(views[:2]):
+            p, o, f = view.pose.position, view.pose.orientation, view.fov
+            _vr_state._eye_positions[i] = (p.x, p.y, p.z)
+            _vr_state._eye_quats[i] = (o.x, o.y, o.z, o.w)
+            _vr_state._hmd_pos = _vr_state._eye_positions[0]
+            _vr_state._hmd_quat = _vr_state._eye_quats[0]
+            _vr_state._eye_fovs[i] = (f.angle_left, f.angle_right, f.angle_up, f.angle_down)
+        p0 = _vr_state._eye_positions[0]
+        p1 = _vr_state._eye_positions[1]
+        mid_pos = ((p0[0]+p1[0])*0.5, (p0[1]+p1[1])*0.5, (p0[2]+p1[2])*0.5)
+        if _vr_state._hmd_pos_origin is None:
+            _vr_state._hmd_pos_origin = mid_pos
+        ox, oy, oz = _vr_state._hmd_pos_origin
+        _vr_state._hmd_pos_offset = (mid_pos[0]-ox, mid_pos[1]-oy, mid_pos[2]-oz)
+        _sync_controller_input()
+    except Exception:
+        pass
+
+
+def end_xr_frame():
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
+        return
+    if _vr_state._frame_state is None:
+        return
+    try:
+        layers = []
+        if len(_vr_state._swapchains) == 2 and all(p is not None for p in _vr_state._eye_poses):
+            proj_views = []
+            for i in range(2):
+                sc = _vr_state._swapchains[i]
+                sub_img = xr.SwapchainSubImage(
+                    swapchain=sc.swapchain,
+                    image_rect=xr.Rect2Di(
+                        offset=xr.Offset2Di(x=0, y=0),
+                        extent=xr.Extent2Di(width=sc.w, height=sc.h)
+                    ),
+                    image_array_index=0
+                )
+                fov = xr.Fovf(
+                    angle_left=_vr_state._eye_fovs[i][0],
+                    angle_right=_vr_state._eye_fovs[i][1],
+                    angle_up=_vr_state._eye_fovs[i][2],
+                    angle_down=_vr_state._eye_fovs[i][3]
+                )
+                proj_views.append(xr.CompositionLayerProjectionView(
+                    pose=_vr_state._eye_poses[i],
+                    fov=fov,
+                    sub_image=sub_img
+                ))
+            layer = xr.CompositionLayerProjection(
+                space=_vr_state.space,
+                views=proj_views
+            )
+            layers = [ctypes.byref(layer)]
+        xr.end_frame(_vr_state.session, xr.FrameEndInfo(
+            display_time=_vr_state._display_time,
+            environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
+            layers=layers
+        ))
+    except Exception:
+        pass
+
+
+def render_vr_frame(render_eye_fn, ctx: moderngl.Context, screen_fbo, wnd_w: int, wnd_h: int):
+    rnd = _vr_renderer
+    if rnd is None:
+        return
+    use_xr = _vr_state.active and _vr_state._session_running and len(_vr_state._swapchains) == 2
+    for i in range(2):
+        efbo = rnd.eye_fbo(i)
+        efbo.fbo.use()
+        efbo.fbo.clear(0.0, 0.0, 0.0, 1.0)
+        render_eye_fn(i, efbo.fbo, efbo.w, efbo.h)
+
+    for i in range(2):
+        eye = {
+            'eye_idx': i,
+            'pos': _vr_state._eye_positions[i] if use_xr else (0, 0, 0),
+            'fwd': (0, 0, 0),
+            'right': (0, 0, 0),
+            'up': (0, 0, 0),
+            'fov_angles': _vr_state._eye_fovs[i],
+        }
+        rnd.render_controllers_for_eye(eye)
+
+    if use_xr:
+        try:
+            gl = _load_gl_funcs()
+            GL_DRAW_FRAMEBUFFER  = 0x8CA9
+            GL_READ_FRAMEBUFFER  = 0x8CA8
+            GL_FRAMEBUFFER       = 0x8D40
+            GL_COLOR_ATTACHMENT0 = 0x8CE0
+            GL_TEXTURE_2D        = 0x0DE1
+            GL_COLOR_BUFFER_BIT  = 0x4000
+            GL_NEAREST           = 0x2600
+            for i, sc in enumerate(_vr_state._swapchains):
+                dst_tex = sc.acquire()
+                src_fbo_id = rnd.eye_fbo(i).fbo.glo
+                w, h = sc.w, sc.h
+                blit_fbo = (ctypes.c_uint * 1)(0)
+                gl.GenFramebuffers(1, blit_fbo)
+                gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_fbo[0])
+                gl.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0)
+                gl.BindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo_id)
+                gl.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST)
+                gl.BindFramebuffer(GL_FRAMEBUFFER, 0)
+                gl.DeleteFramebuffers(1, blit_fbo)
+                sc.release_image()
+        except Exception:
+            pass
+    rnd.compose_to_screen(screen_fbo, wnd_w, wnd_h)
+
+
+_vr_renderer: VRRenderer | None = None
+
+
+class VRToggleState:
+    def __init__(self):
+        self.enabled = False
+        self._ctx: moderngl.Context | None = None
+
+    def toggle(self, ctx: moderngl.Context) -> bool:
+        global _vr_renderer
+        if self.enabled:
+            self._disable()
+        else:
+            self._enable(ctx)
+        return self.enabled
+
+    def _enable(self, ctx: moderngl.Context):
+        global _vr_renderer
+        self._ctx = ctx
+        if _XR_AVAILABLE and initialize(ctx):
+            self.enabled = True
+            from core.foundation.logger import Logger
+            Logger.info('[VR] OpenXR initialized.')
+        else:
+            self.enabled = False
+
+    def _disable(self):
+        global _vr_renderer
+        if _vr_renderer is not None:
+            _vr_renderer.release()
+            _vr_renderer = None
+        if _XR_AVAILABLE:
+            shutdown()
+        self.enabled = False
+        from core.foundation.logger import Logger
+        Logger.info('[VR] OpenXR shutdown.')
+
+
+def toggle_vr(ctx: moderngl.Context, vr_renderer: VRRenderer | None) -> bool:
+    global _vr_renderer
+    _vr_renderer = vr_renderer
+    return _vr_toggle.toggle(ctx)
+
+
+def vr_enabled() -> bool:
+    return _vr_toggle.enabled
+
+
+def get_hmd_pos_offset() -> tuple[float, float, float]:
+    return _vr_state._hmd_pos_offset
+
+
+def reset_hmd_origin():
+    _vr_state._hmd_pos_origin = None
+    _vr_state._hmd_pos_offset = (0.0, 0.0, 0.0)
+
+
+def get_ipd() -> float:
+    return _vr_state.ipd_override
+
+
+def set_ipd(ipd: float):
+    _vr_state.ipd_override = max(0.010, min(0.200, ipd))
+
+
+def get_controllers():
+    return _vr_state.controllers
+
+
+def session_running() -> bool:
+    return _vr_state._session_running
+
+
+_vr_toggle = VRToggleState()
