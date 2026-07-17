@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 import moderngl
+import time
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QCursor, QGuiApplication
+from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
+from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QCursor, QGuiApplication, QPainter, QColor, QFont, QFontMetrics, QPen, QBrush
 from core.input.input_system import Input
 from core.input.input_manager import InputManager
 from core.foundation.logger import Logger
@@ -37,6 +38,15 @@ class GameViewport(QOpenGLWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         engine.on("play_stop", self._on_play_stop)
+        self._stats_enabled: bool = False
+        self._fps: float = 0.0
+        self._fps_accum: float = 0.0
+        self._fps_frames: int = 0
+        self._last_paint_time: float = 0.0
+        self._paint_dt: float = 0.016
+        self._frame_times_ms: list[float] = []
+        self._physical_w: int = 0
+        self._physical_h: int = 0
         fmt = QSurfaceFormat()
         fmt.setDepthBufferSize(24)
         fmt.setVersion(3, 3)
@@ -96,6 +106,7 @@ class GameViewport(QOpenGLWidget):
     def resizeGL(self, w: int, h: int):
         dpr = self.devicePixelRatio()
         pw, ph = int(w * dpr), int(h * dpr)
+        self._physical_w, self._physical_h = pw, ph
         if self._ctx:
             self._ctx.viewport = (0, 0, pw, ph)
             self._bind_screen_fbo()
@@ -103,6 +114,16 @@ class GameViewport(QOpenGLWidget):
     def paintGL(self):
         if not self._ctx or not self._renderer:
             return
+        now = time.perf_counter()
+        if self._last_paint_time > 0:
+            self._paint_dt = now - self._last_paint_time
+            self._fps_accum += self._paint_dt
+            self._fps_frames += 1
+            if self._fps_accum >= 0.5:
+                self._fps = self._fps_frames / self._fps_accum
+                self._fps_accum = 0.0
+                self._fps_frames = 0
+        self._last_paint_time = now
         try:
             self._bind_screen_fbo()
             scene = self._engine.scene
@@ -133,6 +154,8 @@ class GameViewport(QOpenGLWidget):
             proj = cam.get_projection_matrix(aspect)
             self._renderer.show_grid = False
             self._renderer.render_scene(scene, view, proj, tr.position, rw, rh, self._screen_fbo, display_w=pw, display_h=ph)
+            if self._stats_enabled:
+                self._draw_stats_overlay()
         except Exception as e:
             import traceback as _tb
             _tb.print_exc()
@@ -180,6 +203,163 @@ class GameViewport(QOpenGLWidget):
         center = self.mapToGlobal(QPoint(self.width() // 2, self.height() // 2))
         QCursor.setPos(center)
 
+    def _get_physical_dims(self):
+        if self._physical_w > 0 and self._physical_h > 0:
+            return self._physical_w, self._physical_h
+        dpr = self.devicePixelRatio()
+        return int(self.width() * dpr), int(self.height() * dpr)
+
+    def _draw_stats_overlay(self):
+        painter = QPainter(self)
+        try:
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            font = QFont("Consolas", 9)
+            font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+            painter.setFont(font)
+
+            fps = self._fps if self._fps > 0 else 0.0
+            paint_dt = self._paint_dt if self._paint_dt > 0 else 0.016
+
+            if paint_dt > 0:
+                self._frame_times_ms.append(paint_dt * 1000.0)
+                if len(self._frame_times_ms) > 300:
+                    self._frame_times_ms.pop(0)
+
+            sorted_ft = sorted(self._frame_times_ms)
+            n = len(sorted_ft)
+            p1_count = max(1, int(n * 0.01))
+            p01_count = max(1, int(n * 0.001))
+            p1_low = sum(sorted_ft[-p1_count:]) / p1_count if sorted_ft else 0.0
+            p01_low = sum(sorted_ft[-p01_count:]) / p01_count if sorted_ft else 0.0
+            cpu_ms = paint_dt * 1000.0
+
+            eng = self._engine
+            tps = eng.tps if hasattr(eng, 'tps') else 0.0
+            time_scale = eng.time_scale if hasattr(eng, 'time_scale') else 1.0
+
+            r = self._renderer
+            triangles = getattr(r, '_triangles_drawn', 0) or 0
+            vertices = getattr(r, '_vertices_drawn', 0) or 0
+            draw_calls = getattr(r, '_draw_calls', 0) or 0
+            culled_visible = getattr(r, '_culled_visible', 0) or 0
+            culled_total = getattr(r, '_culled_total', 0) or 0
+            culled_str = f"{culled_visible}/{culled_total}"
+            particles = getattr(r, '_particle_count', 0) or 0
+            batches = 0
+            instanced = 0
+            batcher = getattr(r, '_batcher', None)
+            if batcher is not None:
+                batches = batcher.batches
+                instanced = batcher.instanced
+            gizmo_draws = 0
+            gizmo_lines = 0
+            giz = getattr(r, '_gizmo', None)
+            if giz is not None:
+                gizmo_draws = getattr(giz, '_stat_draws', 0) or 0
+                gizmo_lines = getattr(giz, '_stat_lines', 0) or 0
+
+            fw, fh = self._get_physical_dims()
+
+            def _fmt_count(cnt):
+                if cnt >= 1_000_000:
+                    return f"{cnt/1_000_000:.1f}M"
+                if cnt >= 1_000:
+                    return f"{cnt/1_000:.1f}k"
+                return str(cnt)
+
+            stats_lines = [
+                f"FPS: {fps:.1f}  |  1%: {1000.0/max(p1_low,0.1):.1f}  |  0.1%: {1000.0/max(p01_low,0.1):.1f}  |  CPU: {cpu_ms:.1f}ms  |  Res: {fw}x{fh}",
+                f"TPS: {tps:.0f}  |  TS: {time_scale:.2f}",
+                f"Culled: {culled_str}  |  Draw Calls: {draw_calls}  |  Tris: {_fmt_count(triangles)}  |  Verts: {_fmt_count(vertices)}",
+                f"Particles: {_fmt_count(particles)}  |  Batches: {batches}  |  Instanced: {instanced}  |  Gizmo Draws: {gizmo_draws}  |  GLines: {_fmt_count(gizmo_lines)}",
+            ]
+
+            text_color = QColor(255, 255, 255)
+            label_color = QColor(160, 160, 160)
+            bg_color = QColor(0, 0, 0, 160)
+            border_color = QColor(80, 80, 80, 200)
+            padding = 6
+            line_height = 15
+            total_h = len(stats_lines) * line_height + padding * 2
+
+            fm = QFontMetrics(font)
+            max_w = max(fm.horizontalAdvance(line) for line in stats_lines) + padding * 2
+            max_w = max(max_w, 460)
+
+            x = 8
+            y = 35
+            rect = QRect(x, y, int(max_w), total_h)
+            painter.fillRect(rect, bg_color)
+            painter.setPen(QPen(border_color, 1))
+            painter.drawRect(rect)
+
+            for i, line in enumerate(stats_lines):
+                cx = x + padding
+                cy = y + padding + i * line_height
+                for idx, seg in enumerate(line.split("  |  ")):
+                    seg = seg.strip()
+                    if not seg:
+                        continue
+                    if ":" in seg:
+                        lab, val = seg.split(":", 1)
+                        lab = lab.strip() + ": "
+                        val = val.strip()
+                        painter.setPen(label_color)
+                        painter.drawText(QRect(cx, cy, fm.horizontalAdvance(lab), line_height),
+                                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, lab)
+                        cx += fm.horizontalAdvance(lab)
+                        painter.setPen(text_color)
+                        painter.drawText(QRect(cx, cy, fm.horizontalAdvance(val), line_height),
+                                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, val)
+                        cx += fm.horizontalAdvance(val)
+                    else:
+                        painter.setPen(text_color)
+                        painter.drawText(QRect(cx, cy, fm.horizontalAdvance(seg), line_height),
+                                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, seg)
+                        cx += fm.horizontalAdvance(seg)
+                    if idx < len(line.split("  |  ")) - 1:
+                        painter.setPen(QColor(100, 100, 100))
+                        sep = " | "
+                        painter.drawText(QRect(cx, cy, fm.horizontalAdvance(sep), line_height),
+                                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, sep)
+                        cx += fm.horizontalAdvance(sep)
+
+            chart_y = y + total_h + 6
+            chart_h = 30
+            chart_rect = QRect(x, chart_y, int(max_w), chart_h)
+            painter.fillRect(chart_rect, bg_color)
+            painter.setPen(QPen(border_color, 1))
+            painter.drawRect(chart_rect)
+            ft_list = self._frame_times_ms
+            n_bars = min(len(ft_list), chart_rect.width() - 4)
+            if n_bars > 1:
+                bar_w = (chart_rect.width() - 4) / n_bars
+                max_ft = max(max(ft_list[-n_bars:]) * 1.1, 16.0)
+                for bi in range(n_bars):
+                    ft_val = ft_list[-n_bars + bi]
+                    bh = max(1, int((ft_val / max_ft) * (chart_h - 4)))
+                    bar_x = chart_rect.x() + 2 + int(bar_w * bi)
+                    bar_y = chart_rect.bottom() - 2 - bh
+                    if ft_val > 33.0:
+                        painter.setBrush(QBrush(QColor(255, 80, 80, 180)))
+                    elif ft_val > 16.0:
+                        painter.setBrush(QBrush(QColor(255, 200, 80, 160)))
+                    else:
+                        painter.setBrush(QBrush(QColor(80, 200, 80, 140)))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawRect(QRect(int(bar_x), bar_y, max(1, int(bar_w)), bh))
+                painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
+                ref_y = chart_rect.bottom() - 2 - int((16.0 / max_ft) * (chart_h - 4))
+                if ref_y > chart_rect.y() + 2:
+                    painter.drawLine(chart_rect.x() + 2, ref_y, chart_rect.right() - 2, ref_y)
+            painter.restore()
+        except Exception as e:
+            Logger.error(f"GameViewport stats overlay error: {e}", e)
+        finally:
+            painter.end()
+
     def keyPressEvent(self, event: QKeyEvent):
         if self._engine.play_mode:
             kc = self._input_manager.qt_key_to_vk(event.key())
@@ -188,6 +368,10 @@ class GameViewport(QOpenGLWidget):
                     self._input_manager._pending.append((kc, True))
             if event.key() == Qt.Key.Key_Escape and self._mouse_captured:
                 self._release_mouse()
+            if event.key() == Qt.Key.Key_F3 and (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                self._stats_enabled = not self._stats_enabled
+                event.accept()
+                return
             event.accept()
             return
         event.ignore()
