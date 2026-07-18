@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QDoubleSpinBox, QSpinBox, \
-    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy, QFormLayout
+    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy, QFormLayout, QGroupBox
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
 from core.config.editor_scale import scale, scale_xy
@@ -94,6 +94,7 @@ class ComponentWidget(QWidget):
         self._layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._layout.setHorizontalSpacing(8)
+        self._group_form: QFormLayout | None = None
         main_layout.addWidget(self._content_widget)
         self.setAcceptDrops(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -361,7 +362,11 @@ class ComponentWidget(QWidget):
         for r in rows:
             r.setVisible(v)
 
+    def _target_layout(self) -> QFormLayout:
+        return self._group_form if self._group_form is not None else self._layout
+
     def _add_field(self, label: str, widget: QWidget, prop_name: str = "", toggle_field: str = ""):
+        target = self._target_layout()
         if prop_name:
             comp_type = type(self._component).__name__
             src_path = get_component_source_path(type(self._component))
@@ -376,18 +381,18 @@ class ComponentWidget(QWidget):
             field_widget._field_child = widget
             lbl = QLabel(label)
             lbl.setWordWrap(True)
-            self._layout.addRow(lbl, field_widget)
+            target.addRow(lbl, field_widget)
             if toggle_field:
                 self._toggle_rows.setdefault(toggle_field, []).append(field_widget)
             return
         if label:
             lbl = QLabel(label)
             lbl.setWordWrap(True)
-            self._layout.addRow(lbl, widget)
+            target.addRow(lbl, widget)
         else:
-            self._layout.addRow(widget)
+            target.addRow(widget)
         if toggle_field:
-            row = self._layout.itemAt(self._layout.rowCount() - 1, QFormLayout.ItemRole.FieldRole)
+            row = target.itemAt(target.rowCount() - 1, QFormLayout.ItemRole.FieldRole)
             field_item = row.widget() if row else None
             if field_item is not None:
                 self._toggle_rows.setdefault(toggle_field, []).append(field_item)
@@ -396,8 +401,23 @@ class ComponentWidget(QWidget):
         c = self._component
         prop_name = field.name
         if field.field_type.value == "header":
-            header = QLabel(f"  {field.label}")
-            self._layout.addWidget(header)
+            group = QGroupBox(field.label)
+            group.setObjectName("inspectorGroup")
+            group.setStyleSheet(
+                "QGroupBox#inspectorGroup { color: #ccc; border: 1px solid #3a3a3a; "
+                "border-radius: 4px; margin-top: 10px; padding-top: 14px; font-size: 11px; "
+                "font-weight: 600; background: rgba(255,255,255,0.02); } "
+                "QGroupBox#inspectorGroup::title { subcontrol-origin: margin; left: 8px; "
+                "padding: 0 4px; }"
+            )
+            gform = QFormLayout(group)
+            gform.setContentsMargins(8, 4, 8, 6)
+            gform.setSpacing(3)
+            gform.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            gform.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            gform.setHorizontalSpacing(8)
+            self._group_form = gform
+            self._layout.addWidget(group)
             return
         value = getattr(c, prop_name)
         if field.field_type.value == "float":
@@ -606,7 +626,7 @@ class ComponentWidget(QWidget):
                         setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3":
             w, sbs = make_vec3_row(field.label, value, lambda: None)
             comp_cls = type(c)
@@ -619,7 +639,7 @@ class ComponentWidget(QWidget):
                         setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "list":
             self._build_list_field_standalone(field, prop_name)
         elif field.field_type.value == "layer_mask":
@@ -668,7 +688,7 @@ class ComponentWidget(QWidget):
                         setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "keybinding":
             te = QLineEdit()
             te.setText(str(value) if value else "")
@@ -697,7 +717,7 @@ class ComponentWidget(QWidget):
                         setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3_slider":
             w, sbs = make_vec3_slider_row(field.label, value, lambda: None, field.min_val, field.max_val)
             comp_cls = type(c)
@@ -710,7 +730,7 @@ class ComponentWidget(QWidget):
                         setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "gradient":
             grad_preview = QPushButton()
             grad_preview.setFixedHeight(22)
@@ -828,7 +848,7 @@ class ComponentWidget(QWidget):
                 row = self._build_list_row_standalone(prop_name, idx, elem, element_fields)
                 cl.addWidget(row)
         rebuild_list()
-        self._layout.addWidget(container)
+        self._target_layout().addWidget(container)
 
     def _list_item_label(self, prop_name, index):
         if type(self._component).__name__ == "MeshRenderer" and prop_name == "materials":
@@ -1151,7 +1171,7 @@ class ComponentWidget(QWidget):
                 comp.set_field_value(n, Vec2(sbs_box[0].value(), sbs_box[1].value()))
             for sb in sbs:
                 sb.valueChanged.connect(_on_vec2_changed)
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3":
             v = value if isinstance(value, Vec3) else Vec3()
             w, sbs = make_vec3_row(field.label or "", v, lambda: None)
@@ -1159,7 +1179,7 @@ class ComponentWidget(QWidget):
                 comp.set_field_value(n, Vec3(sbs_box[0].value(), sbs_box[1].value(), sbs_box[2].value()))
             for sb in sbs:
                 sb.valueChanged.connect(_on_vec3_changed)
-            self._layout.addWidget(w)
+            self._target_layout().addWidget(w)
         elif field.field_type.value == "enum":
             combo = QComboBox()
             options = field.enum_options or []
@@ -1252,17 +1272,17 @@ class ComponentWidget(QWidget):
             lambda v: self._update_transform_from_spinboxes("local_position", sbs_pos),
             reset_to=[0.0, 0.0, 0.0])
         self._tr_pos_sbs = sbs_pos
-        self._layout.addWidget(w_pos)
+        self._target_layout().addWidget(w_pos)
         w_rot, sbs_rot = make_vec3_row("Rotation", tr.local_euler_angles,
             lambda v: self._update_transform_from_spinboxes("local_euler_angles", sbs_rot),
             reset_to=[0.0, 0.0, 0.0])
         self._tr_rot_sbs = sbs_rot
-        self._layout.addWidget(w_rot)
+        self._target_layout().addWidget(w_rot)
         w_scale, sbs_scale = make_vec3_row("Scale", tr.local_scale,
             lambda v: self._update_transform_from_spinboxes("local_scale", sbs_scale),
             reset_to=[1.0, 1.0, 1.0])
         self._tr_scale_sbs = sbs_scale
-        self._layout.addWidget(w_scale)
+        self._target_layout().addWidget(w_scale)
 
     def _update_transform_from_spinboxes(self, attr, sbs):
         if self._updating: return
