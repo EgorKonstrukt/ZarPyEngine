@@ -11,14 +11,6 @@ from core.math.math3d import Vec3, Vec2
 from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
 from core.input.input_system import Input, KeyCode
 
-
-# Р‘Р›РЇР”РЎРљРР™ CharacterController: РќР• РРЎРџРћР›Р¬Р—РЈР•Рў Р¤РР—РР§Р•РЎРљРР™ РЎРћР›Р’Р•Р  Р’РћРћР‘Р©Р•.
-# Р’СЃС‘ РЅР°С…СѓР№ СЂСѓС‡РЅРѕРµ: position += vel * dt, ground check С‡РµСЂРµР· Р±СЂСѓС‚С„РѕСЂСЃ РІСЃРµС… СЌРЅС‚РёС‚Рё,
-# РїСЂРѕРІРµСЂСЏРµС‚ РўРћР›Р¬РљРћ BoxCollider (СЃС„РµСЂС‹, РєР°РїСЃСѓР»С‹, РјРµС€Рё вЂ” РїРѕС…СѓР№).
-# РЎРєРѕР»СЊР¶РµРЅРёСЏ РІРґРѕР»СЊ СЃС‚РµРЅ РЅРµС‚, step-up/down РЅРµ СЂР°Р±РѕС‚Р°РµС‚ (РїР°СЂР°РјРµС‚СЂС‹ РµСЃС‚СЊ вЂ” РїРѕС…СѓР№).
-# Р”РІР°Р¶РґС‹ РєРѕРїРёРїР°СЃС‚РЅСѓС‚С‹Р№ ray-AABB Р°Р»РіРѕСЂРёС‚Рј (РѕС‚Р»РёС‡РёР№ РЅРѕР»СЊ).
-# Engine.instance() РІРЅСѓС‚СЂРё С†РёРєР»Р° вЂ” РєСЂР°СЃРѕС‚Р°.
-# РљС‚Рѕ СЌС‚Рѕ РїРёСЃР°Р» вЂ” СЂСѓРєРё РѕС‚РѕСЂРІР°С‚СЊ.
 @ComponentRegistry.register
 class CharacterController(Component):
     _icon = "CharacterController.png"
@@ -155,12 +147,6 @@ class CharacterController(Component):
             wish = wish.normalized()
         return wish
 
-    # Р•Р‘РђРќР«Р™ Р‘Р РЈРўР¤РћР РЎ: Р±РµР¶РёС‚ РїРѕ Р’РЎР•Рњ Entity СЃС†РµРЅС‹.
-    # РџСЂРѕРІРµСЂСЏРµС‚ РўРћР›Р¬РљРћ BoxCollider вЂ” СЃС„РµСЂР°/РєР°РїСЃСѓР»Р°/РјРµС€ РџРћР¤РР“РЈ.
-    # Р’РЅСѓС‚СЂРё Р»СѓРїР° РґС‘СЂРіР°РµС‚ Engine.instance() РєР°Р¶РґС‹Р№ РєР°РґСЂ.
-    # РЎ 1000+ РѕР±СЉРµРєС‚Р°РјРё СЌС‚Рѕ РїСЂРѕСЃС‚Рѕ floor(1/fps) СЃРµРєСѓРЅРґ РІ Р¶РѕРїРµ.
-    # РќРµС‚ spatial hash, РЅРµС‚ broadphase, РЅРµС‚ cached Р±Р»РёР¶Р°Р№С€РёС… РїРѕРІРµСЂС…РЅРѕСЃС‚РµР№.
-    # Р РґР°, РїР°СЂР°РјРµС‚СЂС‹ step_up/step_down Р’РћРћР‘Р©Р• РќР• РРЎРџРћР›Р¬Р—РЈР®РўРЎРЇ.
     def _check_ground(self) -> tuple[bool, float]:
         if not self.transform:
             return False, 0.0
@@ -343,10 +329,6 @@ class CharacterController(Component):
             self._move_air(dt)
             vel = self.velocity
 
-        # Р‘Р›РЇР”Р¬: РќР•Рў РЎРўР•Рќ. РќРРљРђРљРРҐ. position += vel * dt вЂ” Рё РІ РґР°РјРєРё.
-        # РЎС‚СѓРїРµРЅСЊРєР° РІ 1 СЃРј? РџСЂРѕР№РґС‘С€СЊ. РЎС‚РµРЅР°? РџСЂРѕР№РґС‘С€СЊ РЅР°СЃРєРІРѕР·СЊ.
-        # РќРµС‚ sliding, РЅРµС‚ response, РЅРµС‚ fucking collision check РїРѕ РіРѕСЂРёР·РѕРЅС‚Р°Р»Рё.
-        # step_up/step_down РІ РїР°СЂР°РјРµС‚СЂР°С… РµСЃС‚СЊ вЂ” СЂР°Р±РѕС‚Р°СЋС‚ РєР°Рє placebo.
         pos = tr.local_position
         new_pos = Vec3(
             pos.x + vel.x * dt,
