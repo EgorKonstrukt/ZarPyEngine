@@ -1371,10 +1371,8 @@ class ProjectPanel(QDockWidget):
         loader = _get_mesh_loader()
         loader.mesh_data_ready.connect(self._on_mesh_data_ready, Qt.ConnectionType.QueuedConnection)
 
-    def _on_mesh_data_ready(self, path: str, size: int, verts, indices):
-        from editor.resource_picker import _render_mesh_for_cache
-        pixmap = _render_mesh_for_cache(path, size, verts, indices)
-        if pixmap is None:
+    def _on_mesh_data_ready(self, path: str, size: int, pixmap):
+        if pixmap is None or pixmap.isNull():
             return
         icon = QIcon(pixmap)
         for pane in (self._pane_a, self._pane_b):

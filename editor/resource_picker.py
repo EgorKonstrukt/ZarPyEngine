@@ -17,18 +17,25 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLineEdit,
                               QListWidget, QListWidgetItem, QLabel,
                               QPushButton, QWidget, QSplitter, QFileDialog,
                               QListWidgetItem, QAbstractItemView, QListView)
-from PyQt6.QtCore import Qt, QSize, QRect, QRectF, QPoint, QThread, pyqtSignal, QTimer, QMutex, QCoreApplication
+from PyQt6.QtCore import (Qt, QSize, QRect, QRectF, QPoint, QThread, pyqtSignal,
+                          QTimer, QMutex, QCoreApplication, QMetaObject, pyqtSlot,
+                          QObject, Q_ARG)
 from PyQt6.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QPen, QBrush,
                          QFontMetrics, QLinearGradient, QRadialGradient, QIcon, QPalette,
                          QImageReader, QPolygonF, QImage)
 
 _thumbnail_cache: dict[str, QPixmap] = {}
 _thumbnail_mutex = QMutex()
+_icon_cache: dict[str, QIcon] = {}
+_icon_mutex = QMutex()
 
 from editor.constants import THUMB_SIZE, PREVIEW_SIZE
 from core.config.editor_scale import scale, scale_xy
 
 _placeholder_icon: Optional[QIcon] = None
+
+_MESH_EXTS = (".obj", ".fbx", ".stl", ".gltf", ".glb", ".usdz")
+_MAX_MESH_INFLIGHT = 12
 
 
 def _get_placeholder_icon() -> QIcon:
@@ -79,140 +86,118 @@ _mesh_thumb_cache: dict[str, QPixmap] = {}
 _mesh_thumb_mutex = QMutex()
 
 
-class _MeshDataLoader(QThread):
-    mesh_data_ready = pyqtSignal(str, int, object, object)
+class _MeshThumbnailService(QObject):
+    """Generates mesh thumbnails in separate processes (no GIL contention).
 
-    def __init__(self):
-        super().__init__()
-        self._queue: list[tuple[str, int]] = []
-        self._cancelled = False
+    The heavy ``load_mesh`` + numpy/QPainter rendering runs inside a
+    multiprocessing.Pool of worker processes. Each worker returns PNG bytes
+    which are decoded on the GUI thread and cached as a QPixmap.
+    """
+
+    mesh_data_ready = pyqtSignal(str, int, object)
+
+    def __init__(self, parent: Optional[QObject] = None):
+        super().__init__(parent)
+        self._pool = None
+        self._inflight: set[tuple[str, int]] = set()
         self._lock = QMutex()
 
-    def cancel(self):
-        self._cancelled = True
+    def _ensure_pool(self):
+        if self._pool is not None:
+            return
+        try:
+            import multiprocessing as mp
+            nproc = max(1, min(4, (mp.cpu_count() or 2)))
+            self._pool = mp.Pool(
+                processes=nproc,
+                initializer=_mesh_worker_init,
+            )
+        except Exception:
+            self._pool = None
 
     def enqueue(self, path: str, size: int):
+        if size is None:
+            size = THUMB_SIZE
+        cache_key = f"mesh:{path}:{size}"
+        _mesh_thumb_mutex.lock()
+        cached = cache_key in _mesh_thumb_cache
+        _mesh_thumb_mutex.unlock()
+        if cached:
+            return
         self._lock.lock()
-        if (path, size) not in self._queue:
-            self._queue.append((path, size))
-        self._lock.unlock()
-
-    def run(self):
-        from core.assets.asset_importer import load_mesh
-        while not self._cancelled:
-            self._lock.lock()
-            work = self._queue.pop(0) if self._queue else None
+        if (path, size) in self._inflight:
             self._lock.unlock()
-            if work is None:
-                self.msleep(20)
-                continue
-            path, size = work
+            return
+        self._inflight.add((path, size))
+        self._lock.unlock()
+        self._ensure_pool()
+        if self._pool is None:
+            return
+        try:
+            self._pool.apply_async(
+                _mesh_render_wrap,
+                (path, size),
+                callback=self._on_pool_result,
+                error_callback=self._on_pool_error,
+            )
+        except Exception:
+            self._lock.lock()
+            self._inflight.discard((path, size))
+            self._lock.unlock()
+
+    def _on_pool_result(self, payload):
+        QMetaObject.invokeMethod(
+            self, "_deliver", Qt.ConnectionType.QueuedConnection,
+            Q_ARG(object, payload),
+        )
+
+    def _on_pool_error(self, exc):
+        pass
+
+    @pyqtSlot(object)
+    def _deliver(self, payload):
+        if not isinstance(payload, tuple) or len(payload) != 3:
+            return
+        path, size, png_bytes = payload
+        self._lock.lock()
+        self._inflight.discard((path, size))
+        self._lock.unlock()
+        pm = None
+        if png_bytes:
+            pm = QPixmap()
+            if not pm.loadFromData(png_bytes, "PNG"):
+                pm = None
+        if pm is not None:
             cache_key = f"mesh:{path}:{size}"
             _mesh_thumb_mutex.lock()
-            if cache_key in _mesh_thumb_cache:
-                _mesh_thumb_mutex.unlock()
-                continue
+            _mesh_thumb_cache[cache_key] = pm
             _mesh_thumb_mutex.unlock()
-            try:
-                data = load_mesh(path)
-                if data is None or len(data.vertices) < 3 or len(data.indices) < 3:
-                    continue
-                self.mesh_data_ready.emit(path, size, data.vertices, data.indices)
-            except Exception:
-                continue
+        self.mesh_data_ready.emit(path, size, pm)
+
+    def shutdown(self):
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.terminate()
+            self._pool = None
 
 
-_mesh_loader: Optional[_MeshDataLoader] = None
+def _mesh_worker_init():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-def _get_mesh_loader() -> _MeshDataLoader:
+_mesh_loader: Optional[_MeshThumbnailService] = None
+
+
+def _mesh_render_wrap(path: str, size: int):
+    from editor.mesh_thumb_worker import render_mesh_png
+    return (path, size, render_mesh_png(path, size))
+
+
+def _get_mesh_loader() -> _MeshThumbnailService:
     global _mesh_loader
     if _mesh_loader is None:
-        _mesh_loader = _MeshDataLoader()
-        _mesh_loader.start()
+        _mesh_loader = _MeshThumbnailService()
     return _mesh_loader
-
-
-def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int) -> Optional[QPixmap]:
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    if len(verts_flat) < 3 or len(idx) < 3:
-        return pm
-    pts = verts_flat.reshape(-1, 3).copy()
-    rot_y = math.radians(-45)
-    rot_x = math.radians(30)
-    cos_y, sin_y = math.cos(rot_y), math.sin(rot_y)
-    cos_x, sin_x = math.cos(rot_x), math.sin(rot_x)
-    for i in range(len(pts)):
-        x, y, z = pts[i]
-        rx = x * cos_y - z * sin_y
-        rz = x * sin_y + z * cos_y
-        ry = y * cos_x - rz * sin_x
-        rz = y * sin_x + rz * cos_x
-        pts[i] = [rx, ry, rz]
-    proj = pts[:, :2].copy()
-    cx, cy = proj.mean(axis=0)
-    proj -= [cx, cy]
-    max_ext = np.abs(proj).max()
-    if max_ext < 1e-8:
-        return pm
-    margin = max(4, size // 16)
-    s = (size - 2 * margin) / (2 * max_ext)
-    proj *= s
-    proj += [size // 2, size // 2]
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    tri_color = QColor(100, 160, 220, 40)
-    wire_color = QColor(180, 210, 240, 200)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(tri_color))
-    path = QPainterPath()
-    for i in range(0, len(idx), 3):
-        if i + 2 >= len(idx):
-            break
-        i0, i1, i2 = int(idx[i]), int(idx[i + 1]), int(idx[i + 2])
-        if i0 >= len(proj) or i1 >= len(proj) or i2 >= len(proj):
-            continue
-        x0, y0 = proj[i0]
-        x1, y1 = proj[i1]
-        x2, y2 = proj[i2]
-        path.moveTo(x0, y0)
-        path.lineTo(x1, y1)
-        path.lineTo(x2, y2)
-        path.closeSubpath()
-    p.drawPath(path)
-    p.setPen(QPen(wire_color, 1))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    for i in range(0, len(idx), 3):
-        if i + 2 >= len(idx):
-            break
-        i0, i1, i2 = int(idx[i]), int(idx[i + 1]), int(idx[i + 2])
-        if i0 >= len(proj) or i1 >= len(proj) or i2 >= len(proj):
-            continue
-        x0, y0 = proj[i0]
-        x1, y1 = proj[i1]
-        x2, y2 = proj[i2]
-        p.drawLine(int(x0), int(y0), int(x1), int(y1))
-        p.drawLine(int(x1), int(y1), int(x2), int(y2))
-        p.drawLine(int(x2), int(y2), int(x0), int(y0))
-    p.end()
-    return pm
-
-
-def _render_mesh_for_cache(path: str, size: int, verts: np.ndarray, idx: np.ndarray) -> Optional[QPixmap]:
-    cache_key = f"mesh:{path}:{size}"
-    _mesh_thumb_mutex.lock()
-    if cache_key in _mesh_thumb_cache:
-        pm = _mesh_thumb_cache[cache_key]
-        _mesh_thumb_mutex.unlock()
-        return pm
-    _mesh_thumb_mutex.unlock()
-    pm = _render_mesh_ortho(verts, idx, size)
-    if pm:
-        _mesh_thumb_mutex.lock()
-        _mesh_thumb_cache[cache_key] = pm
-        _mesh_thumb_mutex.unlock()
-    return pm
 
 
 def _get_thumbnail(path: str, size: int) -> QPixmap:
@@ -229,6 +214,23 @@ def _get_thumbnail(path: str, size: int) -> QPixmap:
         _thumbnail_cache[cache_key] = pm
         _thumbnail_mutex.unlock()
     return pm
+
+
+def _get_cached_icon(path: str, size: int) -> QIcon:
+    cache_key = f"icon:{path}:{size}"
+    _icon_mutex.lock()
+    icon = _icon_cache.get(cache_key)
+    _icon_mutex.unlock()
+    if icon is not None:
+        return icon
+    pm = _get_thumbnail(path, size)
+    if pm is None:
+        return QIcon()
+    icon = QIcon(pm)
+    _icon_mutex.lock()
+    _icon_cache[cache_key] = icon
+    _icon_mutex.unlock()
+    return icon
 
 
 def _draw_mesh_icon(size: int) -> QPixmap:
@@ -474,18 +476,21 @@ def _draw_font_thumbnail(path: str, size: int) -> QPixmap:
         painter.end()
     return pm
 
-def _get_thumbnail_raw(path: str, size: int) -> QPixmap:
+def _get_thumbnail_raw(path: str, size: int, enqueue_mesh: bool = True) -> QPixmap:
     if os.path.isdir(path):
         return _draw_folder_icon(size)
     ext = os.path.splitext(path)[1].lower()
     if ext in (".png", ".jpg", ".jpeg"):
         reader = QImageReader(path)
         if reader.canRead():
+            src = reader.size()
+            if not src.isEmpty():
+                scale = size / max(src.width(), src.height())
+                reader.setScaledSize(QSize(max(1, int(src.width() * scale)),
+                                          max(1, int(src.height() * scale))))
             img = reader.read()
-            if img:
-                pm = QPixmap.fromImage(img)
-                return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                                 Qt.TransformationMode.SmoothTransformation)
+            if img and not img.isNull():
+                return QPixmap.fromImage(img)
     if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
         cache_key = f"mesh:{path}:{size}"
         _mesh_thumb_mutex.lock()
@@ -493,7 +498,8 @@ def _get_thumbnail_raw(path: str, size: int) -> QPixmap:
         _mesh_thumb_mutex.unlock()
         if cached is not None:
             return cached
-        _get_mesh_loader().enqueue(path, size)
+        if enqueue_mesh:
+            _get_mesh_loader().enqueue(path, size)
         return _draw_mesh_icon(size)
     if ext == ".wav":
         return _draw_audio_waveform(path, size)
@@ -600,26 +606,44 @@ class _PopulateWorker(QThread):
 class _ThumbnailLoader(QThread):
     thumbnail_loaded = pyqtSignal(object, object)
 
-    def __init__(self, items: list[tuple], thumb_size: int):
+    def __init__(self, thumb_size: int):
         super().__init__()
-        self._items = items
         self._thumb_size = thumb_size
+        self._queue: list[tuple[int, str]] = []
+        self._queue_mutex = QMutex()
         self._cancelled = False
+        self._running = False
 
     def cancel(self):
         self._cancelled = True
 
+    def enqueue(self, items: list[tuple[int, str]]):
+        self._queue_mutex.lock()
+        self._queue.extend(items)
+        self._queue_mutex.unlock()
+
+    def pending_count(self) -> int:
+        self._queue_mutex.lock()
+        n = len(self._queue)
+        self._queue_mutex.unlock()
+        return n
+
     def run(self):
+        self._running = True
         batch: list[tuple[int, str]] = []
-        for idx, (full_path, filename, rel_path, file_size) in enumerate(self._items):
-            if self._cancelled:
-                return
+        while not self._cancelled:
+            self._queue_mutex.lock()
+            if not self._queue:
+                self._queue_mutex.unlock()
+                break
+            idx, full_path = self._queue.pop(0)
+            self._queue_mutex.unlock()
             cache_key = f"thumb:{full_path}:{self._thumb_size}"
             _thumbnail_mutex.lock()
             exists = cache_key in _thumbnail_cache
             _thumbnail_mutex.unlock()
             if not exists:
-                pm = _get_thumbnail_raw(full_path, self._thumb_size)
+                pm = _get_thumbnail_raw(full_path, self._thumb_size, enqueue_mesh=False)
                 if pm:
                     _thumbnail_mutex.lock()
                     _thumbnail_cache[cache_key] = pm
@@ -630,6 +654,7 @@ class _ThumbnailLoader(QThread):
                 batch.clear()
         if batch:
             self.thumbnail_loaded.emit(batch, None)
+        self._running = False
 
 
 class ResourcePickerDialog(QDialog):
@@ -689,6 +714,18 @@ class ResourcePickerDialog(QDialog):
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.itemSelectionChanged.connect(self._on_selection_changed)
         self._list.itemDoubleClicked.connect(self._accept_selection)
+        self._thumb_scroll_timer = QTimer(self)
+        self._thumb_scroll_timer.setSingleShot(True)
+        self._thumb_scroll_timer.setInterval(60)
+        self._thumb_scroll_timer.timeout.connect(self._schedule_thumbnails)
+        self._list.verticalScrollBar().valueChanged.connect(
+            lambda _: self._thumb_scroll_timer.start())
+        self._list.horizontalScrollBar().valueChanged.connect(
+            lambda _: self._thumb_scroll_timer.start())
+        self._mesh_pending = 0
+        self._mesh_loaded: set[int] = set()
+        _get_mesh_loader().mesh_data_ready.connect(
+            self._on_mesh_thumb_ready, Qt.ConnectionType.QueuedConnection)
         list_layout.addWidget(self._list)
         splitter.addWidget(list_container)
 
@@ -744,7 +781,6 @@ class ResourcePickerDialog(QDialog):
         self._list.setUpdatesEnabled(False)
         self._list.clear()
         self._list.setUpdatesEnabled(True)
-        self._pending_items: list[tuple[str, str, str, int]] = []
         self._all_items: list[tuple[str, str, str, int]] = []
         self._item_paths: dict[int, str] = {}
         self._batch_queue: list = []
@@ -752,6 +788,8 @@ class ResourcePickerDialog(QDialog):
         self._placeholder = _get_placeholder_icon()
         self._thumb_queue: list = []
         self._processing_thumbs = False
+        self._mesh_pending = 0
+        self._mesh_loaded: set[int] = set()
         self._worker = _PopulateWorker(
             self._project_root,
             self._extensions,
@@ -770,9 +808,7 @@ class ResourcePickerDialog(QDialog):
         if not self._batch_queue:
             self._processing_batch = False
             self._list.setUpdatesEnabled(True)
-            self._pending_items = self._all_items
-            if self._all_items:
-                self._start_thumbnail_loader()
+            self._start_thumbnail_loader()
             return
         batch = self._batch_queue.pop(0)
         placeholder = self._placeholder
@@ -788,17 +824,113 @@ class ResourcePickerDialog(QDialog):
         QTimer.singleShot(0, self._process_next_batch)
 
     def _start_thumbnail_loader(self):
-        items = self._pending_items
-        if not items:
+        if not hasattr(self, '_loader') or not self._loader.isRunning():
+            if hasattr(self, '_loader'):
+                self._loader.cancel()
+                self._loader.wait()
+            self._loader = _ThumbnailLoader(THUMB_SIZE)
+            self._loader.thumbnail_loaded.connect(self._on_thumbnail_loaded)
+            self._loader.start()
+        self._loaded_thumbs = set()
+        self._schedule_thumbnails(force=True)
+
+    def _visible_item_range(self) -> tuple[int, int]:
+        count = self._list.count()
+        if count == 0:
+            return 0, -1
+        vp = self._list.viewport()
+        rect = vp.rect()
+        top_index = self._list.indexAt(rect.topLeft())
+        bottom_index = self._list.indexAt(QPoint(rect.left(), rect.bottom() - 2))
+        first = top_index.row() if top_index.isValid() else 0
+        last = bottom_index.row() if bottom_index.isValid() else count - 1
+        if last < first:
+            last = first
+        buffer = 40
+        return max(0, first - buffer), min(count - 1, last + buffer)
+
+    def _schedule_thumbnails(self, force: bool = False):
+        if not hasattr(self, '_loader'):
+            self._start_thumbnail_loader()
             return
-        if hasattr(self, '_loader') and self._loader.isRunning():
-            self._loader.cancel()
-            self._loader.quit()
-            self._loader.wait()
-        self._pending_items = []
-        self._loader = _ThumbnailLoader(items, THUMB_SIZE)
-        self._loader.thumbnail_loaded.connect(self._on_thumbnail_loaded)
-        self._loader.start()
+        if not force and not self._loader.isRunning():
+            return
+        if not hasattr(self, '_loaded_thumbs'):
+            self._loaded_thumbs = set()
+        first, last = self._visible_item_range()
+        if last < first:
+            return
+        # strictly visible items (no buffer) get expensive mesh previews
+        vis_first, vis_last = self._visible_item_range_strict()
+        to_load: list[tuple[int, str]] = []
+        for idx in range(first, last + 1):
+            if idx in self._loaded_thumbs:
+                continue
+            path = self._item_paths.get(idx)
+            if not path:
+                continue
+            cache_key = f"thumb:{path}:{THUMB_SIZE}"
+            _thumbnail_mutex.lock()
+            cached = cache_key in _thumbnail_cache
+            _thumbnail_mutex.unlock()
+            self._loaded_thumbs.add(idx)
+            if cached:
+                self._thumb_queue.append((idx, path))
+            else:
+                to_load.append((idx, path))
+            if idx >= vis_first and idx <= vis_last:
+                self._maybe_enqueue_mesh_thumb(idx, path)
+        if to_load:
+            self._loader.enqueue(to_load)
+        if self._thumb_queue and not self._processing_thumbs:
+            self._processing_thumbs = True
+            QTimer.singleShot(0, self._process_thumb_batch)
+
+    def _visible_item_range_strict(self) -> tuple[int, int]:
+        count = self._list.count()
+        if count == 0:
+            return 0, -1
+        vp = self._list.viewport()
+        rect = vp.rect()
+        top_index = self._list.indexAt(rect.topLeft())
+        bottom_index = self._list.indexAt(QPoint(rect.left(), rect.bottom() - 2))
+        first = top_index.row() if top_index.isValid() else 0
+        last = bottom_index.row() if bottom_index.isValid() else count - 1
+        return max(0, first), min(count - 1, last)
+
+    def _maybe_enqueue_mesh_thumb(self, idx: int, path: str):
+        if self._mesh_pending >= _MAX_MESH_INFLIGHT:
+            return
+        if idx in self._mesh_loaded:
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in _MESH_EXTS:
+            return
+        cache_key = f"mesh:{path}:{THUMB_SIZE}"
+        _mesh_thumb_mutex.lock()
+        cached = cache_key in _mesh_thumb_cache
+        _mesh_thumb_mutex.unlock()
+        if cached:
+            self._mesh_loaded.add(idx)
+            self._thumb_queue.append((idx, path))
+            if self._thumb_queue and not self._processing_thumbs:
+                self._processing_thumbs = True
+                QTimer.singleShot(0, self._process_thumb_batch)
+            return
+        self._mesh_loaded.add(idx)
+        self._mesh_pending += 1
+        _get_mesh_loader().enqueue(path, THUMB_SIZE)
+
+    def _on_mesh_thumb_ready(self, path: str, size: int, pixmap):
+        self._mesh_pending = max(0, self._mesh_pending - 1)
+        if pixmap is None or pixmap.isNull():
+            return
+        icon = QIcon(pixmap)
+        for idx, p in self._item_paths.items():
+            if p == path and idx < self._list.count():
+                item = self._list.item(idx)
+                if item:
+                    item.setIcon(icon)
 
     def _on_thumbnail_loaded(self, batch, _):
         self._thumb_queue.extend(batch)
@@ -811,19 +943,15 @@ class ResourcePickerDialog(QDialog):
             self._processing_thumbs = False
             return
         count = 0
-        while self._thumb_queue and count < 8:
+        while self._thumb_queue and count < 60:
             idx, path = self._thumb_queue.pop(0)
             if idx < self._list.count():
-                cache_key = f"thumb:{path}:{THUMB_SIZE}"
-                _thumbnail_mutex.lock()
-                pm = _thumbnail_cache.get(cache_key)
-                _thumbnail_mutex.unlock()
-                if pm:
-                    item = self._list.item(idx)
-                    if item:
-                        item.setIcon(QIcon(pm))
+                icon = _get_cached_icon(path, THUMB_SIZE)
+                item = self._list.item(idx)
+                if item and not icon.isNull():
+                    item.setIcon(icon)
             count += 1
-        QTimer.singleShot(8, self._process_thumb_batch)
+        QTimer.singleShot(2, self._process_thumb_batch)
 
     def _on_search(self, text: str):
         self._search_timer.start()
