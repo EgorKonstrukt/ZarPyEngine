@@ -744,3 +744,73 @@ class CulverinSolver(IPhysicsSolver):
             self._joint_id_to_handle[constraint_id] = new_handle
             self._joint_handle_to_id[new_handle] = constraint_id
             spec["params"] = new_params
+
+    def create_character(
+        self,
+        pos: tuple[float, float, float],
+        height: float = 1.8,
+        radius: float = 0.4,
+        step_height: float = 0.4,
+        max_slope: float = 45.0,
+    ):
+        if self._world is None:
+            return None
+        try:
+            return self._world.create_character(
+                pos,
+                height=height,
+                radius=radius,
+                step_height=step_height,
+                max_slope=max_slope,
+            )
+        except Exception as e:
+            Logger.error(f"CulverinSolver.create_character failed: {e}")
+            return None
+
+    def move_character(self, character, velocity: tuple[float, float, float], dt: float):
+        if character is None:
+            return
+        try:
+            character.move(velocity, dt)
+        except Exception as e:
+            Logger.error(f"CulverinSolver.move_character failed: {e}")
+
+    def set_character_rotation(self, character, rot: tuple[float, float, float, float]):
+        if character is None:
+            return
+        try:
+            character.set_rotation(rot)
+        except Exception:
+            pass
+
+    def get_character_position(self, character):
+        if character is None:
+            return None
+        try:
+            return character.get_position()
+        except Exception:
+            return None
+
+    def is_character_grounded(self, character) -> bool:
+        if character is None:
+            return False
+        try:
+            return bool(character.is_grounded())
+        except Exception:
+            return False
+
+    def set_character_strength(self, character, strength: float):
+        if character is None:
+            return
+        try:
+            character.set_strength(strength)
+        except Exception:
+            pass
+
+    def destroy_character(self, character):
+        if character is None or self._world is None:
+            return
+        try:
+            self._world.destroy_body(character.handle)
+        except Exception:
+            pass

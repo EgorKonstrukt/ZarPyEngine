@@ -176,3 +176,31 @@ class IPhysicsSolver(ABC):
     @abstractmethod
     def debug_draw(self, enabled: bool):
         ...
+
+    def create_character(
+        self,
+        pos: tuple[float, float, float],
+        height: float = 1.8,
+        radius: float = 0.4,
+        step_height: float = 0.4,
+        max_slope: float = 45.0,
+    ):
+        return None
+
+    def move_character(self, character, velocity: tuple[float, float, float], dt: float):
+        pass
+
+    def set_character_rotation(self, character, rot: tuple[float, float, float, float]):
+        pass
+
+    def get_character_position(self, character):
+        return None
+
+    def is_character_grounded(self, character) -> bool:
+        return False
+
+    def set_character_strength(self, character, strength: float):
+        pass
+
+    def destroy_character(self, character):
+        pass

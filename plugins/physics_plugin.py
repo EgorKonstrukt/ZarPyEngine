@@ -113,6 +113,30 @@ class PhysicsPlugin(PluginBase):
             else:
                 Logger.info(f"PhysicsPlugin: solver {solver_name} started (shared-memory).")
 
+    def ensure_single_mode(self) -> bool:
+        if self._simulation_mode == "single" and self._solver is not None:
+            return True
+        if self._simulation_mode == "single" and self._solver is None:
+            self._init_single(*self._solver_module_class_with_settings())
+            return self._solver is not None
+        try:
+            if self._physics_process is not None:
+                self._physics_process.shutdown(5000)
+                self._physics_process = None
+        except Exception:
+            self._physics_process = None
+        self._simulation_mode = "single"
+        self._init_single(*self._solver_module_class_with_settings())
+        if self._solver is not None:
+            Logger.info("[PhysicsPlugin] Switched to single-threaded mode for in-process physics (characters).")
+        return self._solver is not None
+
+    def _solver_module_class_with_settings(self) -> tuple:
+        settings = self._get_physics_settings()
+        solver_name = settings.get("solver", "culverin")
+        sm, sc = self._solver_module_class()
+        return (sm, sc, settings, solver_name)
+
     def _init_single(self, solver_module: str, solver_class: str, settings: dict, solver_name: str):
         import importlib
         try:

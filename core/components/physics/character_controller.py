@@ -6,10 +6,55 @@
 
 from __future__ import annotations
 import math
+from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Vec3, Vec2
-from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
+from core.math.math3d import Vec3, Quat
+from core.components.inspector_meta import FieldType, InspectorField
 from core.input.input_system import Input, KeyCode
+
+try:
+    import culverin
+    from culverin import Character as CulverinCharacter
+    _HAS_CULVERIN = True
+except Exception:
+    culverin = None
+    CulverinCharacter = None
+    _HAS_CULVERIN = False
+
+
+def _quat_yaw(yaw_deg: float) -> Quat:
+    a = math.radians(yaw_deg) * 0.5
+    return Quat(0.0, math.sin(a), 0.0, math.cos(a))
+
+
+def _quat_pitch_yaw(pitch_deg: float, yaw_deg: float) -> Quat:
+    px = math.radians(pitch_deg) * 0.5
+    py = math.radians(yaw_deg) * 0.5
+    sp, cp = math.sin(px), math.cos(px)
+    sy, cy = math.sin(py), math.cos(py)
+    return Quat(sp * sy, cp * sy, -sp * cy, cp * cy)
+
+
+def _resolve_solver():
+    plugin = _get_physics_plugin()
+    if plugin is None:
+        return None
+    solver = getattr(plugin, "_solver", None)
+    if solver is not None and getattr(solver, "_world", None) is not None:
+        return solver
+    return None
+
+
+def _get_physics_plugin():
+    from core.engine.engine import Engine
+    engine = Engine.instance()
+    if engine is None:
+        return None
+    try:
+        return engine.plugin_manager.get("PhysicsPlugin")
+    except Exception:
+        return None
+
 
 @ComponentRegistry.register
 class CharacterController(Component):
@@ -46,9 +91,8 @@ class CharacterController(Component):
             InspectorField("capsule_radius", "Radius", FieldType.FLOAT, min_val=0.01, max_val=10.0),
             InspectorField("capsule_height", "Height", FieldType.FLOAT, min_val=0.01, max_val=20.0),
             InspectorField("crouch_height", "Crouch Height", FieldType.FLOAT, min_val=0.01, max_val=20.0),
-            InspectorField("step_up", "Step Up", FieldType.FLOAT, min_val=0.0, max_val=2.0),
-            InspectorField("step_down", "Step Down", FieldType.FLOAT, min_val=0.0, max_val=10.0),
-            InspectorField("ground_check_dist", "Ground Check", FieldType.FLOAT, min_val=0.001, max_val=2.0),
+            InspectorField("step_height", "Step Height", FieldType.FLOAT, min_val=0.0, max_val=2.0),
+            InspectorField("max_slope", "Max Slope", FieldType.FLOAT, min_val=0.0, max_val=90.0),
         ]
 
     def __init__(self):
@@ -77,40 +121,27 @@ class CharacterController(Component):
         self.capsule_radius: float = 0.5
         self.capsule_height: float = 2.0
         self.crouch_height: float = 1.2
-        self.step_up: float = 0.3
-        self.step_down: float = 1.0
-        self.ground_check_dist: float = 0.03
+        self.step_height: float = 0.3
+        self.max_slope: float = 45.0
 
-        self._rigidbody: Component | None = None
+        self._solver = None
+        self._character: Optional["CulverinCharacter"] = None
         self._velocity: Vec3 = Vec3.zero()
         self._pitch: float = 0.0
         self._yaw: float = 0.0
         self._is_crouching: bool = False
         self._wants_to_crouch: bool = False
         self._grounded: bool = False
-        self._ground_normal: Vec3 = Vec3.up()
         self._coyote_timer: float = 0.0
         self._jump_buffer_timer: float = 0.0
-        self._was_grounded: bool = False
         self._eye_height: float = 1.7
         self._target_eye_height: float = 1.7
-        self._air_time: float = 0.0
-        self._last_frame_speed: float = 0.0
-        self._camera_entity_id: int | None = None
-        self._ground_y: float = 0.0
+        self._camera_entity_id: Optional[str] = None
+        self._warned_no_world: bool = False
 
     @property
     def velocity(self) -> Vec3:
-        if self._rigidbody is not None:
-            return self._rigidbody.velocity
         return self._velocity
-
-    @velocity.setter
-    def velocity(self, v: Vec3):
-        if self._rigidbody is not None:
-            self._rigidbody.velocity = v
-        else:
-            self._velocity = v
 
     @property
     def is_grounded(self) -> bool:
@@ -119,6 +150,23 @@ class CharacterController(Component):
     @property
     def is_crouching(self) -> bool:
         return self._is_crouching
+
+    def _capsule_total_height(self) -> float:
+        return max(self.capsule_radius * 2.0 + 0.1, self.capsule_height)
+
+    def _create_character(self, solver, pos: Vec3):
+        total = self._capsule_total_height()
+        char = solver.create_character(
+            (pos.x, pos.y, pos.z),
+            height=total,
+            radius=self.capsule_radius,
+            step_height=self.step_height,
+            max_slope=self.max_slope,
+        )
+        if char is not None:
+            solver.set_character_rotation(char, _quat_yaw(self._yaw).to_list())
+            solver.set_character_strength(char, 1.0)
+        return char
 
     def get_move_speed(self) -> float:
         if self._is_crouching:
@@ -147,82 +195,25 @@ class CharacterController(Component):
             wish = wish.normalized()
         return wish
 
-    def _check_ground(self) -> tuple[bool, float]:
-        if not self.transform:
-            return False, 0.0
-        pos = self.transform.local_position
-        total_half = self.capsule_height * 0.5 + self.capsule_radius
-        origin = Vec3(pos.x, pos.y, pos.z)
-        dist = total_half + self.ground_check_dist
-        from core.engine.engine import Engine
-        engine = Engine.instance()
-        if not engine or not engine._scene:
-            return False, 0.0
-        for ent in engine._scene.get_all_entities():
-            if ent == self._entity or not ent.active:
-                continue
-            from core.components.physics.box_collider import BoxCollider
-            bc = ent.get_component(BoxCollider)
-            if bc and bc.enabled:
-                tr = ent.transform
-                if tr:
-                    aabb_min, aabb_max = self._box_aabb(tr, bc)
-                    entry = self._ray_aabb(origin, Vec3(0, -1, 0), aabb_min, aabb_max)
-                    if entry is not None and 0 <= entry < dist:
-                        return True, aabb_max.y
-        return False, 0.0
-
-    def _box_aabb(self, tr, bc):
-        sz = bc.scaled_size
-        c = bc.scaled_center
-        world_pos = tr.local_position + tr.local_rotation.rotate_vec3(c)
-        h = Vec3(sz.x * 0.5, sz.y * 0.5, sz.z * 0.5)
-        return (world_pos - h, world_pos + h)
-
-    def _ray_aabb(self, origin: Vec3, dir: Vec3, aabb_min: Vec3, aabb_max: Vec3) -> float | None:
-        from core._physics_utils import ray_aabb_intersect
-        t = ray_aabb_intersect(origin.x, origin.y, origin.z,
-                               dir.x, dir.y, dir.z,
-                               aabb_min.x, aabb_min.y, aabb_min.z,
-                               aabb_max.x, aabb_max.y, aabb_max.z)
-        return t if t >= 0 else None
-
     def _accelerate(self, wish_dir: Vec3, wish_speed: float, accel: float, dt: float):
-        vel = self.velocity
+        vel = self._velocity
         cur_speed = vel.dot(wish_dir)
         add = wish_speed - cur_speed
         if add <= 0:
             return
         add = min(add, accel * dt * wish_speed)
-        self.velocity = vel + wish_dir * add
+        self._velocity = vel + wish_dir * add
 
     def _apply_friction(self, dt: float):
-        vel = self.velocity
+        vel = self._velocity
         speed = vel.length()
         if speed < 0.001:
-            self.velocity = Vec3.zero()
+            self._velocity = Vec3.zero()
             return
         control = self.stop_speed if speed < self.stop_speed else speed
         drop = control * self.friction * dt
         new_speed = max(0.0, speed - drop) / speed
-        self.velocity = vel * new_speed
-
-    def _move_ground(self, dt: float):
-        wish_dir = self.get_wish_dir()
-        wish_speed = self.get_move_speed()
-        self._accelerate(wish_dir, wish_speed, self.acceleration, dt)
-        self._apply_friction(dt)
-
-    def _move_air(self, dt: float):
-        wish_dir = self.get_wish_dir()
-        wish_speed = self.get_move_speed()
-        self._accelerate(wish_dir, min(wish_speed, 30.0), self.air_acceleration, dt)
-
-    def _jump(self):
-        vel = self.velocity
-        self.velocity = Vec3(vel.x, self.jump_power, vel.z)
-        self._grounded = False
-        self._ground_normal = Vec3.up()
+        self._velocity = vel * new_speed
 
     def _update_crouch(self):
         if self._is_crouching:
@@ -244,32 +235,51 @@ class CharacterController(Component):
                 return
 
     def on_start(self):
-        from core.components.physics.rigidbody import Rigidbody
-        self._rigidbody = self._entity.get_component(Rigidbody) if self._entity else None
-        if self._rigidbody is not None:
-            self._rigidbody.use_gravity = False
-            self._rigidbody.is_kinematic = True
-        self.velocity = Vec3.zero()
+        self._solver = None
+        self._character = None
+        self._velocity = Vec3.zero()
         self._pitch = 0.0
         self._yaw = 0.0
         self._is_crouching = False
         self._wants_to_crouch = False
         self._grounded = False
-        self._ground_y = 0.0
-        self._ground_normal = Vec3.up()
         self._coyote_timer = 0.0
         self._jump_buffer_timer = 0.0
-        self._was_grounded = False
+        self._camera_entity_id = None
+        self._warned_no_world = False
         self._eye_height = self.capsule_height - 0.3
         self._target_eye_height = self._eye_height
-        self._air_time = 0.0
-        self._last_frame_speed = 0.0
-        self._camera_entity_id = None
+
         if self.camera_entity_id:
             self._camera_entity_id = self.camera_entity_id
 
+        if not _HAS_CULVERIN:
+            return
+
+        self._solver = _resolve_solver()
+        if self._solver is None:
+            try:
+                plugin = self._get_physics_plugin()
+                if plugin is not None and plugin.ensure_single_mode():
+                    self._solver = _resolve_solver()
+            except Exception as e:
+                from core.foundation.logger import Logger
+                Logger.warning(f"CharacterController: failed to switch to single physics mode: {e}")
+
+        if self._solver is None:
+            return
+
+        tr = self.transform
+        start = tr.local_position if tr else Vec3.zero()
+        self._character = self._create_character(self._solver, start)
+        if tr and self._character is not None:
+            tr.local_rotation = _quat_yaw(self._yaw)
+
     def on_disable(self):
         Input.set_cursor_locked(False)
+        if self._solver is not None and self._character is not None:
+            self._solver.destroy_character(self._character)
+            self._character = None
 
     def on_update(self, dt: float):
         if not self._entity or not self.enabled:
@@ -283,29 +293,44 @@ class CharacterController(Component):
     def on_fixed_update(self, dt: float):
         if not self._entity or not self.enabled:
             return
+        char = self._character
+        if char is None or self._solver is None:
+            if self._solver is None:
+                self._solver = _resolve_solver()
+                if self._solver is None:
+                    plugin = _get_physics_plugin()
+                    if plugin is not None and plugin.ensure_single_mode():
+                        self._solver = _resolve_solver()
+            if self._solver is not None and self.transform is not None:
+                self._character = self._create_character(self._solver, self.transform.local_position)
+                if self.transform:
+                    self.transform.local_rotation = _quat_yaw(self._yaw)
+            if self._character is None:
+                if not self._warned_no_world:
+                    from core.foundation.logger import Logger
+                    Logger.warning(
+                        "CharacterController: physics world is not available in-process. "
+                        "Use single-threaded physics mode (simulation_mode='single') for characters."
+                    )
+                    self._warned_no_world = True
+                return
+            char = self._character
+
         tr = self.transform
         if not tr:
             return
 
-        self._was_grounded = self._grounded
-        self._grounded, self._ground_y = self._check_ground()
+        self._grounded = self._solver.is_character_grounded(char)
 
         if self._grounded:
             self._coyote_timer = self.coyote_time
-            self._air_time = 0.0
         else:
             self._coyote_timer -= dt
-            self._air_time += dt
 
         if Input.GetKeyDown(KeyCode.SPACE):
             self._jump_buffer_timer = self.jump_buffer_time
         else:
             self._jump_buffer_timer -= dt
-
-        if self._jump_buffer_timer > 0.0 and self._coyote_timer > 0.0:
-            self._jump()
-            self._jump_buffer_timer = 0.0
-            self._coyote_timer = 0.0
 
         if Input.GetKeyDown(KeyCode.C):
             self._wants_to_crouch = not self._wants_to_crouch
@@ -316,35 +341,32 @@ class CharacterController(Component):
         if not self.crouch_toggle:
             self._is_crouching = Input.GetKey(KeyCode.C)
 
-        vel = self.velocity
+        can_jump = self._jump_buffer_timer > 0.0 and self._coyote_timer > 0.0
+        if can_jump:
+            vel = self._velocity
+            self._velocity = Vec3(vel.x, self.jump_power, vel.z)
+            self._jump_buffer_timer = 0.0
+            self._coyote_timer = 0.0
+
+        vel = self._velocity
         if self._grounded:
-            self._move_ground(dt)
-            vel = self.velocity
+            self._accelerate(self.get_wish_dir(), self.get_move_speed(), self.acceleration, dt)
+            self._apply_friction(dt)
+            vel = self._velocity
             if vel.y < 0.0:
                 vel = Vec3(vel.x, 0.0, vel.z)
-                self.velocity = vel
+            self._velocity = vel
         else:
-            vel = Vec3(vel.x, vel.y - self.gravity * dt, vel.z)
-            self.velocity = vel
-            self._move_air(dt)
-            vel = self.velocity
+            self._velocity = Vec3(vel.x, vel.y - self.gravity * dt, vel.z)
+            self._accelerate(self.get_wish_dir(), self.get_move_speed(), self.air_acceleration, dt)
+            vel = self._velocity
 
-        pos = tr.local_position
-        new_pos = Vec3(
-            pos.x + vel.x * dt,
-            pos.y + vel.y * dt,
-            pos.z + vel.z * dt,
-        )
+        self._solver.move_character(char, (vel.x, vel.y, vel.z), dt)
 
-        total_half = self.capsule_height * 0.5 + self.capsule_radius
-        if self._grounded:
-            min_y = self._ground_y + total_half
-            if new_pos.y < min_y:
-                new_pos = Vec3(new_pos.x, min_y, new_pos.z)
-                vel = Vec3(vel.x, 0.0, vel.z)
-
-        tr.local_position = new_pos
-        self.velocity = vel
+        pos = self._solver.get_character_position(char)
+        if pos is not None:
+            tr.local_position = Vec3(pos[0], pos[1], pos[2])
+        self._solver.set_character_rotation(char, _quat_yaw(self._yaw).to_list())
 
     def _update_camera(self):
         if self._camera_entity_id is None:
@@ -362,22 +384,15 @@ class CharacterController(Component):
         if not cam_tr or not player_tr:
             return
 
-        half_pitch = math.radians(self._pitch * 0.5)
-        half_yaw = math.radians(self._yaw * 0.5)
-        cp = math.cos(half_pitch)
-        sp = math.sin(half_pitch)
-        cy = math.cos(half_yaw)
-        sy = math.sin(half_yaw)
-        from core.math.math3d import Quat
-
         cam_is_child = cam_tr._entity.parent is self._entity if cam_tr._entity else False
 
         if cam_is_child:
             cam_tr.local_position = Vec3(0, self._eye_height, 0)
-            cam_tr.local_rotation = Quat(sp, 0, 0, cp)
+            px = math.radians(self._pitch) * 0.5
+            cam_tr.local_rotation = Quat(math.sin(px), 0.0, 0.0, math.cos(px))
         else:
             cam_tr.local_position = player_tr.local_position + Vec3(0, self._eye_height, 0)
-            cam_tr.local_rotation = Quat(sp * cy, cp * sy, -sp * sy, cp * cy)
+            cam_tr.local_rotation = _quat_pitch_yaw(self._pitch, self._yaw)
 
     def _handle_mouse_look(self, dt: float):
         if not self._entity:
@@ -396,11 +411,7 @@ class CharacterController(Component):
 
         tr = self.transform
         if tr:
-            half_yaw = math.radians(self._yaw * 0.5)
-            cy = math.cos(half_yaw)
-            sy = math.sin(half_yaw)
-            from core.math.math3d import Quat
-            tr.local_rotation = Quat(0, sy, 0, cy)
+            tr.local_rotation = _quat_yaw(self._yaw)
 
     def serialize(self) -> dict:
         d = super().serialize()
@@ -415,8 +426,8 @@ class CharacterController(Component):
             "invert_y": self.invert_y, "camera_entity_id": self.camera_entity_id,
             "gravity": self.gravity,
             "capsule_radius": self.capsule_radius, "capsule_height": self.capsule_height,
-            "crouch_height": self.crouch_height, "step_up": self.step_up,
-            "step_down": self.step_down, "ground_check_dist": self.ground_check_dist,
+            "crouch_height": self.crouch_height, "step_height": self.step_height,
+            "max_slope": self.max_slope,
         })
         return d
 
@@ -429,7 +440,7 @@ class CharacterController(Component):
                      "jump_buffer_time", "coyote_time", "crouch_speed_mult",
                      "crouch_eye_offset", "sensitivity", "gravity",
                      "capsule_radius", "capsule_height", "crouch_height",
-                     "step_up", "step_down", "ground_check_dist"):
+                     "step_height", "max_slope"):
             setattr(cc, key, data.get(key, getattr(cc, key)))
         cc.crouch_toggle = data.get("crouch_toggle", cc.crouch_toggle)
         cc.invert_y = data.get("invert_y", cc.invert_y)
