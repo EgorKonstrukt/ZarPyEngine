@@ -35,16 +35,6 @@ def _quat_pitch_yaw(pitch_deg: float, yaw_deg: float) -> Quat:
     return Quat(sp * sy, cp * sy, -sp * cy, cp * cy)
 
 
-def _resolve_solver():
-    plugin = _get_physics_plugin()
-    if plugin is None:
-        return None
-    solver = getattr(plugin, "_solver", None)
-    if solver is not None and getattr(solver, "_world", None) is not None:
-        return solver
-    return None
-
-
 def _get_physics_plugin():
     from core.engine.engine import Engine
     engine = Engine.instance()
@@ -54,6 +44,16 @@ def _get_physics_plugin():
         return engine.plugin_manager.get("PhysicsPlugin")
     except Exception:
         return None
+
+
+def _resolve_solver():
+    plugin = _get_physics_plugin()
+    if plugin is None:
+        return None
+    solver = getattr(plugin, "_solver", None)
+    if solver is not None and getattr(solver, "_world", None) is not None:
+        return solver
+    return None
 
 
 @ComponentRegistry.register
@@ -84,8 +84,24 @@ class CharacterController(Component):
             InspectorField("crouch_eye_offset", "Crouch Eye Offset", FieldType.FLOAT, min_val=0.0, max_val=2.0),
             InspectorField("", "Mouse Look", FieldType.HEADER),
             InspectorField("camera_entity_id", "Camera", FieldType.GAMEOBJECT),
-            InspectorField("sensitivity", "Mouse Sensitivity", FieldType.FLOAT, min_val=0.0, max_val=50.0),
+            InspectorField("sensitivity", "Sensitivity", FieldType.FLOAT, min_val=0.0, max_val=50.0),
+            InspectorField("sensitivity_x", "Sensitivity X", FieldType.FLOAT, min_val=0.0, max_val=50.0),
+            InspectorField("sensitivity_y", "Sensitivity Y", FieldType.FLOAT, min_val=0.0, max_val=50.0),
+            InspectorField("invert_x", "Invert X", FieldType.BOOL),
             InspectorField("invert_y", "Invert Y", FieldType.BOOL),
+            InspectorField("mouse_smoothing", "Mouse Smoothing", FieldType.FLOAT, min_val=0.0, max_val=1.0),
+            InspectorField("smoothing_strength", "Smoothing Strength", FieldType.FLOAT, min_val=0.0, max_val=60.0),
+            InspectorField("cursor_lock_on_start", "Lock Cursor On Start", FieldType.BOOL),
+            InspectorField("unlock_key", "Unlock Key", FieldType.KEYBINDING),
+            InspectorField("", "Camera", FieldType.HEADER),
+            InspectorField("camera_fov", "Field of View", FieldType.FLOAT, min_val=1.0, max_val=179.0),
+            InspectorField("camera_near", "Near Plane", FieldType.FLOAT, min_val=0.001, max_val=100.0),
+            InspectorField("camera_far", "Far Plane", FieldType.FLOAT, min_val=0.1, max_val=100000.0),
+            InspectorField("scroll_zoom", "Scroll Zoom", FieldType.BOOL),
+            InspectorField("min_fov", "Min FOV (Zoom)", FieldType.FLOAT, min_val=1.0, max_val=179.0),
+            InspectorField("max_fov", "Max FOV", FieldType.FLOAT, min_val=1.0, max_val=179.0),
+            InspectorField("aim_fov", "Aim FOV", FieldType.FLOAT, min_val=1.0, max_val=179.0),
+            InspectorField("aim_zoom_speed", "Aim Zoom Speed", FieldType.FLOAT, min_val=0.0, max_val=30.0),
             InspectorField("", "Physics", FieldType.HEADER),
             InspectorField("gravity", "Gravity", FieldType.FLOAT, min_val=0.0, max_val=5000.0),
             InspectorField("capsule_radius", "Radius", FieldType.FLOAT, min_val=0.01, max_val=10.0),
@@ -93,6 +109,7 @@ class CharacterController(Component):
             InspectorField("crouch_height", "Crouch Height", FieldType.FLOAT, min_val=0.01, max_val=20.0),
             InspectorField("step_height", "Step Height", FieldType.FLOAT, min_val=0.0, max_val=2.0),
             InspectorField("max_slope", "Max Slope", FieldType.FLOAT, min_val=0.0, max_val=90.0),
+            InspectorField("push_strength", "Push Strength", FieldType.FLOAT, min_val=0.0, max_val=200.0),
         ]
 
     def __init__(self):
@@ -114,8 +131,23 @@ class CharacterController(Component):
         self.crouch_eye_offset: float = 0.6
 
         self.sensitivity: float = 5.0
+        self.sensitivity_x: float = 5.0
+        self.sensitivity_y: float = 5.0
+        self.invert_x: bool = False
         self.invert_y: bool = False
-        self.camera_entity_id: str = ""
+        self.mouse_smoothing: float = 0.0
+        self.smoothing_strength: float = 18.0
+        self.cursor_lock_on_start: bool = True
+        self.unlock_key: int = KeyCode.ESCAPE
+
+        self.camera_fov: float = 60.0
+        self.camera_near: float = 0.05
+        self.camera_far: float = 1000.0
+        self.scroll_zoom: bool = True
+        self.min_fov: float = 20.0
+        self.max_fov: float = 90.0
+        self.aim_fov: float = 45.0
+        self.aim_zoom_speed: float = 12.0
 
         self.gravity: float = 800.0
         self.capsule_radius: float = 0.5
@@ -123,12 +155,15 @@ class CharacterController(Component):
         self.crouch_height: float = 1.2
         self.step_height: float = 0.3
         self.max_slope: float = 45.0
+        self.push_strength: float = 30.0
 
         self._solver = None
         self._character: Optional["CulverinCharacter"] = None
         self._velocity: Vec3 = Vec3.zero()
         self._pitch: float = 0.0
         self._yaw: float = 0.0
+        self._target_pitch: float = 0.0
+        self._target_yaw: float = 0.0
         self._is_crouching: bool = False
         self._wants_to_crouch: bool = False
         self._grounded: bool = False
@@ -137,7 +172,9 @@ class CharacterController(Component):
         self._eye_height: float = 1.7
         self._target_eye_height: float = 1.7
         self._camera_entity_id: Optional[str] = None
+        self._current_fov: float = 60.0
         self._warned_no_world: bool = False
+        self._cursor_locked: bool = False
 
     @property
     def velocity(self) -> Vec3:
@@ -165,7 +202,7 @@ class CharacterController(Component):
         )
         if char is not None:
             solver.set_character_rotation(char, _quat_yaw(self._yaw).to_list())
-            solver.set_character_strength(char, 1.0)
+            solver.set_character_strength(char, self.push_strength)
         return char
 
     def get_move_speed(self) -> float:
@@ -234,12 +271,21 @@ class CharacterController(Component):
                 self._camera_entity_id = ent.id
                 return
 
+    def _set_cursor_locked(self, locked: bool):
+        if locked == self._cursor_locked:
+            return
+        self._cursor_locked = locked
+        Input.set_cursor_locked(locked)
+        Input.set_cursor_visible(not locked)
+
     def on_start(self):
         self._solver = None
         self._character = None
         self._velocity = Vec3.zero()
         self._pitch = 0.0
         self._yaw = 0.0
+        self._target_pitch = 0.0
+        self._target_yaw = 0.0
         self._is_crouching = False
         self._wants_to_crouch = False
         self._grounded = False
@@ -247,6 +293,8 @@ class CharacterController(Component):
         self._jump_buffer_timer = 0.0
         self._camera_entity_id = None
         self._warned_no_world = False
+        self._cursor_locked = False
+        self._current_fov = self.camera_fov
         self._eye_height = self.capsule_height - 0.3
         self._target_eye_height = self._eye_height
 
@@ -258,13 +306,9 @@ class CharacterController(Component):
 
         self._solver = _resolve_solver()
         if self._solver is None:
-            try:
-                plugin = self._get_physics_plugin()
-                if plugin is not None and plugin.ensure_single_mode():
-                    self._solver = _resolve_solver()
-            except Exception as e:
-                from core.foundation.logger import Logger
-                Logger.warning(f"CharacterController: failed to switch to single physics mode: {e}")
+            plugin = _get_physics_plugin()
+            if plugin is not None and plugin.ensure_single_mode():
+                self._solver = _resolve_solver()
 
         if self._solver is None:
             return
@@ -275,8 +319,11 @@ class CharacterController(Component):
         if tr and self._character is not None:
             tr.local_rotation = _quat_yaw(self._yaw)
 
+        if self.cursor_lock_on_start:
+            self._set_cursor_locked(True)
+
     def on_disable(self):
-        Input.set_cursor_locked(False)
+        self._set_cursor_locked(False)
         if self._solver is not None and self._character is not None:
             self._solver.destroy_character(self._character)
             self._character = None
@@ -284,11 +331,13 @@ class CharacterController(Component):
     def on_update(self, dt: float):
         if not self._entity or not self.enabled:
             return
+        if Input.GetKeyDown(self.unlock_key):
+            self._set_cursor_locked(not self._cursor_locked)
         self._handle_mouse_look(dt)
         self._update_crouch()
         if self._camera_entity_id is None:
             self._find_camera()
-        self._update_camera()
+        self._update_camera(dt)
 
     def on_fixed_update(self, dt: float):
         if not self._entity or not self.enabled:
@@ -368,7 +417,7 @@ class CharacterController(Component):
             tr.local_position = Vec3(pos[0], pos[1], pos[2])
         self._solver.set_character_rotation(char, _quat_yaw(self._yaw).to_list())
 
-    def _update_camera(self):
+    def _update_camera(self, dt: float):
         if self._camera_entity_id is None:
             return
         from core.engine.engine import Engine
@@ -384,6 +433,11 @@ class CharacterController(Component):
         if not cam_tr or not player_tr:
             return
 
+        cam_comp = cam_ent.get_component(_CAMERA_TYPE) if (_CAMERA_TYPE is not None) else None
+
+        if cam_comp is not None:
+            self._apply_camera_settings(cam_comp, dt)
+
         cam_is_child = cam_tr._entity.parent is self._entity if cam_tr._entity else False
 
         if cam_is_child:
@@ -394,20 +448,49 @@ class CharacterController(Component):
             cam_tr.local_position = player_tr.local_position + Vec3(0, self._eye_height, 0)
             cam_tr.local_rotation = _quat_pitch_yaw(self._pitch, self._yaw)
 
+    def _apply_camera_settings(self, cam_comp, dt: float):
+        scroll = Input.mouseScrollDelta
+        if self.scroll_zoom and scroll is not None:
+            self._current_fov -= scroll[1] * 2.0
+            self._current_fov = max(self.min_fov, min(self.max_fov, self._current_fov))
+
+        aiming = Input.GetKey(KeyCode.MOUSE_RIGHT)
+        target_fov = self.aim_fov if aiming else self.camera_fov
+        rate = min(1.0, self.aim_zoom_speed * dt)
+        self._current_fov += (target_fov - self._current_fov) * rate
+        self._current_fov = max(1.0, min(179.0, self._current_fov))
+
+        cam_comp.fov = self._current_fov
+        cam_comp.near = self.camera_near
+        cam_comp.far = self.camera_far
+
     def _handle_mouse_look(self, dt: float):
         if not self._entity:
             return
         dx, dy = Input.mouseDelta
         if abs(dx) < 0.001 and abs(dy) < 0.001:
             return
-        yaw_speed = self.sensitivity * 0.022
-        pitch_speed = self.sensitivity * 0.022
-        self._yaw -= dx * yaw_speed
+        sx = self.sensitivity_x if self.sensitivity_x > 0.0 else self.sensitivity
+        sy = self.sensitivity_y if self.sensitivity_y > 0.0 else self.sensitivity
+        yaw_speed = sx * 0.022
+        pitch_speed = sy * 0.022
+        self._target_yaw -= dx * yaw_speed
+        if self.invert_x:
+            self._target_yaw = -self._target_yaw
         pitch_delta = dy * pitch_speed
         if self.invert_y:
             pitch_delta = -pitch_delta
-        self._pitch -= pitch_delta
-        self._pitch = max(-89.0, min(89.0, self._pitch))
+        self._target_pitch -= pitch_delta
+        self._target_pitch = max(-89.0, min(89.0, self._target_pitch))
+
+        smoothing = self.mouse_smoothing
+        if smoothing <= 0.0:
+            self._yaw = self._target_yaw
+            self._pitch = self._target_pitch
+        else:
+            k = min(1.0, self.smoothing_strength * dt)
+            self._yaw += (self._target_yaw - self._yaw) * k
+            self._pitch += (self._target_pitch - self._pitch) * k
 
         tr = self.transform
         if tr:
@@ -423,11 +506,17 @@ class CharacterController(Component):
             "jump_buffer_time": self.jump_buffer_time, "coyote_time": self.coyote_time,
             "crouch_toggle": self.crouch_toggle, "crouch_speed_mult": self.crouch_speed_mult,
             "crouch_eye_offset": self.crouch_eye_offset, "sensitivity": self.sensitivity,
-            "invert_y": self.invert_y, "camera_entity_id": self.camera_entity_id,
+            "sensitivity_x": self.sensitivity_x, "sensitivity_y": self.sensitivity_y,
+            "invert_x": self.invert_x, "invert_y": self.invert_y,
+            "mouse_smoothing": self.mouse_smoothing, "smoothing_strength": self.smoothing_strength,
+            "cursor_lock_on_start": self.cursor_lock_on_start, "unlock_key": self.unlock_key,
+            "camera_fov": self.camera_fov, "camera_near": self.camera_near, "camera_far": self.camera_far,
+            "scroll_zoom": self.scroll_zoom, "min_fov": self.min_fov, "max_fov": self.max_fov,
+            "aim_fov": self.aim_fov, "aim_zoom_speed": self.aim_zoom_speed,
             "gravity": self.gravity,
             "capsule_radius": self.capsule_radius, "capsule_height": self.capsule_height,
             "crouch_height": self.crouch_height, "step_height": self.step_height,
-            "max_slope": self.max_slope,
+            "max_slope": self.max_slope, "push_strength": self.push_strength,
         })
         return d
 
@@ -438,11 +527,31 @@ class CharacterController(Component):
         for key in ("walk_speed", "run_speed", "crouch_speed", "acceleration",
                      "air_acceleration", "friction", "stop_speed", "jump_power",
                      "jump_buffer_time", "coyote_time", "crouch_speed_mult",
-                     "crouch_eye_offset", "sensitivity", "gravity",
+                     "crouch_eye_offset", "sensitivity", "sensitivity_x", "sensitivity_y",
+                     "camera_near", "camera_far", "min_fov", "max_fov",
+                     "aim_fov", "aim_zoom_speed", "gravity",
                      "capsule_radius", "capsule_height", "crouch_height",
-                     "step_height", "max_slope"):
+                     "step_height", "max_slope", "push_strength", "smoothing_strength"):
             setattr(cc, key, data.get(key, getattr(cc, key)))
-        cc.crouch_toggle = data.get("crouch_toggle", cc.crouch_toggle)
-        cc.invert_y = data.get("invert_y", cc.invert_y)
+        for bkey in ("crouch_toggle", "invert_x", "invert_y", "scroll_zoom",
+                     "cursor_lock_on_start"):
+            setattr(cc, bkey, data.get(bkey, getattr(cc, bkey)))
+        cc.camera_fov = data.get("camera_fov", cc.camera_fov)
+        cc.mouse_smoothing = data.get("mouse_smoothing", cc.mouse_smoothing)
+        cc.unlock_key = data.get("unlock_key", cc.unlock_key)
         cc.camera_entity_id = data.get("camera_entity_id", "")
         return cc
+
+
+_CAMERA_TYPE = None
+def _load_camera_type():
+    global _CAMERA_TYPE
+    if _CAMERA_TYPE is not None:
+        return _CAMERA_TYPE
+    try:
+        from core.components.rendering.cameras.camera import Camera
+        _CAMERA_TYPE = Camera
+    except Exception:
+        _CAMERA_TYPE = None
+    return _CAMERA_TYPE
+_load_camera_type()
