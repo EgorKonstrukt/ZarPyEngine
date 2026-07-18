@@ -472,9 +472,7 @@ def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubl
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setMinimumWidth(scale(80))
     lbl.setWordWrap(True)
-    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
@@ -495,9 +493,7 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setMinimumWidth(scale(80))
     lbl.setWordWrap(True)
-    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:
@@ -525,9 +521,7 @@ def make_vec4_row(label: str, vec: Vec4, callback) -> tuple[QWidget, list[QDoubl
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(2)
     lbl = QLabel(label)
-    lbl.setMinimumWidth(scale(80))
     lbl.setWordWrap(True)
-    lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z"), (vec.w, "W")]:
@@ -546,9 +540,7 @@ def make_vec2_slider_row(label: str, vec: Vec2, callback, lo=0.0, hi=1.0) -> tup
     layout.setSpacing(2)
     if label:
         lbl = QLabel(label)
-        lbl.setMinimumWidth(scale(80))
         lbl.setWordWrap(True)
-        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
@@ -569,9 +561,7 @@ def make_vec3_slider_row(label: str, vec: Vec3, callback, lo=0.0, hi=1.0) -> tup
     layout.setSpacing(2)
     if label:
         lbl = QLabel(label)
-        lbl.setMinimumWidth(scale(80))
         lbl.setWordWrap(True)
-        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         layout.addWidget(lbl)
     spinboxes = []
     for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:

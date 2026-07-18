@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QDoubleSpinBox, QSpinBox, \
-    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy
+    QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy, QFormLayout
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
 from core.config.editor_scale import scale, scale_xy
@@ -88,9 +88,12 @@ class ComponentWidget(QWidget):
         main_layout.addWidget(self._header_widget)
         self._content_widget = QWidget()
         self._content_widget.setObjectName("compBody")
-        self._layout = QVBoxLayout(self._content_widget)
+        self._layout = QFormLayout(self._content_widget)
         self._layout.setContentsMargins(8, 6, 8, 6)
         self._layout.setSpacing(3)
+        self._layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self._layout.setHorizontalSpacing(8)
         main_layout.addWidget(self._content_widget)
         self.setAcceptDrops(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -359,25 +362,35 @@ class ComponentWidget(QWidget):
             r.setVisible(v)
 
     def _add_field(self, label: str, widget: QWidget, prop_name: str = "", toggle_field: str = ""):
-        row = QWidget()
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(4)
-        lbl = QLabel(label)
-        lbl.setMinimumWidth(scale(100))
-        lbl.setWordWrap(True)
-        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        rl.addWidget(lbl, 0)
-        rl.addWidget(widget, 1)
         if prop_name:
             comp_type = type(self._component).__name__
             src_path = get_component_source_path(type(self._component))
             line_num = get_property_line_number(type(self._component), prop_name)
             source_lbl = make_clickable_label("src", lambda sp=src_path, ln=line_num: self._show_source(sp, ln, comp_type, prop_name))
-            rl.addWidget(source_lbl)
-        self._layout.addWidget(row)
+            field_widget = QWidget()
+            fl = QHBoxLayout(field_widget)
+            fl.setContentsMargins(0, 0, 0, 0)
+            fl.setSpacing(4)
+            fl.addWidget(widget, 1)
+            fl.addWidget(source_lbl)
+            field_widget._field_child = widget
+            lbl = QLabel(label)
+            lbl.setWordWrap(True)
+            self._layout.addRow(lbl, field_widget)
+            if toggle_field:
+                self._toggle_rows.setdefault(toggle_field, []).append(field_widget)
+            return
+        if label:
+            lbl = QLabel(label)
+            lbl.setWordWrap(True)
+            self._layout.addRow(lbl, widget)
+        else:
+            self._layout.addRow(widget)
         if toggle_field:
-            self._toggle_rows.setdefault(toggle_field, []).append(row)
+            row = self._layout.itemAt(self._layout.rowCount() - 1, QFormLayout.ItemRole.FieldRole)
+            field_item = row.widget() if row else None
+            if field_item is not None:
+                self._toggle_rows.setdefault(toggle_field, []).append(field_item)
 
     def _build_field_from_meta(self, field):
         c = self._component
@@ -882,7 +895,6 @@ class ComponentWidget(QWidget):
         item_label = self._list_item_label(prop_name, index)
         if item_label:
             lbl = QLabel(item_label)
-            lbl.setMinimumWidth(scale(90))
             lbl.setWordWrap(True)
             lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             rl.addWidget(lbl, 0)
