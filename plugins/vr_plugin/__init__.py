@@ -10,6 +10,7 @@ import ctypes
 import time
 import types
 import numpy as np
+import moderngl
 
 from core.foundation.plugin_manager import PluginBase
 from core.math.math3d import Mat4, Vec3
@@ -24,7 +25,6 @@ class VRPlugin(PluginBase):
         super().__init__()
         self._viewport = None
         self._original_paintGL = None
-        self._vr_renderer = None
         self._vr_active = False
         self._dock_widget = None
 
@@ -196,25 +196,20 @@ class VRPlugin(PluginBase):
         from plugins.vr_plugin import vr_core
         if not self._vr_active:
             return False
-        if not vr_core.session_running() and self._vr_renderer is None:
-            return False
         vr_core.poll_xr_events()
-        if vr_core.session_running() and self._vr_renderer is None:
-            try:
-                self._vr_renderer = vr_core.VRRenderer(vp._ctx)
-            except Exception:
-                pass
-        if not self._vr_renderer:
+        if not vr_core.session_running():
             return False
-        if vr_core.session_running():
-            vr_core.sync_hmd_pose()
+        rnd = vr_core.get_renderer()
+        if rnd is None:
+            return False
+        if not vr_core.sync_hmd_pose():
+            return False
         cam = vp._cam
         eyes = vr_core.get_eye_transforms(
             (cam.position.x, cam.position.y, cam.position.z),
             math.radians(cam.yaw),
             math.radians(cam.pitch),
         )
-        rnd = self._vr_renderer
         for eye in eyes:
             efbo = rnd.eye_fbo(eye['eye_idx'])
             efbo.fbo.use()
@@ -249,8 +244,11 @@ class VRPlugin(PluginBase):
                     gl.BindFramebuffer(0x8D40, 0)
                     gl.DeleteFramebuffers(1, blit_fbo)
                     sc.release_image()
-            except Exception:
-                pass
+            except Exception as _blit_err:
+                from core.foundation.logger import Logger
+                Logger.error(f'[VR] Swapchain blit error: {_blit_err}')
+        vp._bind_screen_fbo()
+        vp._ctx.viewport = (0, 0, fw, fh)
         rnd.compose_to_screen(vp._screen_fbo, fw, fh)
         vr_core.end_xr_frame()
         vp._bind_screen_fbo()
@@ -263,12 +261,12 @@ class VRPlugin(PluginBase):
         if self._original_paintGL and self._viewport:
             self._viewport.paintGL = self._original_paintGL
             self._viewport.update()
-        if self._vr_renderer is not None:
+        r = vr_core.get_renderer()
+        if r is not None:
             try:
-                self._vr_renderer.release()
+                r.release()
             except Exception:
                 pass
-            self._vr_renderer = None
         vr_core.shutdown()
         self._vr_active = False
         from core.foundation.logger import Logger

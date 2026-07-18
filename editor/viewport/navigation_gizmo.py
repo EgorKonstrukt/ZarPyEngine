@@ -440,7 +440,7 @@ def draw_axis_gizmo_api(vp, vp_mat):
     ends = np.empty((num_lines, 3), dtype=np.float32)
     cols = np.empty((num_lines, 4), dtype=np.float32)
     for i, (direction, color) in enumerate(zip(_WORLD_AXES, base_colors)):
-        if i == vp._axis_gizmo_hover:
+        if i == getattr(vp, '_axis_gizmo_hover', None):
             col = hover_col
         else:
             col = color

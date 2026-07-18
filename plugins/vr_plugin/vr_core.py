@@ -224,6 +224,7 @@ class VRState:
         self._eye_quats = [(0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0)]
         self._session_running = False
         self._frame_state = None
+        self._frame_begun = False
         self._swapchains: list = []
         self._display_time = 0
         self._binding = None
@@ -251,6 +252,8 @@ def _load_gl_funcs():
     if _gl is not None:
         return _gl
     lib = ctypes.windll.opengl32
+    lib.wglGetProcAddress.restype = ctypes.c_void_p
+    lib.wglGetProcAddress.argtypes = [ctypes.c_char_p]
     def _get(name, restype, *argtypes):
         ptr = lib.wglGetProcAddress(name.encode())
         if not ptr:
@@ -378,6 +381,7 @@ def initialize(ctx: moderngl.Context) -> bool:
     if _vr_state.active:
         return True
     try:
+        _vr_toggle._ctx = ctx
         hdc, hglrc = _get_wgl_handles()
         if hdc is None or hglrc is None:
             return False
@@ -448,8 +452,11 @@ def _create_swapchains():
             VRState.EYE_TEX_H = h
             sc = VREyeSwapchain(_vr_state.session, w, h)
             _vr_state._swapchains.append(sc)
-    except Exception:
-        pass
+        from core.foundation.logger import Logger
+        Logger.info(f'[VR] Swapchains created {VRState.EYE_TEX_W}x{VRState.EYE_TEX_H}')
+    except Exception as _sc_err:
+        from core.foundation.logger import Logger
+        Logger.error(f'[VR] Swapchain creation failed: {_sc_err}')
 
 
 def shutdown():
@@ -491,6 +498,8 @@ def shutdown():
     _vr_state.instance = None
     _vr_state.space = None
     _vr_state.system_id = None
+    _vr_toggle.renderer = None
+    _vr_toggle.enabled = False
 
 
 def _sync_controller_input():
@@ -860,6 +869,7 @@ class VRRenderer:
 
     def compose_to_screen(self, screen_fbo, wnd_w: int, wnd_h: int):
         screen_fbo.use()
+        self._ctx.viewport = (0, 0, wnd_w, wnd_h)
         self._ctx.clear(0.0, 0.0, 0.0)
         self._fbos[EYE_LEFT].tex.use(location=0)
         self._fbos[EYE_RIGHT].tex.use(location=1)
@@ -883,7 +893,6 @@ poll_xr_events_warned = False
 
 
 def poll_xr_events():
-    global poll_xr_events_warned
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state.instance):
         return
     try:
@@ -894,12 +903,18 @@ def poll_xr_events():
                 break
             if event.type == xr.StructureType.EVENT_DATA_SESSION_STATE_CHANGED:
                 try:
+                    if isinstance(event, xr.EventDataSessionStateChanged):
+                        ev = event
+                    else:
+                        ev = ctypes.cast(
+                            ctypes.addressof(event),
+                            ctypes.POINTER(xr.EventDataSessionStateChanged)
+                        ).contents
+                except Exception:
                     ev = ctypes.cast(
-                        ctypes.addressof(event) if not isinstance(event, xr.EventDataSessionStateChanged) else ctypes.pointer(event),
+                        ctypes.addressof(event),
                         ctypes.POINTER(xr.EventDataSessionStateChanged)
                     ).contents
-                except Exception:
-                    break
                 if ev.state == xr.SessionState.READY and not _vr_state._session_running:
                     try:
                         xr.begin_session(
@@ -908,29 +923,35 @@ def poll_xr_events():
                         )
                         _vr_state._session_running = True
                         _create_swapchains()
-                        poll_xr_events_warned = False
+                        if _vr_toggle.renderer is not None:
+                            _vr_toggle.renderer.release()
+                        _vr_toggle.renderer = VRRenderer(_vr_toggle._ctx)
                         from core.foundation.logger import Logger
-                        Logger.info('[VR] OpenXR session started.')
-                    except Exception:
-                        pass
+                        Logger.info('[VR] Session started, swapchains ready.')
+                    except Exception as e:
+                        from core.foundation.logger import Logger
+                        Logger.error(f'[VR] begin_session failed: {e}')
                 elif ev.state in (xr.SessionState.STOPPING, xr.SessionState.EXITING) and _vr_state._session_running:
                     try:
                         xr.end_session(_vr_state.session)
                     except Exception:
                         pass
                     _vr_state._session_running = False
-    except Exception:
-        pass
+    except Exception as e:
+        from core.foundation.logger import Logger
+        Logger.error(f'[VR] poll_xr_events error: {e}')
 
 
-def sync_hmd_pose():
+def sync_hmd_pose() -> bool:
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
-        return
+        return False
+    _vr_state._frame_begun = False
     try:
         frame_state = xr.wait_frame(_vr_state.session, xr.FrameWaitInfo())
         _vr_state._frame_state = frame_state
         _vr_state._display_time = frame_state.predicted_display_time
         xr.begin_frame(_vr_state.session, xr.FrameBeginInfo())
+        _vr_state._frame_begun = True
         _, views = xr.locate_views(_vr_state.session, xr.ViewLocateInfo(
             view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
             display_time=frame_state.predicted_display_time,
@@ -940,6 +961,7 @@ def sync_hmd_pose():
             p, o, f = view.pose.position, view.pose.orientation, view.fov
             _vr_state._eye_positions[i] = (p.x, p.y, p.z)
             _vr_state._eye_quats[i] = (o.x, o.y, o.z, o.w)
+            _vr_state._eye_poses[i] = view.pose
             _vr_state._hmd_pos = _vr_state._eye_positions[0]
             _vr_state._hmd_quat = _vr_state._eye_quats[0]
             _vr_state._eye_fovs[i] = (f.angle_left, f.angle_right, f.angle_up, f.angle_down)
@@ -951,15 +973,21 @@ def sync_hmd_pose():
         ox, oy, oz = _vr_state._hmd_pos_origin
         _vr_state._hmd_pos_offset = (mid_pos[0]-ox, mid_pos[1]-oy, mid_pos[2]-oz)
         _sync_controller_input()
-    except Exception:
-        pass
+        return True
+    except Exception as _sync_err:
+        from core.foundation.logger import Logger
+        Logger.error(f'[VR] sync_hmd_pose error: {_sync_err}')
+        _vr_state._frame_begun = False
+        _vr_state._frame_state = None
+        return False
 
 
 def end_xr_frame():
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
         return
-    if _vr_state._frame_state is None:
+    if not _vr_state._frame_begun:
         return
+    _vr_state._frame_begun = False
     try:
         layers = []
         if len(_vr_state._swapchains) == 2 and all(p is not None for p in _vr_state._eye_poses):
@@ -995,12 +1023,13 @@ def end_xr_frame():
             environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
             layers=layers
         ))
-    except Exception:
-        pass
+    except Exception as _end_err:
+        from core.foundation.logger import Logger
+        Logger.error(f'[VR] end_xr_frame error: {_end_err}')
 
 
 def render_vr_frame(render_eye_fn, ctx: moderngl.Context, screen_fbo, wnd_w: int, wnd_h: int):
-    rnd = _vr_renderer
+    rnd = _vr_toggle.renderer
     if rnd is None:
         return
     use_xr = _vr_state.active and _vr_state._session_running and len(_vr_state._swapchains) == 2
@@ -1044,21 +1073,19 @@ def render_vr_frame(render_eye_fn, ctx: moderngl.Context, screen_fbo, wnd_w: int
                 gl.BindFramebuffer(GL_FRAMEBUFFER, 0)
                 gl.DeleteFramebuffers(1, blit_fbo)
                 sc.release_image()
-        except Exception:
-            pass
+        except Exception as _blit_err2:
+            from core.foundation.logger import Logger
+            Logger.error(f'[VR] render_vr_frame blit error: {_blit_err2}')
     rnd.compose_to_screen(screen_fbo, wnd_w, wnd_h)
-
-
-_vr_renderer: VRRenderer | None = None
 
 
 class VRToggleState:
     def __init__(self):
         self.enabled = False
+        self.renderer: VRRenderer | None = None
         self._ctx: moderngl.Context | None = None
 
     def toggle(self, ctx: moderngl.Context) -> bool:
-        global _vr_renderer
         if self.enabled:
             self._disable()
         else:
@@ -1066,7 +1093,6 @@ class VRToggleState:
         return self.enabled
 
     def _enable(self, ctx: moderngl.Context):
-        global _vr_renderer
         self._ctx = ctx
         if _XR_AVAILABLE and initialize(ctx):
             self.enabled = True
@@ -1076,10 +1102,9 @@ class VRToggleState:
             self.enabled = False
 
     def _disable(self):
-        global _vr_renderer
-        if _vr_renderer is not None:
-            _vr_renderer.release()
-            _vr_renderer = None
+        if self.renderer is not None:
+            self.renderer.release()
+            self.renderer = None
         if _XR_AVAILABLE:
             shutdown()
         self.enabled = False
@@ -1087,14 +1112,16 @@ class VRToggleState:
         Logger.info('[VR] OpenXR shutdown.')
 
 
-def toggle_vr(ctx: moderngl.Context, vr_renderer: VRRenderer | None) -> bool:
-    global _vr_renderer
-    _vr_renderer = vr_renderer
+def toggle_vr(ctx: moderngl.Context) -> bool:
     return _vr_toggle.toggle(ctx)
 
 
 def vr_enabled() -> bool:
     return _vr_toggle.enabled
+
+
+def get_renderer() -> VRRenderer | None:
+    return _vr_toggle.renderer
 
 
 def get_hmd_pos_offset() -> tuple[float, float, float]:
