@@ -38,6 +38,9 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tga", ".tif", ".tiff", ".webp",
 MESH_EXTS = (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb")
 AUDIO_EXTS = (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".m4a")
 FONT_EXTS = (".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2")
+MATERIAL_EXTS = (".mat", ".zpem")
+
+from editor import thumb_cache as _thumb_cache
 
 _app = None
 
@@ -317,7 +320,57 @@ def _render_font(path: str, size: int):
         return None
 
 
-def render_thumbnail(path: str, size: int):
+def _find_project_root(path: str):
+    cur = os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.isdir(os.path.join(cur, "assets")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _render_material(path: str, size: int):
+    _ensure_app()
+    try:
+        from core.assets.material import Material
+        project_root = _find_project_root(path)
+        mat = Material.load(path, project_root)
+        props = mat.properties if mat is not None else {}
+        albedo = props.get("_BaseColor", (0.8, 0.8, 0.8))
+        metallic = float(props.get("_Metallic", 0.0))
+        smoothness = float(props.get("_Smoothness", 0.5))
+        emission = props.get("_EmissionColor", (0.0, 0.0, 0.0))
+        emit_intensity = float(props.get("_EmissionIntensity", 0.0))
+        tex_path = props.get("_BaseMap", None)
+        from editor.gl_offscreen import render_sphere
+        pm = render_sphere(
+            size, size,
+            albedo=albedo,
+            metallic=metallic,
+            smoothness=smoothness,
+            emission=emission,
+            emit_intensity=emit_intensity,
+            tex_path=tex_path,
+        )
+        if pm is not None and not pm.isNull():
+            return _pm_to_png(pm)
+    except Exception:
+        pass
+    # Fallback: simple vector material swatch.
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QBrush(QColor(120, 120, 140)))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(QRectF(2, 2, size - 4, size - 4), 6, 6)
+    p.end()
+    return _pm_to_png(pm)
+
+
+def render_thumbnail(path: str, size: int, cache_dir: Optional[str] = None):
     ext = os.path.splitext(path)[1].lower()
     if ext in IMAGE_EXTS:
         return _render_image(path, size)
@@ -327,4 +380,6 @@ def render_thumbnail(path: str, size: int):
         return _render_audio(path, size)
     if ext in FONT_EXTS:
         return _render_font(path, size)
+    if ext in MATERIAL_EXTS:
+        return _render_material(path, size)
     return None

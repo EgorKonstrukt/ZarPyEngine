@@ -26,11 +26,13 @@ from PyQt6.QtGui import (QFont, QPixmap, QPainter, QPainterPath, QColor, QPen, Q
 
 _thumbnail_cache: dict[str, QPixmap] = {}
 _thumbnail_mutex = QMutex()
+_placeholder_cache: dict[str, QPixmap] = {}
 _icon_cache: dict[str, QIcon] = {}
 _icon_mutex = QMutex()
 
 from editor.constants import THUMB_SIZE, PREVIEW_SIZE
 from core.config.editor_scale import scale, scale_xy
+from editor.thumb_cache import cache_root_for_project, thumb_disk_key, save_thumb_disk, load_thumb_disk
 
 _placeholder_icon: Optional[QIcon] = None
 
@@ -86,6 +88,7 @@ _PROCESS_EXTS = (
     ".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb",
     ".wav", ".mp3", ".ogg", ".flac", ".aiff", ".m4a",
     ".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2",
+    ".mat", ".zpem",
 )
 
 
@@ -96,11 +99,15 @@ def _is_process_thumb(path: str) -> bool:
 class _ThumbnailProcessService(QObject):
     """Generates ALL heavy thumbnails in separate processes (no GIL contention).
 
-    Image decoding, mesh import (assimp), audio reading / ffmpeg and font
-    rasterization all run inside a multiprocessing.Pool of worker processes.
-    Each worker returns PNG bytes which are decoded on the GUI thread and
-    cached as a QPixmap. Cheap vector placeholders are drawn on the GUI thread
-    for instant display and later swapped for the real thumbnail.
+    Image decoding, mesh import (assimp), audio reading / ffmpeg, font
+    rasterization and material (OpenGL) previews all run inside a
+    multiprocessing.Pool of worker processes. Each worker returns PNG bytes
+    which are decoded on the GUI thread and cached as a QPixmap.
+
+    The pool is created lazily on the first request and torn down after a
+    period of inactivity so no Python worker processes linger when the editor
+    is idle. Results are also persisted to an on-disk cache (keyed by an
+    xxhash of path + mtime + size) under ``<project>/cache/thumbs``.
     """
 
     thumbnail_ready = pyqtSignal(str, int, object)
@@ -110,6 +117,11 @@ class _ThumbnailProcessService(QObject):
         self._pool = None
         self._inflight: set[tuple[str, int]] = set()
         self._lock = QMutex()
+        self._cache_dir: Optional[str] = None
+        self._idle_timer: Optional[QTimer] = None
+
+    def set_cache_dir(self, cache_dir: Optional[str]):
+        self._cache_dir = cache_dir
 
     def _ensure_pool(self):
         if self._pool is not None:
@@ -124,6 +136,35 @@ class _ThumbnailProcessService(QObject):
         except Exception:
             self._pool = None
 
+    def _arm_idle(self):
+        # Queue the timer start onto the owning (main) thread so QTimer
+        # operations are always performed on the correct thread.
+        if QThread.currentThread() != self.thread():
+            QMetaObject.invokeMethod(
+                self, "_arm_idle_main", Qt.ConnectionType.QueuedConnection,
+            )
+            return
+        self._arm_idle_main()
+
+    @pyqtSlot()
+    def _arm_idle_main(self):
+        if self._idle_timer is None:
+            self._idle_timer = QTimer(self)
+            self._idle_timer.setSingleShot(True)
+            self._idle_timer.timeout.connect(self._on_idle)
+        self._idle_timer.start(30000)
+
+    @pyqtSlot()
+    def _on_idle(self):
+        self._lock.lock()
+        has_inflight = len(self._inflight) > 0
+        self._lock.unlock()
+        if has_inflight:
+            # Thumbnails still being processed — re-arm and wait.
+            self._arm_idle_main()
+            return
+        self.shutdown()
+
     def enqueue(self, path: str, size: int):
         cache_key = f"thumb:{path}:{size}"
         _thumbnail_mutex.lock()
@@ -131,19 +172,36 @@ class _ThumbnailProcessService(QObject):
         _thumbnail_mutex.unlock()
         if cached:
             return
+        # On-disk cache hit: decode locally, no subprocess.
+        if self._cache_dir:
+            try:
+                st = os.stat(path)
+                dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size)
+                png = load_thumb_disk(self._cache_dir, dkey)
+                if png:
+                    pm = QPixmap()
+                    if pm.loadFromData(png, "PNG") and not pm.isNull():
+                        _thumbnail_mutex.lock()
+                        _thumbnail_cache[cache_key] = pm
+                        _thumbnail_mutex.unlock()
+                        self.thumbnail_ready.emit(path, size, pm)
+                        return
+            except OSError:
+                pass
         self._lock.lock()
         if (path, size) in self._inflight:
             self._lock.unlock()
             return
         self._inflight.add((path, size))
         self._lock.unlock()
+        self._arm_idle()
         self._ensure_pool()
         if self._pool is None:
             return
         try:
             self._pool.apply_async(
                 _thumb_render_wrap,
-                (path, size),
+                (path, size, self._cache_dir),
                 callback=self._on_pool_result,
                 error_callback=self._on_pool_error,
             )
@@ -168,6 +226,7 @@ class _ThumbnailProcessService(QObject):
         path, size, png_bytes = payload
         self._lock.lock()
         self._inflight.discard((path, size))
+        idle = len(self._inflight) == 0
         self._lock.unlock()
         pm = None
         if png_bytes:
@@ -179,13 +238,21 @@ class _ThumbnailProcessService(QObject):
             _thumbnail_mutex.lock()
             _thumbnail_cache[cache_key] = pm
             _thumbnail_mutex.unlock()
+        if idle:
+            self._arm_idle()
         self.thumbnail_ready.emit(path, size, pm)
 
     def shutdown(self):
         if self._pool is not None:
-            self._pool.close()
-            self._pool.terminate()
+            try:
+                self._pool.close()
+                self._pool.terminate()
+            except Exception:
+                pass
             self._pool = None
+        self._lock.lock()
+        self._inflight.clear()
+        self._lock.unlock()
 
 
 def _thumb_worker_init():
@@ -195,9 +262,17 @@ def _thumb_worker_init():
 _thumb_service: Optional[_ThumbnailProcessService] = None
 
 
-def _thumb_render_wrap(path: str, size: int):
+def _thumb_render_wrap(path: str, size: int, cache_dir: Optional[str]):
     from editor.thumb_worker import render_thumbnail
-    return (path, size, render_thumbnail(path, size))
+    png = render_thumbnail(path, size, cache_dir)
+    if png and cache_dir:
+        try:
+            st = os.stat(path)
+            dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size)
+            save_thumb_disk(cache_dir, dkey, png)
+        except OSError:
+            pass
+    return (path, size, png)
 
 
 def _get_thumb_service() -> _ThumbnailProcessService:
@@ -444,9 +519,15 @@ def _get_thumbnail_raw(path: str, size: int, enqueue_mesh: bool = True) -> QPixm
         return _draw_scene_icon(size)
     if ext == ".zpep":
         return _draw_prefab_icon(size)
-    if ext == ".mat":
-        pm = _get_material_thumbnail(path, size)
-        if pm: return pm
+    if ext in (".mat", ".zpem"):
+        if _is_process_thumb(path):
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            cached = _thumbnail_cache.get(cache_key)
+            _thumbnail_mutex.unlock()
+            if cached is not None:
+                return cached
+            _get_thumb_service().enqueue(path, size)
         return _draw_material_icon(size)
     if ext in (".vert", ".frag"):
         return _draw_shader_icon(size)
@@ -523,6 +604,8 @@ class _PopulateWorker(QThread):
                     return
                 if f.startswith("."):
                     continue
+                if f.endswith(".import"):
+                    continue
                 ext = os.path.splitext(f)[1].lower()
                 if self._extensions and ext not in self._extensions:
                     continue
@@ -540,6 +623,34 @@ class _PopulateWorker(QThread):
                     batch = []
         if batch:
             self.batch_ready.emit(batch)
+
+
+def _draw_vector_placeholder(path: str, size: int) -> Optional[QPixmap]:
+    if os.path.isdir(path):
+        return _draw_folder_icon(size)
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".png", ".jpg", ".jpeg", ".bmp", ".tga", ".tif", ".tiff",
+               ".webp", ".hdr"):
+        return _draw_image_icon(size)
+    if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
+        return _draw_mesh_icon(size)
+    if ext in (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".m4a"):
+        return _draw_audio_icon(size)
+    if ext == ".py":
+        return _draw_script_icon(size)
+    if ext == ".zpes":
+        return _draw_scene_icon(size)
+    if ext == ".zpep":
+        return _draw_prefab_icon(size)
+    if ext in (".mat", ".zpem"):
+        return _draw_material_icon(size)
+    if ext in (".vert", ".frag"):
+        return _draw_shader_icon(size)
+    if ext in (".animclip", ".animcontroller"):
+        return _draw_file_icon(size)
+    if ext in (".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"):
+        return _draw_font_placeholder(size)
+    return _draw_file_icon(size)
 
 
 class _ThumbnailLoader(QThread):
@@ -579,13 +690,13 @@ class _ThumbnailLoader(QThread):
             self._queue_mutex.unlock()
             cache_key = f"thumb:{full_path}:{self._thumb_size}"
             _thumbnail_mutex.lock()
-            exists = cache_key in _thumbnail_cache
+            exists = cache_key in _placeholder_cache
             _thumbnail_mutex.unlock()
             if not exists:
-                pm = _get_thumbnail_raw(full_path, self._thumb_size, enqueue_mesh=False)
+                pm = _draw_vector_placeholder(full_path, self._thumb_size)
                 if pm:
                     _thumbnail_mutex.lock()
-                    _thumbnail_cache[cache_key] = pm
+                    _placeholder_cache[cache_key] = pm
                     _thumbnail_mutex.unlock()
             batch.append((idx, full_path))
             if len(batch) >= 32:
@@ -665,6 +776,9 @@ class ResourcePickerDialog(QDialog):
         self._mesh_loaded: set[int] = set()
         _get_thumb_service().thumbnail_ready.connect(
             self._on_thumb_ready, Qt.ConnectionType.QueuedConnection)
+        _get_thumb_service().thumbnail_ready.connect(
+            self._on_thumb_ready_preview, Qt.ConnectionType.QueuedConnection)
+        self._preview_path: Optional[str] = None
         list_layout.addWidget(self._list)
         splitter.addWidget(list_container)
 
@@ -717,6 +831,7 @@ class ResourcePickerDialog(QDialog):
             self._loader.quit()
             self._loader.wait()
         self._search_text = filter_text
+        _get_thumb_service().set_cache_dir(cache_root_for_project(self._project_root))
         self._list.setUpdatesEnabled(False)
         self._list.clear()
         self._list.setUpdatesEnabled(True)
@@ -817,8 +932,10 @@ class ResourcePickerDialog(QDialog):
                 self._thumb_queue.append((idx, path))
             else:
                 to_load.append((idx, path))
-            if idx >= vis_first and idx <= vis_last:
-                self._maybe_enqueue_process_thumb(idx, path)
+            # Enqueue expensive (process) thumbnails for the whole visible
+            # window plus buffer, not just strictly-visible items, so items
+            # that become visible on scroll already have real thumbnails.
+            self._maybe_enqueue_process_thumb(idx, path)
         if to_load:
             self._loader.enqueue(to_load)
         if self._thumb_queue and not self._processing_thumbs:
@@ -860,15 +977,32 @@ class ResourcePickerDialog(QDialog):
         _get_thumb_service().enqueue(path, THUMB_SIZE)
 
     def _on_thumb_ready(self, path: str, size: int, pixmap):
+        if size != THUMB_SIZE:
+            return
         self._mesh_pending = max(0, self._mesh_pending - 1)
         if pixmap is None or pixmap.isNull():
             return
         icon = QIcon(pixmap)
+        # Refresh the icon cache so _process_thumb_batch / _get_cached_icon
+        # never re-apply a stale placeholder over the real thumbnail.
+        icon_key = f"icon:{path}:{size}"
+        _icon_mutex.lock()
+        _icon_cache[icon_key] = icon
+        _icon_mutex.unlock()
         for idx, p in self._item_paths.items():
             if p == path and idx < self._list.count():
                 item = self._list.item(idx)
                 if item:
                     item.setIcon(icon)
+
+    def _on_thumb_ready_preview(self, path: str, size: int, pixmap):
+        if size != PREVIEW_SIZE:
+            return
+        if self._preview_path != path:
+            return
+        if pixmap is None or pixmap.isNull():
+            return
+        self._preview_icon.setPixmap(pixmap)
 
     def _on_thumbnail_loaded(self, batch, _):
         self._thumb_queue.extend(batch)
@@ -884,10 +1018,18 @@ class ResourcePickerDialog(QDialog):
         while self._thumb_queue and count < 60:
             idx, path = self._thumb_queue.pop(0)
             if idx < self._list.count():
-                icon = _get_cached_icon(path, THUMB_SIZE)
+                # Prefer a real (process-generated) thumbnail; fall back to the
+                # vector placeholder. Placeholders live in a separate cache so a
+                # placeholder can never be mistaken for a finished thumbnail.
+                cache_key = f"thumb:{path}:{THUMB_SIZE}"
+                _thumbnail_mutex.lock()
+                pm = _thumbnail_cache.get(cache_key)
+                if pm is None:
+                    pm = _placeholder_cache.get(cache_key)
+                _thumbnail_mutex.unlock()
                 item = self._list.item(idx)
-                if item and not icon.isNull():
-                    item.setIcon(icon)
+                if item and pm is not None and not pm.isNull():
+                    item.setIcon(QIcon(pm))
             count += 1
         QTimer.singleShot(2, self._process_thumb_batch)
 
@@ -917,8 +1059,13 @@ class ResourcePickerDialog(QDialog):
             return
 
         self._preview_icon.setStyleSheet("background: #2a2a2a; border: 1px solid #444; border-radius: 4px;")
+        self._preview_path = path
         thumb = _get_thumbnail(path, PREVIEW_SIZE)
-        self._preview_icon.setPixmap(thumb)
+        if thumb.isNull():
+            pm = _get_placeholder_icon()
+            self._preview_icon.setPixmap(pm)
+        else:
+            self._preview_icon.setPixmap(thumb)
 
         name = os.path.basename(path)
         ext = os.path.splitext(path)[1].lower()
