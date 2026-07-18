@@ -71,6 +71,9 @@ class InspectorField:
     readonly: bool = False
     element_fields: list[ListElementField] = field(default_factory=list)
     enum_options: list[str] = field(default_factory=list)
+    description: str = ""
+    default_value: object = None
+    favorite: bool = False
 
 @dataclass
 class ComponentInspectorMeta:

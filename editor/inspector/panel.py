@@ -169,6 +169,18 @@ class InspectorPanel(QDockWidget):
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         outer_layout.addWidget(sep)
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search properties...")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.setStyleSheet(f"""
+            QLineEdit {{
+                border: 1px solid #444; border-radius: 3px; padding: 3px 6px;
+                font-size: 11px; background: #1e1e1e;
+            }}
+            QLineEdit:focus {{ border-color: {_accent()}; }}
+        """)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        outer_layout.addWidget(self._search_edit)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -196,6 +208,13 @@ class InspectorPanel(QDockWidget):
     def _on_lock_toggled(self, checked: bool):
         self._locked = checked
         self._lock_btn.setToolTip("Unlock Inspector" if checked else "Lock Inspector")
+
+    def _on_search_changed(self, text: str):
+        for cw in self._comp_widgets:
+            try:
+                cw.set_filter(text)
+            except Exception:
+                pass
 
     def set_entity(self, entity: Optional[Entity]):
         if self._locked:
@@ -932,17 +951,20 @@ class InspectorPanel(QDockWidget):
                 elif self._animator_transition:
                     self._build_animator_transition_inspector(self._animator_transition)
                 self._content_layout.addStretch()
+                self._search_edit.setVisible(False)
                 return
             if self._asset_path:
                 self._header_widget.setVisible(False)
                 self._add_comp_btn.setVisible(False)
                 self._build_import_settings()
                 self._content_layout.addStretch()
+                self._search_edit.setVisible(False)
                 return
             if not self._entity:
                 self._header_widget.setVisible(False)
                 self._add_comp_btn.setVisible(False)
                 self._content_layout.addStretch()
+                self._search_edit.setVisible(False)
                 return
             self._header_widget.setVisible(True)
             self._add_comp_btn.setVisible(True)
@@ -976,12 +998,21 @@ class InspectorPanel(QDockWidget):
             self._layer_sb.setValue(self._entity.layer)
             rev_map = {id(c): k for k, c in self._entity._components.items()}
             comps = self._entity.get_all_components()
+            overridden = set()
+            if self._entity.is_prefab_instance:
+                from core.ecs.prefab import Prefab
+                for ov in Prefab.compute_all_overrides([self._entity]):
+                    prop = ov.get("property", "")
+                    if "." in prop:
+                        overridden.add(prop.split(".", 1)[1])
+            self._search_edit.setVisible(True)
             for idx, comp in enumerate(comps):
                 if getattr(type(comp), "_editor_hidden", False):
                     continue
                 try:
                     key = rev_map.get(id(comp), "")
-                    cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget, component_key=key)
+                    cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget,
+                                         component_key=key, overridden_props=overridden)
                     cw.remove_requested.connect(self._remove_component)
                     cw.move_up_requested.connect(self._move_component_up)
                     cw.move_down_requested.connect(self._move_component_down)

@@ -37,14 +37,16 @@ class ComponentWidget(QWidget):
     move_down_requested = pyqtSignal(str)
     reorder_requested = pyqtSignal(str, str, str)
 
-    def __init__(self, component, entity=None, selected_entities=None, parent=None, component_key: str = ""):
+    def __init__(self, component, entity=None, selected_entities=None, parent=None, component_key: str = "", overridden_props: set = None):
         super().__init__(parent)
         self._component = component
         self._entity = entity
         self._selected_entities = list(selected_entities if selected_entities else [])
         self._component_key = component_key
+        self._overridden_props = set(overridden_props) if overridden_props else set()
         self._updating = False
         self._collapsed = False
+        self._field_rows: list[dict] = []
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -357,58 +359,230 @@ class ComponentWidget(QWidget):
                     cb.toggled.connect(lambda v, rs=rows: self._on_toggle_changed(v, rs))
                     for r in rows:
                         r.setVisible(cb.isChecked())
+        self._wire_validation()
 
     def _on_toggle_changed(self, v: bool, rows: list[QWidget]):
         for r in rows:
             r.setVisible(v)
 
+    def _on_group_toggled(self, gform: QFormLayout, visible: bool):
+        for i in range(gform.count()):
+            item = gform.itemAt(i)
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.setVisible(visible)
+
+    def _resolve_default(self, prop_name: str, suggested):
+        if suggested is not None:
+            return suggested
+        f = self._current_field
+        if f is not None and f.field_type.value in ("float", "int", "slider", "int_slider"):
+            return 0
+        if f is not None and f.field_type.value == "bool":
+            return False
+        if f is not None and f.field_type.value in ("string", "text", "textarea", "keybinding"):
+            return ""
+        return None
+
+    def _reset_to_default(self, prop_name: str, suggested=None):
+        default = self._resolve_default(prop_name, suggested)
+        if default is None:
+            return
+        c = self._component
+        old = getattr(c, prop_name, None)
+        setattr(c, prop_name, default)
+        get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, old, default))
+        self._rebuild_fields()
+
+    def _copy_value(self, prop_name: str):
+        try:
+            val = getattr(self._component, prop_name)
+            from core.foundation.commands import collapse_value as _cv
+            QApplication.clipboard().setText(str(_cv(val)))
+        except Exception:
+            pass
+
+    def _paste_value(self, prop_name: str):
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+        c = self._component
+        old = getattr(c, prop_name, None)
+        f = self._current_field
+        try:
+            if f is not None and f.field_type.value == "int":
+                v = int(float(text))
+            elif f is not None and f.field_type.value in ("float", "slider", "int_slider"):
+                v = float(text)
+            elif f is not None and f.field_type.value == "bool":
+                v = text.strip().lower() in ("1", "true", "yes")
+            else:
+                v = text
+            setattr(c, prop_name, v)
+            get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, old, v))
+            self._rebuild_fields()
+        except Exception:
+            pass
+
+    def _show_field_context_menu(self, pos, prop_name: str):
+        menu = QMenu(self)
+        copy_act = QAction("Copy Value", self)
+        copy_act.triggered.connect(lambda: self._copy_value(prop_name))
+        menu.addAction(copy_act)
+        paste_act = QAction("Paste Value", self)
+        paste_act.triggered.connect(lambda: self._paste_value(prop_name))
+        menu.addAction(paste_act)
+        reset_act = QAction("Reset to Default", self)
+        reset_act.triggered.connect(lambda: self._reset_to_default(prop_name))
+        menu.addAction(reset_act)
+        f = self._current_field
+        if f is not None and f.field_type.value in ("float", "vec2", "vec3", "vec4"):
+            menu.addSeparator()
+            key_act = QAction("Add Keyframe", self)
+            key_act.triggered.connect(lambda: Logger.info(f"Keyframe requested for {prop_name}"))
+            menu.addAction(key_act)
+        menu.exec(self.sender().mapToGlobal(pos))
+
+    def set_filter(self, text: str):
+        text = text.strip().lower()
+        for row in self._field_rows:
+            if not text:
+                row["label_widget"].setVisible(True)
+                row["field_widget"].setVisible(True)
+                continue
+            match = text in row["label"].lower() or (row["prop_name"] and text in row["prop_name"].lower())
+            row["label_widget"].setVisible(match)
+            row["field_widget"].setVisible(match)
+
+    def _validate_field(self, prop_name: str, widget: QWidget, value):
+        f = self._current_field
+        bad = False
+        if f is not None and f.field_type.value in ("float", "int", "slider", "int_slider"):
+            try:
+                if value is None or (isinstance(value, float) and value != value):
+                    bad = True
+                elif hasattr(f, "min_val") and f.min_val > -1e15 and value < f.min_val:
+                    bad = True
+                elif hasattr(f, "max_val") and f.max_val < 1e15 and value > f.max_val:
+                    bad = True
+            except Exception:
+                pass
+        if bad:
+            widget.setStyleSheet("border: 1px solid #f44747; border-radius: 2px;")
+            widget.setToolTip("Value out of range or invalid")
+        else:
+            widget.setStyleSheet("")
+            widget.setToolTip("")
+
+    def _wire_validation(self):
+        from PyQt6.QtWidgets import QAbstractSpinBox, QSlider
+        for row in self._field_rows:
+            f = row.get("field_meta")
+            if f is None or f.field_type.value not in ("float", "int", "slider", "int_slider"):
+                continue
+            w = row["field_widget"]
+            target = w._field_child if hasattr(w, "_field_child") else w
+            prop = row["prop_name"]
+            if isinstance(target, QAbstractSpinBox):
+                target.valueChanged.connect(lambda v, p=prop, tw=target: self._validate_field(p, tw, v))
+            elif isinstance(target, QSlider):
+                target.valueChanged.connect(lambda v, p=prop, tw=target: self._validate_field(p, tw, v))
+
+    def _rebuild_fields(self):
+        self._group_form = None
+        self._field_rows.clear()
+        self._toggle_rows.clear()
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._build_fields()
+
     def _target_layout(self) -> QFormLayout:
         return self._group_form if self._group_form is not None else self._layout
 
-    def _add_field(self, label: str, widget: QWidget, prop_name: str = "", toggle_field: str = ""):
-        target = self._target_layout()
+    def _make_field_cell(self, widget: QWidget, prop_name: str, field_meta=None):
+        cell = QWidget()
+        fl = QHBoxLayout(cell)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(4)
+        fl.addWidget(widget, 1)
+        cell._field_child = widget
+        if prop_name and field_meta is not None and field_meta.default_value is not None:
+            reset_btn = QPushButton("\u21ba")
+            reset_btn.setFixedSize(*scale_xy(18, 18))
+            reset_btn.setToolTip("Reset to default")
+            reset_btn.setStyleSheet("QPushButton { color: #bbb; background: transparent; border: 1px solid #444; border-radius: 3px; font-size: 10px; } QPushButton:hover { color: #fff; border-color: #777; }")
+            reset_btn.clicked.connect(lambda _, pn=prop_name, dv=field_meta.default_value: self._reset_to_default(pn, dv))
+            fl.addWidget(reset_btn)
+            cell._reset_btn = reset_btn
         if prop_name:
             comp_type = type(self._component).__name__
             src_path = get_component_source_path(type(self._component))
             line_num = get_property_line_number(type(self._component), prop_name)
             source_lbl = make_clickable_label("src", lambda sp=src_path, ln=line_num: self._show_source(sp, ln, comp_type, prop_name))
-            field_widget = QWidget()
-            fl = QHBoxLayout(field_widget)
-            fl.setContentsMargins(0, 0, 0, 0)
-            fl.setSpacing(4)
-            fl.addWidget(widget, 1)
             fl.addWidget(source_lbl)
-            field_widget._field_child = widget
-            lbl = QLabel(label)
-            lbl.setWordWrap(True)
-            target.addRow(lbl, field_widget)
-            if toggle_field:
-                self._toggle_rows.setdefault(toggle_field, []).append(field_widget)
-            return
+        return cell
+
+    def _add_field(self, label: str, widget: QWidget, prop_name: str = "", toggle_field: str = "", field_meta=None):
+        if field_meta is None:
+            field_meta = getattr(self, "_current_field", None)
+        target = self._target_layout()
+        lbl = QLabel(label)
+        lbl.setWordWrap(True)
+        if prop_name:
+            lbl.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            lbl.customContextMenuRequested.connect(lambda pos, pn=prop_name: self._show_field_context_menu(pos, pn))
+        if field_meta is not None and field_meta.description:
+            lbl.setToolTip(field_meta.description)
+        if prop_name and prop_name in self._overridden_props:
+            lbl.setStyleSheet("color: #e0a93b; font-weight: 600;")
+        if prop_name and len(self._selected_entities) > 1:
+            vals = []
+            for e in self._selected_entities:
+                comp = e.get_component(type(self._component))
+                if comp is not None and hasattr(comp, prop_name):
+                    vals.append(getattr(comp, prop_name))
+            if len(vals) > 1 and any(v != vals[0] for v in vals[1:]):
+                base_tip = field_meta.description if field_meta is not None and field_meta.description else ""
+                lbl.setToolTip((base_tip + "\n" if base_tip else "") + "Mixed values across selection")
+                style = lbl.styleSheet() or ""
+                if prop_name not in self._overridden_props:
+                    lbl.setStyleSheet(style + " color: #7fb0ff;")
+        cell = self._make_field_cell(widget, prop_name, field_meta) if (prop_name or field_meta is not None) else None
         if label:
-            lbl = QLabel(label)
-            lbl.setWordWrap(True)
-            target.addRow(lbl, widget)
+            target.addRow(lbl, cell if cell is not None else widget)
         else:
-            target.addRow(widget)
+            target.addRow(cell if cell is not None else widget)
+        self._field_rows.append({
+            "label": label,
+            "label_widget": lbl,
+            "field_widget": cell if cell is not None else widget,
+            "prop_name": prop_name,
+            "field_meta": field_meta,
+            "toggle_field": toggle_field,
+        })
         if toggle_field:
-            row = target.itemAt(target.rowCount() - 1, QFormLayout.ItemRole.FieldRole)
-            field_item = row.widget() if row else None
-            if field_item is not None:
-                self._toggle_rows.setdefault(toggle_field, []).append(field_item)
+            self._toggle_rows.setdefault(toggle_field, []).append(cell if cell is not None else widget)
 
     def _build_field_from_meta(self, field):
         c = self._component
+        self._current_field = field
         prop_name = field.name
         if field.field_type.value == "header":
             group = QGroupBox(field.label)
             group.setObjectName("inspectorGroup")
+            group.setCheckable(True)
+            group.setChecked(True)
             group.setStyleSheet(
                 "QGroupBox#inspectorGroup { color: #ccc; border: 1px solid #3a3a3a; "
-                "border-radius: 4px; margin-top: 10px; padding-top: 14px; font-size: 11px; "
+                "border-radius: 4px; margin-top: 10px; padding-top: 16px; font-size: 11px; "
                 "font-weight: 600; background: rgba(255,255,255,0.02); } "
                 "QGroupBox#inspectorGroup::title { subcontrol-origin: margin; left: 8px; "
-                "padding: 0 4px; }"
+                "padding: 0 4px; } "
+                "QGroupBox#inspectorGroup::indicator { width: 10px; height: 10px; }"
             )
             gform = QFormLayout(group)
             gform.setContentsMargins(8, 4, 8, 6)
@@ -416,6 +590,7 @@ class ComponentWidget(QWidget):
             gform.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             gform.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             gform.setHorizontalSpacing(8)
+            group.toggled.connect(lambda v, gf=gform: self._on_group_toggled(gf, v))
             self._group_form = gform
             self._layout.addWidget(group)
             return
@@ -1126,6 +1301,7 @@ class ComponentWidget(QWidget):
 
     def _build_script_field_from_meta(self, field, comp):
         prop_name = field.name
+        self._current_field = field
         value = comp.get_field_value(prop_name)
         if field.field_type.value == "float":
             sb = make_spinbox(value if isinstance(value, (int, float)) else 0.0)

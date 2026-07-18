@@ -215,6 +215,14 @@ _ERROR_STYLE = """
     }
 """
 
+_EMPTY_STYLE = """
+    QLabel {
+        background: #3d3410; color: #e0c040;
+        border: 1px solid #b89320; border-radius: 2px;
+        padding: 2px 4px; font-size: 11px;
+    }
+"""
+
 def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], None]) -> QWidget:
     from editor.resource_picker import pick_resource
     w = QWidget()
@@ -238,12 +246,12 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
         if _is_path_valid(p):
             name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
             update_resource_icon(icon_lbl, p, 20)
-        else:
+        elif p:
             name_lbl.setStyleSheet(_ERROR_STYLE)
-            if p:
-                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
-            else:
-                update_resource_icon(icon_lbl, p, 20)
+            icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+        else:
+            name_lbl.setStyleSheet(_EMPTY_STYLE)
+            update_resource_icon(icon_lbl, p, 20)
     def _update_display(p: str):
         _apply_state(p)
         clear_btn.setVisible(bool(p))
@@ -308,6 +316,11 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
                     pix = get_component_icon_pixmap(type(c), 18)
                     icon_lbl.setPixmap(pix)
                     break
+            name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
+        elif eid:
+            name_lbl.setStyleSheet(_ERROR_STYLE)
+        else:
+            name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(eid))
         callback(eid)
     btn = QPushButton("\u25CB")
@@ -359,6 +372,14 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
         name_lbl.setText(new_name if new_name else f"None ({resource_type})")
         name_lbl.setToolTip(p if p else f"No {resource_type} selected")
         update_resource_icon(icon_lbl, p, 20)
+        if p:
+            if _is_path_valid(p):
+                name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
+            else:
+                name_lbl.setStyleSheet(_ERROR_STYLE)
+                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+        else:
+            name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(p))
         callback(p)
     btn = QPushButton("\u25CB")
@@ -408,6 +429,14 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
         name_lbl.setText(new_name if new_name else f"None ({asset_type})")
         name_lbl.setToolTip(p if p else f"No {asset_type} selected")
         update_resource_icon(icon_lbl, p, 20)
+        if p:
+            if _is_path_valid(p):
+                name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
+            else:
+                name_lbl.setStyleSheet(_ERROR_STYLE)
+                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+        else:
+            name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(p))
         callback(p)
     btn = QPushButton("\u25CB")
