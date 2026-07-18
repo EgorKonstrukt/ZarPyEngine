@@ -34,8 +34,7 @@ from core.config.editor_scale import scale, scale_xy
 
 _placeholder_icon: Optional[QIcon] = None
 
-_MESH_EXTS = (".obj", ".fbx", ".stl", ".gltf", ".glb", ".usdz")
-_MAX_MESH_INFLIGHT = 12
+_MAX_PROCESS_INFLIGHT = 12
 
 
 def _get_placeholder_icon() -> QIcon:
@@ -82,19 +81,29 @@ def _draw_text_centered(painter: QPainter, text: str, rect: QRect, color: QColor
     painter.setFont(f)
     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
-_mesh_thumb_cache: dict[str, QPixmap] = {}
-_mesh_thumb_mutex = QMutex()
+_PROCESS_EXTS = (
+    ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".tif", ".tiff", ".webp", ".hdr",
+    ".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb",
+    ".wav", ".mp3", ".ogg", ".flac", ".aiff", ".m4a",
+    ".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2",
+)
 
 
-class _MeshThumbnailService(QObject):
-    """Generates mesh thumbnails in separate processes (no GIL contention).
+def _is_process_thumb(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in _PROCESS_EXTS
 
-    The heavy ``load_mesh`` + numpy/QPainter rendering runs inside a
-    multiprocessing.Pool of worker processes. Each worker returns PNG bytes
-    which are decoded on the GUI thread and cached as a QPixmap.
+
+class _ThumbnailProcessService(QObject):
+    """Generates ALL heavy thumbnails in separate processes (no GIL contention).
+
+    Image decoding, mesh import (assimp), audio reading / ffmpeg and font
+    rasterization all run inside a multiprocessing.Pool of worker processes.
+    Each worker returns PNG bytes which are decoded on the GUI thread and
+    cached as a QPixmap. Cheap vector placeholders are drawn on the GUI thread
+    for instant display and later swapped for the real thumbnail.
     """
 
-    mesh_data_ready = pyqtSignal(str, int, object)
+    thumbnail_ready = pyqtSignal(str, int, object)
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -110,18 +119,16 @@ class _MeshThumbnailService(QObject):
             nproc = max(1, min(4, (mp.cpu_count() or 2)))
             self._pool = mp.Pool(
                 processes=nproc,
-                initializer=_mesh_worker_init,
+                initializer=_thumb_worker_init,
             )
         except Exception:
             self._pool = None
 
     def enqueue(self, path: str, size: int):
-        if size is None:
-            size = THUMB_SIZE
-        cache_key = f"mesh:{path}:{size}"
-        _mesh_thumb_mutex.lock()
-        cached = cache_key in _mesh_thumb_cache
-        _mesh_thumb_mutex.unlock()
+        cache_key = f"thumb:{path}:{size}"
+        _thumbnail_mutex.lock()
+        cached = cache_key in _thumbnail_cache
+        _thumbnail_mutex.unlock()
         if cached:
             return
         self._lock.lock()
@@ -135,7 +142,7 @@ class _MeshThumbnailService(QObject):
             return
         try:
             self._pool.apply_async(
-                _mesh_render_wrap,
+                _thumb_render_wrap,
                 (path, size),
                 callback=self._on_pool_result,
                 error_callback=self._on_pool_error,
@@ -168,11 +175,11 @@ class _MeshThumbnailService(QObject):
             if not pm.loadFromData(png_bytes, "PNG"):
                 pm = None
         if pm is not None:
-            cache_key = f"mesh:{path}:{size}"
-            _mesh_thumb_mutex.lock()
-            _mesh_thumb_cache[cache_key] = pm
-            _mesh_thumb_mutex.unlock()
-        self.mesh_data_ready.emit(path, size, pm)
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            _thumbnail_cache[cache_key] = pm
+            _thumbnail_mutex.unlock()
+        self.thumbnail_ready.emit(path, size, pm)
 
     def shutdown(self):
         if self._pool is not None:
@@ -181,23 +188,27 @@ class _MeshThumbnailService(QObject):
             self._pool = None
 
 
-def _mesh_worker_init():
+def _thumb_worker_init():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
-_mesh_loader: Optional[_MeshThumbnailService] = None
+_thumb_service: Optional[_ThumbnailProcessService] = None
 
 
-def _mesh_render_wrap(path: str, size: int):
-    from editor.mesh_thumb_worker import render_mesh_png
-    return (path, size, render_mesh_png(path, size))
+def _thumb_render_wrap(path: str, size: int):
+    from editor.thumb_worker import render_thumbnail
+    return (path, size, render_thumbnail(path, size))
 
 
-def _get_mesh_loader() -> _MeshThumbnailService:
-    global _mesh_loader
-    if _mesh_loader is None:
-        _mesh_loader = _MeshThumbnailService()
-    return _mesh_loader
+def _get_thumb_service() -> _ThumbnailProcessService:
+    global _thumb_service
+    if _thumb_service is None:
+        _thumb_service = _ThumbnailProcessService()
+    return _thumb_service
+
+
+def _get_mesh_loader() -> _ThumbnailProcessService:
+    return _get_thumb_service()
 
 
 def _get_thumbnail(path: str, size: int) -> QPixmap:
@@ -249,74 +260,8 @@ def _draw_mesh_icon(size: int) -> QPixmap:
     p.end()
     return pm
 
-def _read_audio_data(path: str, num_samples: int = 128) -> Optional[list]:
-    ext = os.path.splitext(path)[1].lower()
-    try:
-        if ext == ".wav":
-            with wave.open(path, "rb") as wf:
-                nframes = wf.getnframes()
-                sampwidth = wf.getsampwidth()
-                nchannels = wf.getnchannels()
-                raw = wf.readframes(nframes)
-                if sampwidth == 1:
-                    fmt = f"<{len(raw)}B"
-                    data = struct.unpack(fmt, raw)
-                    data = [v - 128 for v in data]
-                elif sampwidth == 2:
-                    fmt = f"<{len(raw) // 2}h"
-                    data = struct.unpack(fmt, raw)
-                else:
-                    return None
-                step = max(1, len(data) // nchannels // num_samples)
-        else:
-            try:
-                import subprocess, tempfile, struct
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp_path = tmp.name
-                subprocess.run(["ffmpeg", "-y", "-i", path, "-ac", "1", "-ar", "22050", "-f", "wav", tmp_path],
-                               capture_output=True, timeout=10)
-                with wave.open(tmp_path, "rb") as wf:
-                    nframes = wf.getnframes()
-                    raw = wf.readframes(min(nframes, 44100))
-                    fmt_s = f"<{len(raw) // 2}h"
-                    data = struct.unpack(fmt_s, raw)
-                    step = max(1, len(data) // num_samples)
-                os.unlink(tmp_path)
-            except Exception:
-                return None
-        peaks = []
-        for i in range(0, len(data), step):
-            chunk = abs(data[i])
-            if chunk > 32767: chunk = 32767
-            peaks.append(chunk)
-        max_val = max(peaks) if peaks else 1
-        return [p / max_val for p in peaks]
-    except Exception:
-        return None
-
 def _draw_audio_icon(size: int) -> QPixmap:
     return _make_icon_bg(QColor(80, 180, 80), size)
-
-def _draw_audio_waveform(path: str, size: int) -> QPixmap:
-    peaks = _read_audio_data(path, size // 2)
-    if peaks is None:
-        return _draw_audio_icon(size)
-    pm = _make_icon_bg(QColor(40, 90, 40), size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    margin = 4
-    w = size - 2 * margin
-    h = size - 2 * margin
-    mid_y = size // 2
-    bar_w = max(1, w // len(peaks))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(QColor(100, 220, 100, 220)))
-    for i, peak in enumerate(peaks):
-        bar_h = max(1, int(peak * h * 0.45))
-        x = margin + i * bar_w
-        p.drawRect(x, mid_y - bar_h, bar_w, bar_h * 2)
-    p.end()
-    return pm
 
 def _draw_script_icon(size: int) -> QPixmap:
     pm = _make_icon_bg(QColor(200, 140, 50), size)
@@ -450,60 +395,48 @@ def _draw_folder_icon(size: int) -> QPixmap:
     p.end()
     return pm
 
-def _draw_font_thumbnail(path: str, size: int) -> QPixmap:
+def _draw_font_placeholder(size: int) -> QPixmap:
     pm = _make_icon_bg(QColor(70, 120, 200), size)
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        fs = max(int(size * 0.45), 8)
-        font = ImageFont.truetype(path, fs)
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        bbox = font.getbbox("Aa")
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        x = (size - tw) // 2 - bbox[0]
-        y = (size - th) // 2 - bbox[1]
-        draw.text((x, y), "Aa", font=font, fill=(255, 255, 255, 255))
-        arr = np.array(img)
-        qimg = QImage(arr.data, arr.shape[1], arr.shape[0], 4 * arr.shape[1], QImage.Format.Format_RGBA8888)
-        pix = QPixmap.fromImage(qimg)
-        painter = QPainter(pm)
-        painter.drawPixmap(0, 0, pix)
-        painter.end()
-    except Exception:
-        painter = QPainter(pm)
-        _draw_text_centered(painter, "Aa", QRect(0, 0, size, size), QColor(255, 255, 255))
-        painter.end()
+    p = QPainter(pm)
+    _draw_text_centered(p, "Aa", QRect(0, 0, size, size), QColor(255, 255, 255))
+    p.end()
     return pm
 
 def _get_thumbnail_raw(path: str, size: int, enqueue_mesh: bool = True) -> QPixmap:
     if os.path.isdir(path):
         return _draw_folder_icon(size)
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".png", ".jpg", ".jpeg"):
-        reader = QImageReader(path)
-        if reader.canRead():
-            src = reader.size()
-            if not src.isEmpty():
-                scale = size / max(src.width(), src.height())
-                reader.setScaledSize(QSize(max(1, int(src.width() * scale)),
-                                          max(1, int(src.height() * scale))))
-            img = reader.read()
-            if img and not img.isNull():
-                return QPixmap.fromImage(img)
+    if ext in (".png", ".jpg", ".jpeg", ".bmp", ".tga", ".tif", ".tiff",
+               ".webp", ".hdr"):
+        if _is_process_thumb(path):
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            cached = _thumbnail_cache.get(cache_key)
+            _thumbnail_mutex.unlock()
+            if cached is not None:
+                return cached
+            _get_thumb_service().enqueue(path, size)
+        return _draw_image_icon(size)
     if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
-        cache_key = f"mesh:{path}:{size}"
-        _mesh_thumb_mutex.lock()
-        cached = _mesh_thumb_cache.get(cache_key)
-        _mesh_thumb_mutex.unlock()
-        if cached is not None:
-            return cached
-        if enqueue_mesh:
-            _get_mesh_loader().enqueue(path, size)
+        if _is_process_thumb(path):
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            cached = _thumbnail_cache.get(cache_key)
+            _thumbnail_mutex.unlock()
+            if cached is not None:
+                return cached
+            if enqueue_mesh:
+                _get_thumb_service().enqueue(path, size)
         return _draw_mesh_icon(size)
-    if ext == ".wav":
-        return _draw_audio_waveform(path, size)
-    if ext in (".mp3", ".ogg"):
+    if ext in (".wav", ".mp3", ".ogg", ".flac", ".aiff", ".m4a"):
+        if _is_process_thumb(path):
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            cached = _thumbnail_cache.get(cache_key)
+            _thumbnail_mutex.unlock()
+            if cached is not None:
+                return cached
+            _get_thumb_service().enqueue(path, size)
         return _draw_audio_icon(size)
     if ext == ".py":
         return _draw_script_icon(size)
@@ -517,12 +450,18 @@ def _get_thumbnail_raw(path: str, size: int, enqueue_mesh: bool = True) -> QPixm
         return _draw_material_icon(size)
     if ext in (".vert", ".frag"):
         return _draw_shader_icon(size)
-    if ext == ".animclip":
+    if ext in (".animclip", ".animcontroller"):
         return _draw_file_icon(size)
-    if ext == ".animcontroller":
-        return _draw_file_icon(size)
-    if ext in (".ttf", ".otf"):
-        return _draw_font_thumbnail(path, size)
+    if ext in (".ttf", ".otf", ".ttc", ".otc", ".woff", ".woff2"):
+        if _is_process_thumb(path):
+            cache_key = f"thumb:{path}:{size}"
+            _thumbnail_mutex.lock()
+            cached = _thumbnail_cache.get(cache_key)
+            _thumbnail_mutex.unlock()
+            if cached is not None:
+                return cached
+            _get_thumb_service().enqueue(path, size)
+        return _draw_font_placeholder(size)
     return _draw_file_icon(size)
 
 def _get_material_thumbnail(path: str, size: int) -> Optional[QPixmap]:
@@ -724,8 +663,8 @@ class ResourcePickerDialog(QDialog):
             lambda _: self._thumb_scroll_timer.start())
         self._mesh_pending = 0
         self._mesh_loaded: set[int] = set()
-        _get_mesh_loader().mesh_data_ready.connect(
-            self._on_mesh_thumb_ready, Qt.ConnectionType.QueuedConnection)
+        _get_thumb_service().thumbnail_ready.connect(
+            self._on_thumb_ready, Qt.ConnectionType.QueuedConnection)
         list_layout.addWidget(self._list)
         splitter.addWidget(list_container)
 
@@ -879,7 +818,7 @@ class ResourcePickerDialog(QDialog):
             else:
                 to_load.append((idx, path))
             if idx >= vis_first and idx <= vis_last:
-                self._maybe_enqueue_mesh_thumb(idx, path)
+                self._maybe_enqueue_process_thumb(idx, path)
         if to_load:
             self._loader.enqueue(to_load)
         if self._thumb_queue and not self._processing_thumbs:
@@ -898,18 +837,17 @@ class ResourcePickerDialog(QDialog):
         last = bottom_index.row() if bottom_index.isValid() else count - 1
         return max(0, first), min(count - 1, last)
 
-    def _maybe_enqueue_mesh_thumb(self, idx: int, path: str):
-        if self._mesh_pending >= _MAX_MESH_INFLIGHT:
+    def _maybe_enqueue_process_thumb(self, idx: int, path: str):
+        if self._mesh_pending >= _MAX_PROCESS_INFLIGHT:
             return
         if idx in self._mesh_loaded:
             return
-        ext = os.path.splitext(path)[1].lower()
-        if ext not in _MESH_EXTS:
+        if not _is_process_thumb(path):
             return
-        cache_key = f"mesh:{path}:{THUMB_SIZE}"
-        _mesh_thumb_mutex.lock()
-        cached = cache_key in _mesh_thumb_cache
-        _mesh_thumb_mutex.unlock()
+        cache_key = f"thumb:{path}:{THUMB_SIZE}"
+        _thumbnail_mutex.lock()
+        cached = cache_key in _thumbnail_cache
+        _thumbnail_mutex.unlock()
         if cached:
             self._mesh_loaded.add(idx)
             self._thumb_queue.append((idx, path))
@@ -919,9 +857,9 @@ class ResourcePickerDialog(QDialog):
             return
         self._mesh_loaded.add(idx)
         self._mesh_pending += 1
-        _get_mesh_loader().enqueue(path, THUMB_SIZE)
+        _get_thumb_service().enqueue(path, THUMB_SIZE)
 
-    def _on_mesh_thumb_ready(self, path: str, size: int, pixmap):
+    def _on_thumb_ready(self, path: str, size: int, pixmap):
         self._mesh_pending = max(0, self._mesh_pending - 1)
         if pixmap is None or pixmap.isNull():
             return

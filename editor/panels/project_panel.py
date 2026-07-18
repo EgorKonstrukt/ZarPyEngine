@@ -1367,9 +1367,9 @@ class ProjectPanel(QDockWidget):
             QMessageBox.warning(self, "Error", f"Could not update .gitignore:\n{e}")
 
     def _connect_mesh_loader(self):
-        from editor.resource_picker import _get_mesh_loader
-        loader = _get_mesh_loader()
-        loader.mesh_data_ready.connect(self._on_mesh_data_ready, Qt.ConnectionType.QueuedConnection)
+        from editor.resource_picker import _get_thumb_service
+        loader = _get_thumb_service()
+        loader.thumbnail_ready.connect(self._on_mesh_data_ready, Qt.ConnectionType.QueuedConnection)
 
     def _on_mesh_data_ready(self, path: str, size: int, pixmap):
         if pixmap is None or pixmap.isNull():
