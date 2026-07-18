@@ -10,3 +10,5 @@ msgpack
 cython
 setuptools
 pillow
+qtawesome
+xxhash

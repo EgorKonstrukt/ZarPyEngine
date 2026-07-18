@@ -26,6 +26,7 @@ from editor.panels.mesh_editor_panel import MeshEditorPanel
 from editor.panels.animation_panel import AnimationPanel
 from editor.panels.animator_panel import AnimatorPanel
 from editor.panels.scripts_panel import ScriptsPanel
+from editor.panels.script_editor_panel import ScriptEditorPanel
 from editor.panels.tracemalloc_panel import TracemallocPanel
 from editor.panels.time_travel_panel import TimeTravelPanel
 from editor.panels.vcs_panel import VcsPanel
@@ -205,13 +206,21 @@ def register_default_docks(mw):
     mw._animator.transition_selected_signal.connect(mw._inspector.show_animator_transition)
     mw._animator.selection_cleared.connect(mw._inspector.clear_animator_mode)
     mw._scripts = ScriptsPanel(mw._engine, mw)
-    mw._scripts.setObjectName("ScriptsDock")
+    mw._scripts.setObjectName("ShadersDock")
     mw._scripts.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
     mw._scripts.setFeatures(
         QDockWidget.DockWidgetFeature.DockWidgetMovable |
         QDockWidget.DockWidgetFeature.DockWidgetFloatable |
         QDockWidget.DockWidgetFeature.DockWidgetClosable)
     register_dock(mw, mw._scripts, Qt.DockWidgetArea.LeftDockWidgetArea)
+    mw._script_editor = ScriptEditorPanel(mw._engine, mw)
+    mw._script_editor.setObjectName("ScriptEditorDock")
+    mw._script_editor.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+    mw._script_editor.setFeatures(
+        QDockWidget.DockWidgetFeature.DockWidgetMovable |
+        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+        QDockWidget.DockWidgetFeature.DockWidgetClosable)
+    register_dock(mw, mw._script_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._tracemalloc = TracemallocPanel(mw)
     mw._tracemalloc.setObjectName("TracemallocDebugDock")
     mw._tracemalloc.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -275,6 +284,7 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._animation)
     mw.addDockWidget(area, mw._animator)
     mw.addDockWidget(area, mw._scripts)
+    mw.addDockWidget(area, mw._script_editor)
     mw.addDockWidget(area, mw._tracemalloc)
     mw.addDockWidget(area, mw._time_travel)
     mw.addDockWidget(area, mw._vcs)
@@ -284,7 +294,7 @@ def add_all_docks(mw):
                         mw._console, mw._profiler, mw._project,
                         mw._terminal, mw._undo_history, mw._plugin_mgr,
                         mw._collab_panel, mw._mesh_editor, mw._animation,
-                        mw._animator, mw._scripts, mw._tracemalloc,
+                        mw._animator, mw._scripts, mw._script_editor, mw._tracemalloc,
                         mw._time_travel, mw._vcs):
             mw.addDockWidget(area, dock)
 
@@ -300,6 +310,7 @@ def build_dock_layout(mw):
     mw.tabifyDockWidget(mw._viewport_dock, mw._animation)
     mw.tabifyDockWidget(mw._viewport_dock, mw._animator)
     mw.tabifyDockWidget(mw._viewport_dock, mw._scripts)
+    mw.tabifyDockWidget(mw._scripts, mw._script_editor)
     mw.tabifyDockWidget(mw._project, mw._undo_history)
     mw.tabifyDockWidget(mw._project, mw._profiler)
     mw.tabifyDockWidget(mw._project, mw._plugin_mgr)
