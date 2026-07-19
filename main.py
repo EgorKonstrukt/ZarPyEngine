@@ -72,6 +72,9 @@ def excepthook(exc_type, exc_value, exc_traceback):
     print(f"[Zarin Engine] Unhandled exception:\n{tb_str}", file=sys.stderr)
 sys.excepthook = excepthook
 
+from editor.bug_report import install_hooks as _install_bug_hooks
+_install_bug_hooks()
+
 def run_headless_mcp():
     os.environ["ZARIN_MCP_MODE"] = "stdio"
     import os as _os

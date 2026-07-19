@@ -153,6 +153,10 @@ def setup_menu(mw):
     add_plugin_menu_items(mw, mb)
 
     help_menu = mb.addMenu("Help")
+    bug_act = QAction("Report Bug...", mw)
+    bug_act.triggered.connect(lambda: _show_bug_report(mw))
+    help_menu.addAction(bug_act)
+    help_menu.addSeparator()
     about_act = QAction("About Zarin Engine", mw)
     about_act.triggered.connect(lambda: show_about(mw))
     help_menu.addAction(about_act)
@@ -206,3 +210,8 @@ def add_plugin_menu_items(mw, mb):
             except Exception as e:
                 from core.foundation.logger import Logger
                 Logger.error(f"Failed to add menu item '{item.get('text', '?')}': {e}")
+
+
+def _show_bug_report(mw):
+    from editor.bug_report import show_bug_report_dialog
+    show_bug_report_dialog(mw)

@@ -49,6 +49,9 @@ def excepthook(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = excepthook
 
+from editor.bug_report import install_hooks as _install_bug_hooks
+_install_bug_hooks()
+
 
 def _resolve_startup_scene(project_root: str) -> str:
     _log(f"project_root: {project_root}")
