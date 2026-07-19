@@ -9,31 +9,39 @@ ComputeShader "TerrainGenerator"
     Properties
     {
         Int2(resolution, "Resolution", 512, 512)
-        Int(octaves, "Octaves", 8)
-        Float(baseFrequency, "Base Frequency", 0.012)
-        Float(lacunarity, "Lacunarity", 2.0)
+        Int(octaves, "Octaves", 9)
+        Float(baseFrequency, "Base Frequency", 0.010)
+        Float(lacunarity, "Lacunarity", 2.03)
         Float(persistence, "Persistence", 0.5)
-        Float(heightScale, "Height Scale", 60.0)
+        Float(heightScale, "Height Scale", 120.0)
         Float(offset, "Height Offset", 0.0)
-        Float(warpeness, "Domain Warp", 0.35)
-        Float(warpFrequency, "Warp Frequency", 0.03)
-        Float(ridge, "Ridged Mix", 0.0)
-        Float(ridgePower, "Ridge Power", 3.0)
+        Float(warpeness, "Domain Warp", 0.6)
+        Float(warpFrequency, "Warp Frequency", 0.018)
+        Float(warpIterations, "Warp Iterations", 3.0)
+        Float(ridge, "Ridged Mix", 0.55)
+        Float(ridgePower, "Ridge Power", 4.0)
+        Float(ridgeSharpness, "Ridge Sharpness", 1.0)
         Float(billow, "Billow Mix", 0.0)
         Float(billowPower, "Billow Power", 2.0)
-        Float(continentMask, "Continent Mask", 0.0)
-        Float(continentScale, "Continent Scale", 0.004)
+        Float(continentMask, "Continent Mask", 0.6)
+        Float(continentScale, "Continent Scale", 0.0025)
+        Float(continentFalloff, "Continent Falloff", 1.4)
+        Float(detail, "Detail Strength", 0.35)
+        Float(detailFrequency, "Detail Frequency", 6.0)
         Float(plateau, "Plateau Sharpness", 0.0)
         Float(plateauLevel, "Plateau Level", 0.5)
+        Float(strata, "Strata Strength", 0.0)
+        Float(strataScale, "Strata Scale", 12.0)
         Float(slopeMask, "Slope Mask", 0.0)
         Float(slopeMin, "Slope Min", 0.35)
-        Float(thermalErosion, "Thermal Erosion", 0.0)
-        Float(hydraulicErosion, "Hydraulic Erosion", 0.0)
-        Float(erosionIterations, "Erosion Iterations", 8.0)
-        Float(talus, "Talus Angle", 0.02)
-        Float(peakSmoothing, "Peak Smoothing", 0.0)
+        Float(thermalErosion, "Thermal Erosion", 0.35)
+        Float(hydraulicErosion, "Hydraulic Erosion", 0.5)
+        Float(erosionIterations, "Erosion Iterations", 16.0)
+        Float(talus, "Talus Angle", 0.04)
+        Float(sedimentCapacity, "Sediment Capacity", 4.0)
+        Float(erosionStrength, "Erosion Strength", 0.3)
         Float(valleyDepth, "Valley Depth", 0.0)
-        Float(noiseSeed, "Seed", 1337.0)
+        Float(peakSmoothing, "Peak Smoothing", 0.15)
         Float(riverStrength, "River Carve", 0.0)
         Float(terrace, "Terrace Mix", 0.0)
         Float(terraceSteps, "Terrace Steps", 8.0)
@@ -42,8 +50,7 @@ ComputeShader "TerrainGenerator"
         Float(fractalTwist, "Fractal Twist", 0.0)
         Float(sharpen, "Sharpen", 0.0)
         Float(heightBias, "Height Bias", 0.0)
-        Float(normalizeMin, "Normalize Min", -1.0)
-        Float(normalizeMax, "Normalize Max", 1.0)
+        Float(noiseSeed, "Seed", 1337.0)
         Int(flipY, "Flip Y", 0)
     }
 
@@ -66,23 +73,31 @@ ComputeShader "TerrainGenerator"
     uniform float u_offset;
     uniform float u_warpeness;
     uniform float u_warpFrequency;
+    uniform float u_warpIterations;
     uniform float u_ridge;
     uniform float u_ridgePower;
+    uniform float u_ridgeSharpness;
     uniform float u_billow;
     uniform float u_billowPower;
     uniform float u_continentMask;
     uniform float u_continentScale;
+    uniform float u_continentFalloff;
+    uniform float u_detail;
+    uniform float u_detailFrequency;
     uniform float u_plateau;
     uniform float u_plateauLevel;
+    uniform float u_strata;
+    uniform float u_strataScale;
     uniform float u_slopeMask;
     uniform float u_slopeMin;
     uniform float u_thermalErosion;
     uniform float u_hydraulicErosion;
     uniform float u_erosionIterations;
     uniform float u_talus;
-    uniform float u_peakSmoothing;
+    uniform float u_sedimentCapacity;
+    uniform float u_erosionStrength;
     uniform float u_valleyDepth;
-    uniform float u_noiseSeed;
+    uniform float u_peakSmoothing;
     uniform float u_riverStrength;
     uniform float u_terrace;
     uniform float u_terraceSteps;
@@ -91,15 +106,19 @@ ComputeShader "TerrainGenerator"
     uniform float u_fractalTwist;
     uniform float u_sharpen;
     uniform float u_heightBias;
-    uniform float u_normalizeMin;
-    uniform float u_normalizeMax;
+    uniform float u_noiseSeed;
     uniform int u_flipY;
+
+    vec2 hash2(vec2 p, float seed)
+    {
+        p = vec2(dot(p, vec2(127.1f, 311.7f)), dot(p, vec2(269.5f, 183.3f)));
+        p = p + seed * 0.137f;
+        return fract(sin(p) * 43758.5453123f) * 2.0f - 1.0f;
+    }
 
     float hash(vec2 p, float seed)
     {
-        p = p * 0.3183099f + vec2(0.1f, 0.2f);
-        p += seed * 0.013f;
-        return fract(sin(dot(p, vec2(127.1f, 311.7f))) * 43758.5453123f) * 2.0f - 1.0f;
+        return fract(sin(dot(p, vec2(127.1f, 311.7f)) + seed * 0.137f) * 43758.5453123f) * 2.0f - 1.0f;
     }
 
     float value_noise(vec2 p, float seed)
@@ -114,6 +133,29 @@ ComputeShader "TerrainGenerator"
         return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
     }
 
+    float gradient_noise(vec2 p, float seed)
+    {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0f - 2.0f * f);
+        vec2 g00 = hash2(i + vec2(0.0f, 0.0f), seed);
+        vec2 g10 = hash2(i + vec2(1.0f, 0.0f), seed);
+        vec2 g01 = hash2(i + vec2(0.0f, 1.0f), seed);
+        vec2 g11 = hash2(i + vec2(1.0f, 1.0f), seed);
+        float n00 = dot(g00, f - vec2(0.0f, 0.0f));
+        float n10 = dot(g10, f - vec2(1.0f, 0.0f));
+        float n01 = dot(g01, f - vec2(0.0f, 1.0f));
+        float n11 = dot(g11, f - vec2(1.0f, 1.0f));
+        return mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
+    }
+
+    mat2 rot2(float a)
+    {
+        float s = sin(a);
+        float c = cos(a);
+        return mat2(c, -s, s, c);
+    }
+
     float fbm(vec2 p, float seed)
     {
         float sum = 0.0f;
@@ -125,13 +167,15 @@ ComputeShader "TerrainGenerator"
         {
             if (o >= u_octaves) break;
             vec2 q = p * freq;
-            float angle = twist * float(o);
-            float s = sin(angle);
-            float c = cos(angle);
-            q = mat2(c, -s, s, c) * q;
-            float n = value_noise(q, seed + float(o) * 11.3f);
+            if (twist > 0.0f)
+            {
+                float angle = twist * float(o);
+                q = rot2(angle) * q;
+            }
+            float n = gradient_noise(q, seed + float(o) * 17.3f);
             float ridged = 1.0f - abs(n);
             ridged = pow(clamp(ridged, 0.0f, 1.0f), u_ridgePower);
+            ridged = mix(ridged, 1.0f - ridged, 1.0f - u_ridgeSharpness);
             float billow = abs(n) * 2.0f - 1.0f;
             billow = pow(abs(billow), u_billowPower) * sign(n);
             n = n * (1.0f - u_ridge - u_billow) + ridged * u_ridge - billow * u_billow;
@@ -143,10 +187,17 @@ ComputeShader "TerrainGenerator"
         return norm > 0.0f ? sum / norm : 0.0f;
     }
 
+    vec2 fbm_warp(vec2 p, float seed)
+    {
+        vec2 q = vec2(fbm(p, seed + 1.7f), fbm(p + vec2(5.2f, 1.3f), seed + 8.3f));
+        return q;
+    }
+
     float continent(vec2 p, float seed)
     {
         float n = fbm(p * u_continentScale, seed + 90.0f);
-        return smoothstep(-0.6f, 0.6f, n);
+        n = n * 0.5f + 0.5f;
+        return smoothstep(0.5f - 0.5f * u_continentFalloff, 0.5f + 0.5f * u_continentFalloff, n);
     }
 
     float plateau_func(float h)
@@ -155,13 +206,19 @@ ComputeShader "TerrainGenerator"
         return clamp(1.0f - pow(d, u_plateau), -1.0f, 1.0f);
     }
 
+    float strata_func(float h)
+    {
+        float bands = sin(h * u_strataScale * 6.28318f);
+        return bands * 0.5f;
+    }
+
     float terrace_func(float h)
     {
         float steps = max(2.0f, u_terraceSteps);
         float t = h * steps;
         float fl = floor(t);
         float fr = fract(t);
-        float sm = smoothstep(0.4f, 0.6f, fr);
+        float sm = smoothstep(0.35f, 0.65f, fr);
         return (fl + sm) / steps;
     }
 
@@ -213,20 +270,34 @@ ComputeShader "TerrainGenerator"
         vec2 uv = (vec2(float(x), float(y)) / float(res - 1)) * 2.0f - 1.0f;
 
         float seed = u_noiseSeed;
-        vec2 wp = uv;
+        float scale = u_baseFrequency * float(res) * 0.5f;
+        vec2 p = uv * scale;
+
+        vec2 wp = p;
         if (u_warpeness > 0.0f)
         {
-            float wr = value_noise(uv * u_warpFrequency * float(res) * 0.01f, seed + 17.0f);
-            float ws = value_noise(uv * u_warpFrequency * float(res) * 0.01f + 5.2f, seed + 43.0f);
-            wp = uv + vec2(wr, ws) * u_warpeness;
+            int wi = int(clamp(u_warpIterations, 1.0f, 4.0f));
+            for (int w = 0; w < 4; w++)
+            {
+                if (w >= wi) break;
+                vec2 q = fbm_warp(wp * u_warpFrequency * 0.5f + float(w) * 2.7f, seed + 17.0f + float(w) * 5.0f);
+                wp = p + q * u_warpeness * scale;
+            }
         }
 
-        float h = fbm(wp * u_baseFrequency * float(res) * 0.5f, seed);
+        float h = fbm(wp, seed);
 
         if (u_continentMask > 0.0f)
         {
             float c = continent(wp, seed);
-            h = mix(h, h * c, u_continentMask);
+            float island = c * (0.65f + 0.35f * fbm(wp * 0.5f, seed + 12.0f));
+            h = mix(h, h * island, u_continentMask);
+        }
+
+        if (u_detail > 0.0f)
+        {
+            float d = fbm(wp * u_detailFrequency, seed + 77.0f);
+            h += d * u_detail * 0.25f;
         }
 
         if (u_dune > 0.0f)
@@ -235,11 +306,13 @@ ComputeShader "TerrainGenerator"
         if (u_plateau > 0.0f)
             h = mix(h, plateau_func(h), u_plateau);
 
+        if (u_strata > 0.0f)
+            h = mix(h, h + strata_func(h) * 0.04f, u_strata);
+
         if (u_terrace > 0.0f)
             h = mix(h, terrace_func(h), u_terrace);
 
         h += u_heightBias;
-
         h = h * u_heightScale + u_offset;
 
         if (u_riverStrength > 0.0f)
@@ -253,40 +326,52 @@ ComputeShader "TerrainGenerator"
         barrier();
 
         float iters = max(1.0f, u_erosionIterations);
+        float deposit = 0.0f;
 
         for (int k = 0; k < 24; k++)
         {
             bool doIter = float(k) < iters;
 
-            if (u_thermalErosion > 0.0f && doIter)
+            if (u_hydraulicErosion > 0.0f && doIter && x > 0 && y > 0 && x < res - 1 && y < res - 1)
             {
                 float t = sample_height(ivec2(x, y));
-                float loss = 0.0f;
-                if (x > 0 && y > 0 && x < res - 1 && y < res - 1)
+                float hl = sample_height(ivec2(x - 1, y));
+                float hr = sample_height(ivec2(x + 1, y));
+                float hd = sample_height(ivec2(x, y - 1));
+                float hu = sample_height(ivec2(x, y + 1));
+                float dx = (hr - hl) * 0.5f;
+                float dy = (hu - hd) * 0.5f;
+                float slopeLen = max(1e-5f, sqrt(dx * dx + dy * dy));
+                float sinSlope = slopeLen / sqrt(1.0f + slopeLen * slopeLen);
+                float capacity = u_sedimentCapacity * sinSlope * u_erosionStrength;
+                float delta = t - (t + deposit) + capacity * 0.0f;
+                if (deposit < capacity)
                 {
-                    float ne = sample_height(ivec2(x + 1, y)) - t;
-                    float nw = sample_height(ivec2(x - 1, y)) - t;
-                    float nn = sample_height(ivec2(x, y + 1)) - t;
-                    float ns = sample_height(ivec2(x, y - 1)) - t;
-                    float maxd = max(max(ne, nw), max(nn, ns));
-                    if (maxd > u_talus)
-                        loss = min((maxd - u_talus) * u_thermalErosion * 0.25f, maxd * 0.5f);
+                    float erode = min((capacity - deposit) * 0.2f, max(0.0f, slopeLen * 0.5f));
+                    heights[y * res + x] = t - erode;
+                    deposit += erode;
                 }
-                heights[y * res + x] = t - loss;
+                else
+                {
+                    float dep = (deposit - capacity) * 0.2f;
+                    heights[y * res + x] = t + dep;
+                    deposit -= dep;
+                }
             }
 
-            if (u_hydraulicErosion > 0.0f && doIter)
+            if (u_thermalErosion > 0.0f && doIter && x > 0 && y > 0 && x < res - 1 && y < res - 1)
             {
                 float t = sample_height(ivec2(x, y));
-                float avg = t;
-                int cnt = 1;
-                if (x > 0) { avg += sample_height(ivec2(x - 1, y)); cnt++; }
-                if (x < res - 1) { avg += sample_height(ivec2(x + 1, y)); cnt++; }
-                if (y > 0) { avg += sample_height(ivec2(x, y - 1)); cnt++; }
-                if (y < res - 1) { avg += sample_height(ivec2(x, y + 1)); cnt++; }
-                avg /= float(cnt);
-                float delta = (avg - t) * u_hydraulicErosion * 0.25f;
-                heights[y * res + x] = t + delta;
+                float ne = sample_height(ivec2(x + 1, y)) - t;
+                float nw = sample_height(ivec2(x - 1, y)) - t;
+                float nn = sample_height(ivec2(x, y + 1)) - t;
+                float ns = sample_height(ivec2(x, y - 1)) - t;
+                float maxd = max(max(ne, nw), max(nn, ns));
+                if (maxd > u_talus)
+                {
+                    float loss = min((maxd - u_talus) * u_thermalErosion * 0.25f, maxd * 0.5f);
+                    heights[y * res + x] = t - loss;
+                }
             }
 
             barrier();

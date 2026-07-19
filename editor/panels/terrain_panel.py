@@ -31,12 +31,19 @@ _FLOAT_KEYS = [
     ("offset", "Height Offset", -200.0, 200.0, 0.5, 2),
     ("warpeness", "Domain Warp", 0.0, 1.0, 0.01, 3),
     ("warpFrequency", "Warp Frequency", 0.0, 0.2, 0.001, 4),
+    ("warpIterations", "Warp Iterations", 1.0, 4.0, 1.0, 0),
     ("ridge", "Ridged Mix", 0.0, 1.0, 0.01, 3),
     ("ridgePower", "Ridge Power", 0.5, 8.0, 0.1, 2),
+    ("ridgeSharpness", "Ridge Sharpness", 0.5, 1.0, 0.01, 3),
     ("billow", "Billow Mix", 0.0, 1.0, 0.01, 3),
     ("billowPower", "Billow Power", 0.5, 6.0, 0.1, 2),
     ("continentMask", "Continent Mask", 0.0, 1.0, 0.01, 3),
     ("continentScale", "Continent Scale", 0.0005, 0.05, 0.0005, 5),
+    ("continentFalloff", "Continent Falloff", 0.2, 4.0, 0.01, 3),
+    ("detail", "Detail Strength", 0.0, 1.0, 0.01, 3),
+    ("detailFrequency", "Detail Frequency", 1.0, 16.0, 0.1, 2),
+    ("strata", "Strata Strength", 0.0, 1.0, 0.01, 3),
+    ("strataScale", "Strata Scale", 1.0, 40.0, 0.5, 2),
     ("plateau", "Plateau Sharpness", 0.0, 1.0, 0.01, 3),
     ("plateauLevel", "Plateau Level", -1.0, 1.0, 0.01, 3),
     ("slopeMask", "Slope Mask", 0.0, 1.0, 0.01, 3),
@@ -183,6 +190,9 @@ class TerrainPanel(QDockWidget):
         self._add_float_controls(gv2, [
             ("warpeness", "Warp Strength", 0.0, 1.0, 0.01, 3),
             ("warpFrequency", "Warp Frequency", 0.0, 0.2, 0.001, 4),
+            ("warpIterations", "Warp Iterations", 1.0, 4.0, 1.0, 0),
+            ("detail", "Detail Strength", 0.0, 1.0, 0.01, 3),
+            ("detailFrequency", "Detail Frequency", 1.0, 16.0, 0.1, 2),
         ])
         v.addWidget(gb2)
 
@@ -191,6 +201,7 @@ class TerrainPanel(QDockWidget):
         self._add_float_controls(gv3, [
             ("ridge", "Ridged Mix", 0.0, 1.0, 0.01, 3),
             ("ridgePower", "Ridge Power", 0.5, 8.0, 0.1, 2),
+            ("ridgeSharpness", "Ridge Sharpness", 0.5, 1.0, 0.01, 3),
             ("billow", "Billow Mix", 0.0, 1.0, 0.01, 3),
             ("billowPower", "Billow Power", 0.5, 6.0, 0.1, 2),
         ])
@@ -211,6 +222,8 @@ class TerrainPanel(QDockWidget):
         gv2 = QVBoxLayout(gb2)
         self._add_float_controls(gv2, [
             ("hydraulicErosion", "Strength", 0.0, 1.0, 0.01, 3),
+            ("sedimentCapacity", "Sediment Capacity", 0.0, 12.0, 0.1, 2),
+            ("erosionStrength", "Erosion Strength", 0.0, 1.0, 0.01, 3),
         ])
         v.addWidget(gb2)
         gb3 = QGroupBox("Relief Shaping")
@@ -231,6 +244,7 @@ class TerrainPanel(QDockWidget):
         self._add_float_controls(gv, [
             ("continentMask", "Mask Strength", 0.0, 1.0, 0.01, 3),
             ("continentScale", "Continent Scale", 0.0005, 0.05, 0.0005, 5),
+            ("continentFalloff", "Continent Falloff", 0.2, 4.0, 0.01, 3),
         ])
         v.addWidget(gb)
         gb2 = QGroupBox("Plateaus & Terraces")
@@ -240,6 +254,8 @@ class TerrainPanel(QDockWidget):
             ("plateauLevel", "Plateau Level", -1.0, 1.0, 0.01, 3),
             ("terrace", "Terrace Mix", 0.0, 1.0, 0.01, 3),
             ("terraceSteps", "Terrace Steps", 2.0, 32.0, 1.0, 0),
+            ("strata", "Strata Strength", 0.0, 1.0, 0.01, 3),
+            ("strataScale", "Strata Scale", 1.0, 40.0, 0.5, 2),
         ])
         v.addWidget(gb2)
         gb3 = QGroupBox("Dunes & Slopes")
