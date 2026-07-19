@@ -6,18 +6,20 @@
 
 from __future__ import annotations
 from typing import Optional, TYPE_CHECKING
+import time
 import numpy as np
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QComboBox, QDoubleSpinBox,
                              QSpinBox, QGroupBox, QGridLayout, QScrollArea,
                              QFrame, QCheckBox, QSlider, QTabWidget, QLineEdit)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from core.ecs.ecs import ComponentRegistry
 from core.foundation.commands import AddComponentCommand, get_history
 from core.components.rendering.terrain import Terrain
 from core.components.physics.terrain_collider import TerrainCollider
 from core.components.transform import Transform
 from core.terrain.terrain_generator import TerrainSettings, _DEFAULTS
+from core.terrain.terrain_worker import get_worker
 from core.foundation.logger import Logger
 if TYPE_CHECKING:
     from core.ecs.ecs import Entity
@@ -90,6 +92,13 @@ class TerrainPanel(QDockWidget):
         self._terrain: Optional[Terrain] = None
         self._float_widgets: dict = {}
         self._int_widgets: dict = {}
+        self._live = False
+        self._dragging = False
+        self._last_request = 0.0
+        self._pending_token = 0
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(40)
+        self._live_timer.timeout.connect(self._poll_worker)
 
         self.setObjectName("TerrainEditorDock")
         self.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -115,6 +124,7 @@ class TerrainPanel(QDockWidget):
 
         self._build_action_section()
         self._build_tabs()
+        self._connect_live_signals()
         self._scroll_layout.addStretch()
         self._refresh_enabled(False)
 
@@ -138,6 +148,10 @@ class TerrainPanel(QDockWidget):
         rand_btn = QPushButton("Randomize Seed")
         rand_btn.clicked.connect(self._on_randomize)
         v.addWidget(rand_btn)
+        self._live_check = QCheckBox("Live Preview")
+        self._live_check.setToolTip("Real-time progressive generation in a background thread (adaptive resolution)")
+        self._live_check.toggled.connect(self.set_live)
+        v.addWidget(self._live_check)
         self._scroll_layout.addWidget(gb)
 
     def _build_tabs(self):
@@ -303,6 +317,101 @@ class TerrainPanel(QDockWidget):
         self._float_widgets[key] = sb
         return sb
 
+    def _connect_live_signals(self):
+        for sb in self._float_widgets.values():
+            sb.valueChanged.connect(self._on_live_changed)
+            sb.installEventFilter(self)
+        if hasattr(self, "_res_spin"):
+            self._res_spin.valueChanged.connect(self._on_live_changed)
+            self._res_spin.installEventFilter(self)
+        if hasattr(self, "_flip"):
+            self._flip.stateChanged.connect(lambda _: self._on_live_changed())
+        self._world_size.installEventFilter(self)
+        self._world_size.valueChanged.connect(self._on_live_changed)
+
+    def eventFilter(self, obj, event):
+        if obj in self._float_widgets.values() or obj is self._world_size or (hasattr(self, "_res_spin") and obj is self._res_spin):
+            if event.type() == event.Type.MouseButtonPress or event.type() == event.Type.Wheel:
+                self._on_drag_start()
+                QTimer.singleShot(250, self._on_drag_end)
+            elif event.type() == event.Type.KeyPress:
+                self._on_drag_start()
+                QTimer.singleShot(250, self._on_drag_end)
+        return super().eventFilter(obj, event)
+
+    def set_live(self, enabled: bool):
+        self._live = enabled
+        if enabled:
+            if not self._live_timer.isActive():
+                self._live_timer.start()
+            if self._terrain is not None:
+                self._request_now()
+        else:
+            self._live_timer.stop()
+
+    def _on_drag_start(self):
+        self._dragging = True
+
+    def _on_drag_end(self):
+        self._dragging = False
+        self._request_now()
+
+    def _on_live_changed(self):
+        if not self._live or self._terrain is None:
+            return
+        now = time.time()
+        if now - self._last_request < 0.03:
+            return
+        self._last_request = now
+        if not self._dragging:
+            self._request_now()
+        else:
+            QTimer.singleShot(30, self._request_now)
+
+    def _adaptive_resolution(self) -> int:
+        if self._dragging:
+            return 128
+        return int(self._res_spin.value()) if hasattr(self, "_res_spin") else 512
+
+    def _request_now(self):
+        if self._terrain is None:
+            return
+        settings = self._collect_settings()
+        self._terrain.settings = settings
+        if hasattr(self, "_world_size"):
+            self._terrain.world_size = float(self._world_size.value())
+        res = self._adaptive_resolution()
+        self._pending_token = get_worker().request(settings.to_dict(), res)
+
+    def _poll_worker(self):
+        worker = get_worker()
+        while True:
+            res = worker.consume_result()
+            if res is None:
+                break
+            token, hf = res
+            if token != self._pending_token:
+                continue
+            self._apply_heightfield(hf)
+
+    def _apply_heightfield(self, hf: np.ndarray):
+        if self._terrain is None:
+            return
+        from core.terrain.terrain_generator import get_generator
+        size = float(self._world_size.value()) if hasattr(self, "_world_size") else 1000.0
+        mesh = get_generator().mesh_from_heightfield(hf, size)
+        if mesh is None:
+            return
+        self._terrain.set_heightfield(hf, mesh)
+        tc = self._entity.get_component(TerrainCollider) if self._entity else None
+        if tc is not None:
+            tc.set_height_data(hf)
+            tc.resolution = hf.shape[0]
+            tc.size = self._terrain_size_vec()
+            tc.height_scale = self._float_widgets["heightScale"].value()
+        if self._engine and self._engine.scene:
+            self._engine.scene._render_version += 1
+
     def _refresh_enabled(self, enabled: bool):
         for w in list(self._float_widgets.values()) + list(self._int_widgets.values()):
             try:
@@ -377,7 +486,10 @@ class TerrainPanel(QDockWidget):
         self._terrain.settings = self._collect_settings()
         self._refresh_enabled(True)
         self.set_entity(entity)
-        self._on_generate()
+        if self._live_check.isChecked():
+            self._request_now()
+        else:
+            self._on_generate()
         if self._engine.scene:
             self._engine.scene._render_version += 1
 
@@ -416,6 +528,10 @@ class TerrainPanel(QDockWidget):
         self._terrain.settings = settings
         if hasattr(self, "_world_size"):
             self._terrain.world_size = float(self._world_size.value())
+        if self._live:
+            self._dragging = False
+            self._request_now()
+            return
         ok = self._terrain.generate()
         if not ok:
             Logger.warning("Terrain Editor: generation failed (no GL context?)")

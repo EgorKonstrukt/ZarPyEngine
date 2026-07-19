@@ -43,6 +43,13 @@ class Terrain(Component):
     def heightfield(self) -> Optional[np.ndarray]:
         return self._heightfield
 
+    def set_heightfield(self, hf: np.ndarray, mesh_data: Optional[dict] = None):
+        self._heightfield = hf
+        if mesh_data is not None:
+            self._mesh_data = mesh_data
+        self._gpu_dirty = True
+        self._generated = True
+
     @property
     def mesh_data(self) -> Optional[dict]:
         return self._mesh_data
