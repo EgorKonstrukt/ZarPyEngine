@@ -73,6 +73,7 @@ def _qta_icon(name: str) -> QIcon:
         "undo": "fa5s.undo",
         "redo": "fa5s.redo",
         "word_wrap": "fa5s.align-left",
+        "indent": "fa5s.indent",
         "zoom_in": "fa5s.search-plus",
         "zoom_out": "fa5s.search-minus",
         "run": "fa5s.play",
@@ -171,6 +172,7 @@ class _CodeEditor(QPlainTextEdit):
         super().__init__(parent)
         self._font_size = self.DEFAULT_FONT
         self._wrap = False
+        self._show_indent_guides = True
         self._apply_font()
         self.setTabStopDistance(QFontMetrics(QFont("Consolas", 10)).horizontalAdvance(' ') * 4)
         self.setUndoRedoEnabled(True)
@@ -196,6 +198,53 @@ class _CodeEditor(QPlainTextEdit):
 
         self._update_line_number()
         self._update_minimap()
+
+    def set_indent_guides(self, on: bool):
+        self._show_indent_guides = on
+        self.viewport().update()
+
+    def _indent_info(self):
+        fm = QFontMetrics(self.font())
+        space_w = fm.horizontalAdvance(' ')
+        tab_w = self.tabStopDistance()
+        left = self.viewportMargins().left()
+        return space_w, tab_w, left
+
+    def _indent_levels(self, block) -> int:
+        text = block.text()
+        level = 0
+        for ch in text:
+            if ch == ' ':
+                level += 1
+            elif ch == '\t':
+                level += 4
+            else:
+                break
+        return level // 4
+
+    def paintEvent(self, event):
+        if getattr(self, "_show_indent_guides", True):
+            space_w, tab_w, left = self._indent_info()
+            if space_w > 0 and tab_w > 0:
+                block = self.firstVisibleBlock()
+                max_level = 0
+                b = block
+                while b.isValid() and b.blockNumber() < self.document().blockCount():
+                    top = int(self.blockBoundingGeometry(b).translated(self.contentOffset()).top())
+                    if top > self.viewport().height():
+                        break
+                    max_level = max(max_level, self._indent_levels(b))
+                    b = b.next()
+                painter = QPainter(self.viewport())
+                cur_level = self._indent_levels(self.textCursor().block())
+                guide_color = QColor("#2b2b2b")
+                active_color = QColor("#3f5a7a")
+                for level in range(1, max_level + 1):
+                    x = int(left + level * tab_w) - int(space_w * 0.5)
+                    painter.setPen(active_color if level <= cur_level else guide_color)
+                    painter.drawLine(x, 0, x, self.viewport().height())
+                painter.end()
+        super().paintEvent(event)
 
     def _apply_font(self):
         self.setStyleSheet(f"""
@@ -259,15 +308,18 @@ class _CodeEditor(QPlainTextEdit):
         cr = self.contentsRect()
         return cr.x() + cr.width() - self._minimap.width(), cr.y(), self._minimap.width(), cr.height()
 
+    def _minimap_line_step(self) -> int:
+        return max(1, int(self._font_size * 0.5))
+
     def _rebuild_minimap(self):
         mw = self._minimap.width()
         mh = max(1, self._minimap.height())
+        mm_step = self._minimap_line_step()
         blocks = self.document().blockCount()
-        line_h = max(1, int(self._font_size * 0.5))
-        scale_y = min(1.0, mh / max(1, blocks * line_h))
-        key = (mw, mh, blocks)
+        scale_y = min(1.0, mh / max(1, blocks * mm_step))
+        key = (mw, mh, blocks, self._font_size)
         if self._minimap_cache is not None and self._minimap_cache_key == key:
-            return self._minimap_cache, scale_y, line_h
+            return self._minimap_cache, scale_y, mm_step
         pm = QPixmap(mw, mh)
         pm.fill(QColor("#161616"))
         painter = QPainter(pm)
@@ -275,27 +327,23 @@ class _CodeEditor(QPlainTextEdit):
         painter.setFont(mm_font)
         fm = painter.fontMetrics()
         ascent = fm.ascent()
-        pad = 3
+        pad = scale(3)
         block = self.document().firstBlock()
-        cur_block = self.textCursor().blockNumber()
         idx = 0
         while block.isValid():
-            y = int(idx * line_h * scale_y)
+            y = int(idx * mm_step * scale_y)
             if y > mh:
                 break
             text = block.text().strip()
-            if not text:
-                block = block.next()
-                idx += 1
-                continue
-            painter.setPen(QColor("#9ccc65") if block.blockNumber() == cur_block else QColor("#6a7888"))
-            painter.drawText(pad, y + ascent, text[:40])
+            if text:
+                painter.setPen(QColor("#6b7888"))
+                painter.drawText(pad, y + ascent, text[:48])
             block = block.next()
             idx += 1
         painter.end()
         self._minimap_cache = pm
         self._minimap_cache_key = key
-        return pm, scale_y, line_h
+        return pm, scale_y, mm_step
 
     def line_number_paint(self, event, area):
         painter = QPainter(area)
@@ -326,24 +374,31 @@ class _CodeEditor(QPlainTextEdit):
         painter = QPainter(area)
         painter.fillRect(event.rect(), QColor("#161616"))
 
-        pm, scale_y, line_h = self._rebuild_minimap()
+        pm, scale_y, mm_step = self._rebuild_minimap()
         painter.drawPixmap(0, 0, pm)
-
-        cur_y = int(self.textCursor().blockNumber() * line_h * scale_y)
-        painter.fillRect(0, cur_y - scale(1), area.width(), max(2, int(line_h * scale_y)), QColor(156, 204, 101, 60))
 
         vsb = self.verticalScrollBar()
         if vsb is not None and self.document().blockCount() > 0:
-            doc_h = max(1, self.document().blockCount() * line_h)
-            y_top = int(self.contentOffset().y() / doc_h * area.height())
-            view_h = int(self.viewport().height() / doc_h * area.height())
+            first_block = self.firstVisibleBlock()
+            first = first_block.blockNumber() if first_block.isValid() else 0
+            visible = max(1, int(self.viewport().height() / max(1, self._real_line_height())))
+            y_top = int(first * mm_step * scale_y)
+            view_h = max(scale(6), int(visible * mm_step * scale_y))
             y_top = max(0, min(area.height() - 1, y_top))
             view_h = max(scale(6), min(area.height() - y_top, view_h))
             painter.setPen(QColor("#3a6ea5"))
-            painter.setBrush(QColor(58, 110, 165, 70))
+            painter.setBrush(QColor(58, 110, 165, 60))
             painter.drawRect(0, y_top, area.width() - 1, view_h)
 
         painter.end()
+
+    def _real_line_height(self) -> int:
+        block = self.firstVisibleBlock()
+        if block.isValid():
+            h = int(self.blockBoundingRect(block).height())
+            if h > 0:
+                return h
+        return max(1, int(self._font_size * 1.5))
 
     def _goto_line(self, line: int):
         block = self.document().findBlockByNumber(max(0, line - 1))
@@ -480,6 +535,9 @@ class _ScriptTab(QWidget):
     def set_wrap(self, enabled: bool):
         self._editor.set_wrap(enabled)
 
+    def set_indent_guides(self, enabled: bool):
+        self._editor.set_indent_guides(enabled)
+
     def _on_text_changed(self):
         if not self._dirty:
             self._dirty = True
@@ -605,6 +663,7 @@ class _ScriptEditorWidget(QWidget):
         toolbar.addAction(self._act_paste)
         toolbar.addSeparator()
         toolbar.addAction(self._act_wrap)
+        toolbar.addAction(self._act_indent)
         toolbar.addAction(self._act_zoom_out)
 
         self._zoom_combo = QComboBox()
@@ -694,6 +753,12 @@ class _ScriptEditorWidget(QWidget):
         self._act_wrap.setCheckable(True)
         self._act_wrap.triggered.connect(self._toggle_wrap)
 
+        self._act_indent = QAction(_qta_icon("indent"), "Indent Guides", self)
+        self._act_indent.setToolTip("Toggle Indentation Guides")
+        self._act_indent.setCheckable(True)
+        self._act_indent.setChecked(True)
+        self._act_indent.triggered.connect(self._toggle_indent)
+
         self._act_zoom_out = QAction(_qta_icon("zoom_out"), "Zoom Out", self)
         self._act_zoom_out.setToolTip("Zoom Out")
         self._act_zoom_out.triggered.connect(lambda: self._apply_zoom(-1))
@@ -728,6 +793,11 @@ class _ScriptEditorWidget(QWidget):
         self._act_wrap_m.setChecked(self._wrap)
         self._act_wrap_m.triggered.connect(self._toggle_wrap_menu)
         view_menu.addAction(self._act_wrap_m)
+        self._act_indent_m = QAction("Indentation Guides", self)
+        self._act_indent_m.setCheckable(True)
+        self._act_indent_m.setChecked(True)
+        self._act_indent_m.triggered.connect(self._toggle_indent_menu)
+        view_menu.addAction(self._act_indent_m)
         act_zoom_in = QAction("Zoom In", self)
         act_zoom_in.setShortcut(QKeySequence("Ctrl+="))
         act_zoom_in.triggered.connect(lambda: self._apply_zoom(1))
@@ -831,6 +901,15 @@ class _ScriptEditorWidget(QWidget):
 
     def _toggle_wrap_menu(self, checked: bool):
         self._toggle_wrap(checked)
+
+    def _toggle_indent(self, checked: bool):
+        self._act_indent_m.setChecked(checked)
+        for i in range(self._tabs.count()):
+            self._tabs.widget(i).set_indent_guides(checked)
+
+    def _toggle_indent_menu(self, checked: bool):
+        self._act_indent.setChecked(checked)
+        self._toggle_indent(checked)
 
     def _apply_zoom(self, delta: int, size: int = 0):
         if delta != 0:
