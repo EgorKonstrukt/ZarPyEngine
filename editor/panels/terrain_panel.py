@@ -377,7 +377,7 @@ class TerrainPanel(QDockWidget):
         if entity.get_component(TerrainCollider) is None:
             history = get_history()
             if history is not None:
-                history.push(AddComponentCommand(entity, TerrainCollider()))
+                history.execute(AddComponentCommand(entity, TerrainCollider()))
             else:
                 entity.add_component(TerrainCollider())
         tc = entity.get_component(TerrainCollider)
