@@ -7,6 +7,7 @@
 from __future__ import annotations
 import json
 import os
+import numpy as np
 from typing import Optional, TYPE_CHECKING
 from core.math.math3d import Vec3
 
@@ -20,6 +21,7 @@ SHAPE_TYPE_MAP = {
     "SphereCollider": "sphere",
     "CapsuleCollider": "capsule",
     "MeshCollider": "mesh",
+    "TerrainCollider": "heightfield",
     "BoxCollider2D": "box",
     "CircleCollider2D": "cylinder",
 }
@@ -29,6 +31,7 @@ SHAPE_INFO_CACHE_KEYS = {
     "SphereCollider": ("type", "radius", "center", "friction", "restitution", "is_trigger"),
     "CapsuleCollider": ("type", "radius", "height", "center", "direction", "friction", "restitution", "is_trigger"),
     "MeshCollider": ("type", "file", "collision_mode", "max_vertices", "scale", "friction", "restitution", "is_trigger"),
+    "TerrainCollider": ("type", "size", "resolution", "height_scale", "center", "friction", "restitution", "is_trigger"),
     "BoxCollider2D": ("type", "size", "center", "friction", "restitution", "is_trigger"),
     "CircleCollider2D": ("type", "radius", "height", "center", "friction", "restitution", "is_trigger"),
 }
@@ -99,6 +102,19 @@ def find_shape_info(entity: Entity, transform=None) -> Optional[dict]:
             params["file"] = comp.mesh_path
             params["collision_mode"] = comp.collision_mode.value
             params["max_vertices"] = comp.max_vertices
+            friction = comp.material_friction
+            restitution = comp.material_bounciness
+            is_trigger = comp.is_trigger
+        elif cname == "TerrainCollider":
+            params["size"] = [comp.size.x, comp.size.y, comp.size.z]
+            params["resolution"] = comp.resolution
+            params["height_scale"] = comp.height_scale
+            params["center"] = [comp.center.x, comp.center.y, comp.center.z]
+            hd = getattr(comp, "height_data", None)
+            if hd is not None and getattr(hd, "ndim", 0) == 2:
+                params["height_data"] = hd.astype(np.float32)
+            elif hd is not None:
+                params["height_data"] = np.asarray(hd, dtype=np.float32)
             friction = comp.material_friction
             restitution = comp.material_bounciness
             is_trigger = comp.is_trigger

@@ -25,6 +25,7 @@ from core.components.rendering.effects.frost_effect import FrostEffect
 from core.components.rendering.effects.emissive_pulse_effect import EmissivePulseEffect
 from core.components.rendering.effects.glitch_effect import GlitchEffect
 from core.components.rendering.effects.wind_sway_effect import WindSwayEffect
+from core.components.rendering.terrain import Terrain
 
 __all__ = [
     "Camera", "CameraProjection", "MeshFilter", "MeshRenderer",
@@ -32,4 +33,5 @@ __all__ = [
     "Sky", "Cloud", "TextRenderer",
     "ObjectEffect", "DissolveEffect", "PolygonDisintegrationEffect", "SpikeGrowthEffect",
     "VoxelizeEffect", "HologramEffect", "FrostEffect", "EmissivePulseEffect", "GlitchEffect", "WindSwayEffect",
+    "Terrain",
 ]

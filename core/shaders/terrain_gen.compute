@@ -1,0 +1,325 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2026 Zarrakun
+
+ComputeShader "TerrainGenerator"
+{
+    Properties
+    {
+        Int2(resolution, "Resolution", 512, 512)
+        Int(octaves, "Octaves", 8)
+        Float(baseFrequency, "Base Frequency", 0.012)
+        Float(lacunarity, "Lacunarity", 2.0)
+        Float(persistence, "Persistence", 0.5)
+        Float(heightScale, "Height Scale", 60.0)
+        Float(offset, "Height Offset", 0.0)
+        Float(warpeness, "Domain Warp", 0.35)
+        Float(warpFrequency, "Warp Frequency", 0.03)
+        Float(ridge, "Ridged Mix", 0.0)
+        Float(ridgePower, "Ridge Power", 3.0)
+        Float(billow, "Billow Mix", 0.0)
+        Float(billowPower, "Billow Power", 2.0)
+        Float(continentMask, "Continent Mask", 0.0)
+        Float(continentScale, "Continent Scale", 0.004)
+        Float(plateau, "Plateau Sharpness", 0.0)
+        Float(plateauLevel, "Plateau Level", 0.5)
+        Float(slopeMask, "Slope Mask", 0.0)
+        Float(slopeMin, "Slope Min", 0.35)
+        Float(thermalErosion, "Thermal Erosion", 0.0)
+        Float(hydraulicErosion, "Hydraulic Erosion", 0.0)
+        Float(erosionIterations, "Erosion Iterations", 8.0)
+        Float(talus, "Talus Angle", 0.02)
+        Float(peakSmoothing, "Peak Smoothing", 0.0)
+        Float(valleyDepth, "Valley Depth", 0.0)
+        Float(noiseSeed, "Seed", 1337.0)
+        Float(riverStrength, "River Carve", 0.0)
+        Float(terrace, "Terrace Mix", 0.0)
+        Float(terraceSteps, "Terrace Steps", 8.0)
+        Float(dune, "Dune Mix", 0.0)
+        Float(duneDir, "Dune Direction", 0.0)
+        Float(fractalTwist, "Fractal Twist", 0.0)
+        Float(sharpen, "Sharpen", 0.0)
+        Float(heightBias, "Height Bias", 0.0)
+        Float(normalizeMin, "Normalize Min", -1.0)
+        Float(normalizeMax, "Normalize Max", 1.0)
+        Int(flipY, "Flip Y", 0)
+    }
+
+    GLSLPROGRAM
+    #version 460 core
+
+    layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+    layout(std430, binding = 0) buffer HeightField
+    {
+        float heights[];
+    };
+
+    uniform int u_resolution;
+    uniform int u_octaves;
+    uniform float u_baseFrequency;
+    uniform float u_lacunarity;
+    uniform float u_persistence;
+    uniform float u_heightScale;
+    uniform float u_offset;
+    uniform float u_warpeness;
+    uniform float u_warpFrequency;
+    uniform float u_ridge;
+    uniform float u_ridgePower;
+    uniform float u_billow;
+    uniform float u_billowPower;
+    uniform float u_continentMask;
+    uniform float u_continentScale;
+    uniform float u_plateau;
+    uniform float u_plateauLevel;
+    uniform float u_slopeMask;
+    uniform float u_slopeMin;
+    uniform float u_thermalErosion;
+    uniform float u_hydraulicErosion;
+    uniform float u_erosionIterations;
+    uniform float u_talus;
+    uniform float u_peakSmoothing;
+    uniform float u_valleyDepth;
+    uniform float u_noiseSeed;
+    uniform float u_riverStrength;
+    uniform float u_terrace;
+    uniform float u_terraceSteps;
+    uniform float u_dune;
+    uniform float u_duneDir;
+    uniform float u_fractalTwist;
+    uniform float u_sharpen;
+    uniform float u_heightBias;
+    uniform float u_normalizeMin;
+    uniform float u_normalizeMax;
+    uniform int u_flipY;
+
+    float hash(vec2 p, float seed)
+    {
+        p = p * 0.3183099f + vec2(0.1f, 0.2f);
+        p += seed * 0.013f;
+        return fract(sin(dot(p, vec2(127.1f, 311.7f))) * 43758.5453123f) * 2.0f - 1.0f;
+    }
+
+    float value_noise(vec2 p, float seed)
+    {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0f - 2.0f * f);
+        float a = hash(i + vec2(0.0f, 0.0f), seed);
+        float b = hash(i + vec2(1.0f, 0.0f), seed);
+        float c = hash(i + vec2(0.0f, 1.0f), seed);
+        float d = hash(i + vec2(1.0f, 1.0f), seed);
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+
+    float fbm(vec2 p, float seed)
+    {
+        float sum = 0.0f;
+        float amp = 0.5f;
+        float freq = 1.0f;
+        float norm = 0.0f;
+        float twist = u_fractalTwist;
+        for (int o = 0; o < 16; o++)
+        {
+            if (o >= u_octaves) break;
+            vec2 q = p * freq;
+            float angle = twist * float(o);
+            float s = sin(angle);
+            float c = cos(angle);
+            q = mat2(c, -s, s, c) * q;
+            float n = value_noise(q, seed + float(o) * 11.3f);
+            float ridged = 1.0f - abs(n);
+            ridged = pow(clamp(ridged, 0.0f, 1.0f), u_ridgePower);
+            float billow = abs(n) * 2.0f - 1.0f;
+            billow = pow(abs(billow), u_billowPower) * sign(n);
+            n = n * (1.0f - u_ridge - u_billow) + ridged * u_ridge - billow * u_billow;
+            sum += n * amp;
+            norm += amp;
+            amp *= u_persistence;
+            freq *= u_lacunarity;
+        }
+        return norm > 0.0f ? sum / norm : 0.0f;
+    }
+
+    float continent(vec2 p, float seed)
+    {
+        float n = fbm(p * u_continentScale, seed + 90.0f);
+        return smoothstep(-0.6f, 0.6f, n);
+    }
+
+    float plateau_func(float h)
+    {
+        float d = abs(h - u_plateauLevel);
+        return clamp(1.0f - pow(d, u_plateau), -1.0f, 1.0f);
+    }
+
+    float terrace_func(float h)
+    {
+        float steps = max(2.0f, u_terraceSteps);
+        float t = h * steps;
+        float fl = floor(t);
+        float fr = fract(t);
+        float sm = smoothstep(0.4f, 0.6f, fr);
+        return (fl + sm) / steps;
+    }
+
+    float dune_func(vec2 p)
+    {
+        vec2 dir = vec2(cos(u_duneDir), sin(u_duneDir));
+        float proj = dot(p, dir);
+        return sin(proj * 0.15f) * 0.5f;
+    }
+
+    float slope_factor(vec2 uv)
+    {
+        ivec2 res = ivec2(u_resolution, u_resolution);
+        ivec2 ip = ivec2(uv * float(u_resolution));
+        int x1 = clamp(ip.x + 1, 0, res.x - 1);
+        int x0 = clamp(ip.x - 1, 0, res.x - 1);
+        int y1 = clamp(ip.y + 1, 0, res.y - 1);
+        int y0 = clamp(ip.y - 1, 0, res.y - 1);
+        float hx = heights[ip.y * res.x + x1] - heights[ip.y * res.x + x0];
+        float hy = heights[y1 * res.x + ip.x] - heights[y0 * res.x + ip.x];
+        vec2 g = vec2(hx, hy) * 0.5f;
+        float s = length(g);
+        return 1.0f - smoothstep(u_slopeMin, u_slopeMin + 0.25f, s);
+    }
+
+    float sample_height(ivec2 ip)
+    {
+        return heights[ip.y * u_resolution + ip.x];
+    }
+
+    float river_carve(vec2 uv, float seed)
+    {
+        float n = fbm(uv * 3.0f + 50.0f, seed + 300.0f);
+        float ridge = 1.0f - abs(n);
+        ridge = pow(clamp(ridge, 0.0f, 1.0f), 6.0f);
+        return ridge;
+    }
+
+    void main()
+    {
+        int res = u_resolution;
+        ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+        if (gid.x >= res || gid.y >= res) return;
+
+        int x = gid.x;
+        int y = gid.y;
+        if (u_flipY == 1) y = res - 1 - gid.y;
+
+        vec2 uv = (vec2(float(x), float(y)) / float(res - 1)) * 2.0f - 1.0f;
+
+        float seed = u_noiseSeed;
+        vec2 wp = uv;
+        if (u_warpeness > 0.0f)
+        {
+            float wr = value_noise(uv * u_warpFrequency * float(res) * 0.01f, seed + 17.0f);
+            float ws = value_noise(uv * u_warpFrequency * float(res) * 0.01f + 5.2f, seed + 43.0f);
+            wp = uv + vec2(wr, ws) * u_warpeness;
+        }
+
+        float h = fbm(wp * u_baseFrequency * float(res) * 0.5f, seed);
+
+        if (u_continentMask > 0.0f)
+        {
+            float c = continent(wp, seed);
+            h = mix(h, h * c, u_continentMask);
+        }
+
+        if (u_dune > 0.0f)
+            h = mix(h, h + dune_func(wp), u_dune);
+
+        if (u_plateau > 0.0f)
+            h = mix(h, plateau_func(h), u_plateau);
+
+        if (u_terrace > 0.0f)
+            h = mix(h, terrace_func(h), u_terrace);
+
+        h += u_heightBias;
+
+        h = h * u_heightScale + u_offset;
+
+        if (u_riverStrength > 0.0f)
+        {
+            float r = river_carve(uv, seed);
+            h -= r * u_riverStrength * u_heightScale * 0.5f;
+        }
+
+        heights[y * res + x] = h;
+
+        barrier();
+
+        float iters = max(1.0f, u_erosionIterations);
+
+        for (int k = 0; k < 24; k++)
+        {
+            bool doIter = float(k) < iters;
+
+            if (u_thermalErosion > 0.0f && doIter)
+            {
+                float t = sample_height(ivec2(x, y));
+                float loss = 0.0f;
+                if (x > 0 && y > 0 && x < res - 1 && y < res - 1)
+                {
+                    float ne = sample_height(ivec2(x + 1, y)) - t;
+                    float nw = sample_height(ivec2(x - 1, y)) - t;
+                    float nn = sample_height(ivec2(x, y + 1)) - t;
+                    float ns = sample_height(ivec2(x, y - 1)) - t;
+                    float maxd = max(max(ne, nw), max(nn, ns));
+                    if (maxd > u_talus)
+                        loss = min((maxd - u_talus) * u_thermalErosion * 0.25f, maxd * 0.5f);
+                }
+                heights[y * res + x] = t - loss;
+            }
+
+            if (u_hydraulicErosion > 0.0f && doIter)
+            {
+                float t = sample_height(ivec2(x, y));
+                float avg = t;
+                int cnt = 1;
+                if (x > 0) { avg += sample_height(ivec2(x - 1, y)); cnt++; }
+                if (x < res - 1) { avg += sample_height(ivec2(x + 1, y)); cnt++; }
+                if (y > 0) { avg += sample_height(ivec2(x, y - 1)); cnt++; }
+                if (y < res - 1) { avg += sample_height(ivec2(x, y + 1)); cnt++; }
+                avg /= float(cnt);
+                float delta = (avg - t) * u_hydraulicErosion * 0.25f;
+                heights[y * res + x] = t + delta;
+            }
+
+            barrier();
+        }
+
+        if (u_valleyDepth > 0.0f)
+        {
+            float v = 1.0f - smoothstep(0.0f, 0.15f, abs(h) / max(1.0f, u_heightScale));
+            heights[y * res + x] = mix(h, h * (1.0f - u_valleyDepth), v);
+        }
+
+        if (u_peakSmoothing > 0.0f && x > 0 && y > 0 && x < res - 1 && y < res - 1)
+        {
+            float t = sample_height(ivec2(x, y));
+            float avg = (sample_height(ivec2(x - 1, y)) + sample_height(ivec2(x + 1, y)) +
+                         sample_height(ivec2(x, y - 1)) + sample_height(ivec2(x, y + 1))) * 0.25f;
+            if (avg > t)
+                heights[y * res + x] = mix(t, avg, u_peakSmoothing);
+        }
+
+        if (u_sharpen > 0.0f)
+        {
+            float t = sample_height(ivec2(x, y));
+            heights[y * res + x] = t + sign(t) * pow(abs(t) * 0.5f, u_sharpen) * u_sharpen;
+        }
+
+        barrier();
+
+        float sf = 1.0f;
+        if (u_slopeMask > 0.0f)
+            sf = mix(1.0f, slope_factor(uv), u_slopeMask);
+        float nh = heights[y * res + x];
+        heights[y * res + x] = mix(nh, nh * sf, u_slopeMask);
+    }
+    ENDGLSL
+}

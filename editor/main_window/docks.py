@@ -23,6 +23,7 @@ from editor.panels.terminal_panel import TerminalPanel
 from editor.panels.undo_history_panel import UndoHistoryPanel
 from editor.panels.collaboration_panel import CollaborationPanel
 from editor.panels.mesh_editor_panel import MeshEditorPanel
+from editor.panels.terrain_panel import TerrainPanel
 from editor.panels.animation_panel import AnimationPanel
 from editor.panels.animator_panel import AnimatorPanel
 from editor.panels.scripts_panel import ScriptsPanel
@@ -184,6 +185,9 @@ def register_default_docks(mw):
     mw._mesh_editor = MeshEditorPanel(mw._engine, mw)
     mw._mesh_editor.setObjectName("MeshEditorDock")
     register_dock(mw, mw._mesh_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
+    mw._terrain_editor = TerrainPanel(mw._engine, mw)
+    mw._terrain_editor.setObjectName("TerrainEditorDock")
+    register_dock(mw, mw._terrain_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._animation = AnimationPanel(mw._engine, mw)
     mw._animation.load_config(get_global_config())
     mw._animation.setObjectName("AnimationDock")
@@ -281,6 +285,7 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._plugin_mgr)
     mw.addDockWidget(area, mw._collab_panel)
     mw.addDockWidget(area, mw._mesh_editor)
+    mw.addDockWidget(area, mw._terrain_editor)
     mw.addDockWidget(area, mw._animation)
     mw.addDockWidget(area, mw._animator)
     mw.addDockWidget(area, mw._scripts)
@@ -289,11 +294,11 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._time_travel)
     mw.addDockWidget(area, mw._vcs)
     for dock in mw._docks:
-        if dock not in (mw._hierarchy, mw._viewport_dock, mw._inspector,
+        if dock not in (                         mw._hierarchy, mw._viewport_dock, mw._inspector,
                         mw._play_dock, mw._gui_editor,
                         mw._console, mw._profiler, mw._project,
                         mw._terminal, mw._undo_history, mw._plugin_mgr,
-                        mw._collab_panel, mw._mesh_editor, mw._animation,
+                        mw._collab_panel, mw._mesh_editor, mw._terrain_editor, mw._animation,
                         mw._animator, mw._scripts, mw._script_editor, mw._tracemalloc,
                         mw._time_travel, mw._vcs):
             mw.addDockWidget(area, dock)
@@ -315,6 +320,7 @@ def build_dock_layout(mw):
     mw.tabifyDockWidget(mw._project, mw._profiler)
     mw.tabifyDockWidget(mw._project, mw._plugin_mgr)
     mw.tabifyDockWidget(mw._project, mw._mesh_editor)
+    mw.tabifyDockWidget(mw._project, mw._terrain_editor)
     mw.tabifyDockWidget(mw._project, mw._tracemalloc)
     mw.tabifyDockWidget(mw._project, mw._time_travel)
     mw.tabifyDockWidget(mw._project, mw._vcs)

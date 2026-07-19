@@ -45,10 +45,12 @@ from core.renderer.shadows import ShadowRenderer
 from core.components.rendering.environment.sky import Sky
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.environment.water import Water
+from core.components.rendering.terrain import Terrain
 from core.components.environment.wind_zone import WindZone
 from core.components.physics.sphere_collider import SphereCollider
 from core.components.physics.box_collider import BoxCollider
 from core.components.physics.capsule_collider import CapsuleCollider
+from core.components.physics.terrain_collider import TerrainCollider
 from core.components.physics.rigidbody import Rigidbody
 from core.renderer.particles import ParticleRenderer
 from core.renderer.sprites import SpriteRendererGL
@@ -1668,6 +1670,7 @@ out vec4 frag_color;
                     snap.wind_zones.append(wz)
         self._collect_interactors(snap, scene)
         self._sync_probuilder_meshes(scene)
+        self._sync_terrain_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         if not needs_shadow:
             for ent in scene.get_entities_with_component(Projector):
@@ -3052,6 +3055,50 @@ out vec4 frag_color;
         stale = [k for k in self._pb_scale_cache if k not in active_ids]
         for k in stale:
             del self._pb_scale_cache[k]
+
+    def _sync_terrain_meshes(self, scene):
+        mesh_loader = self._mesh_loader
+        if not mesh_loader:
+            return
+        for ent in scene.get_entities_with_component(Terrain):
+            if not ent.active:
+                continue
+            terrain = ent.get_component(Terrain)
+            if not terrain or not terrain.enabled:
+                continue
+            if terrain.auto_regenerate and (not terrain._generated or terrain._mesh_data is None):
+                terrain.generate()
+            if terrain._gpu_dirty and terrain._mesh_data is not None:
+                mf = ent.get_component(MeshFilter)
+                if not mf:
+                    mf = MeshFilter()
+                    ent.add_component(mf)
+                mesh_name = f"Terrain_{ent.id[:6]}"
+                mf.mesh_name = mesh_name
+                mesh = MeshData()
+                mesh.vertices = terrain._mesh_data["vertices"].astype(np.float32)
+                mesh.normals = terrain._mesh_data["normals"].astype(np.float32)
+                mesh.uvs = terrain._mesh_data["uvs"].astype(np.float32)
+                mesh.indices = terrain._mesh_data["indices"].astype(np.uint32)
+                mesh.compute_aabb()
+                mesh.build_gl(self._ctx, self._default_prog)
+                if self._outline_prog:
+                    mesh.build_outline_vao(self._ctx, self._outline_prog)
+                mr = ent.get_component(MeshRenderer)
+                if not mr:
+                    mr = MeshRenderer()
+                    ent.add_component(mr)
+                if terrain.material_path:
+                    mr.materials[0]["path"] = terrain.material_path
+                cache_key = f"{mesh_name}|s=1.0|cp=False|fu=False"
+                mesh_loader._meshes[cache_key] = mesh
+                mesh_loader.bump_generation()
+                terrain._gpu_dirty = False
+                tc = ent.get_component(TerrainCollider)
+                if tc is not None and terrain._heightfield is not None:
+                    tc.set_height_data(terrain._heightfield)
+                    tc.resolution = terrain._heightfield.shape[0]
+                    tc.size = Vec3(terrain.world_size, terrain.settings.get("heightScale"), terrain.world_size)
 
     def release(self):
         GraphicsEffect.cleanup_registry()

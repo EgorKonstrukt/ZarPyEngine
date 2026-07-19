@@ -281,6 +281,12 @@ class CulverinSolver(IPhysicsSolver):
                 friction, restitution, is_trigger,
                 collision_layer, collision_mask, body_id,
             )
+        elif shape_type == "heightfield":
+            handle = self._create_heightfield_collider(
+                position, rot_q, mass_val, motion, shape_params,
+                friction, restitution, is_trigger,
+                collision_layer, collision_mask, body_id,
+            )
         else:
             size = self._shape_size(shape_type, shape_params)
             handle = self._world.create_body(
@@ -405,6 +411,65 @@ class CulverinSolver(IPhysicsSolver):
             return handle
         except Exception as e:
             Logger.warning(f"CulverinSolver: create_convex_hull failed: {e}")
+            return -1
+
+    def _create_heightfield_collider(
+        self, position, rot_q, mass_val, motion, shape_params,
+        friction, restitution, is_trigger, collision_layer, collision_mask, body_id,
+    ) -> int:
+        hd = shape_params.get("height_data")
+        size = shape_params.get("size", [1000.0, 60.0, 1000.0])
+        resolution = int(shape_params.get("resolution", 0))
+        if hd is None or resolution < 2:
+            Logger.warning("CulverinSolver: terrain height field not available")
+            return -1
+        try:
+            arr = np.asarray(hd, dtype=np.float32)
+            if arr.ndim == 1:
+                side = int(np.sqrt(len(arr)))
+                arr = arr.reshape(side, side)
+            res = arr.shape[0]
+            max_verts = 8000
+            step = 1
+            if res * res > max_verts:
+                step = max(1, int(np.ceil(res / int(np.sqrt(max_verts)))))
+            sx = size[0] / max(1, res - 1)
+            sz = size[2] / max(1, res - 1)
+            verts = []
+            indices = []
+            vid = 0
+            for z in range(0, res, step):
+                for x in range(0, res, step):
+                    px = (x - (res - 1) * 0.5) * sx
+                    pz = (z - (res - 1) * 0.5) * sz
+                    verts.append(px)
+                    verts.append(float(arr[z, x]))
+                    verts.append(pz)
+                    indices.append(vid)
+                    vid += 1
+            w = (res + step - 1) // step
+            for r in range(w - 1):
+                for c in range(w - 1):
+                    a = r * w + c
+                    b = r * w + c + 1
+                    d = (r + 1) * w + c
+                    e = (r + 1) * w + c + 1
+                    indices.append(a)
+                    indices.append(d)
+                    indices.append(b)
+                    indices.append(b)
+                    indices.append(d)
+                    indices.append(e)
+            buf_verts = np.array(verts, dtype=np.float32).tobytes()
+            buf_indices = np.array(indices, dtype=np.uint32).tobytes()
+            return self._world.create_mesh_body(
+                pos=position, rot=rot_q,
+                vertices=buf_verts, indices=buf_indices,
+                user_data=body_id,
+                category=collision_mask, mask=collision_mask,
+            )
+        except Exception as e:
+            Logger.warning(f"CulverinSolver: heightfield body failed: {e}")
             return -1
 
     def remove_rigid_body(self, body_id: int):

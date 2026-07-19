@@ -227,6 +227,31 @@ def _build_usda(
                 file_path = shape_params.get("file", "")
                 Logger.warning(f"PhysXSolver: mesh '{file_path}' needs pre-loaded vertices")
 
+        elif shape_type == "heightfield":
+            verts = shape_params.get("vertices")
+            if verts:
+                pts_str = ", ".join(f"({v[0]:.6f}, {v[1]:.6f}, {v[2]:.6f})" for v in verts)
+                lines.append(f'        def Mesh "{geom_name}" (')
+                lines.append('            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysicsMeshCollisionAPI"]')
+                lines.append('        )')
+                lines.append('        {')
+                lines.append('            uniform token physics:approximation = "triangleMesh"')
+                lines.append('            bool physics:collisionEnabled = 1')
+                lines.append(f'            point3f[] points = [{pts_str}]')
+                n = len(verts)
+                if n >= 3:
+                    fc = [3] * (n - 2)
+                    fi = []
+                    for i in range(1, n - 1):
+                        fi.extend([0, i, i + 1])
+                    fc_str = ", ".join(str(c) for c in fc)
+                    fi_str = ", ".join(str(i) for i in fi)
+                    lines.append(f'            int[] faceVertexCounts = [{fc_str}]')
+                    lines.append(f'            int[] faceVertexIndices = [{fi_str}]')
+                lines.append('        }')
+            else:
+                Logger.warning("PhysXSolver: heightfield needs pre-built vertices")
+
         lines.append('')
         lines.append('    }')
         lines.append('')

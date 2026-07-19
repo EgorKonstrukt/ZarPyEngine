@@ -402,6 +402,38 @@ class PyBulletSolver(IPhysicsSolver):
             except Exception as e:
                 Logger.warning(f"MeshCollider: failed to load '{file_path}': {e}")
                 return -1
+        elif shape_type == "heightfield":
+            size = shape_params.get("size", [1000.0, 60.0, 1000.0])
+            resolution = int(shape_params.get("resolution", 0))
+            height_data = shape_params.get("height_data")
+            if height_data is None or resolution < 2:
+                Logger.warning("TerrainCollider: no height data available for physics")
+                return -1
+            try:
+                arr = np.asarray(height_data, dtype=np.float32)
+                if arr.ndim == 2:
+                    rows = arr.shape[0]
+                    cols = arr.shape[1]
+                    flat = arr.flatten().astype(np.float32)
+                else:
+                    rows = cols = int(np.sqrt(len(arr)))
+                    flat = arr.astype(np.float32)
+                hf_rows = rows
+                hf_cols = cols
+                sx = size[0] / max(1, cols - 1)
+                sz = size[2] / max(1, rows - 1)
+                shape_id = p.createCollisionShape(
+                    p.GEOM_HEIGHTFIELD,
+                    numHeightfieldRows=hf_rows,
+                    numHeightfieldColumns=hf_cols,
+                    heightfieldData=flat.tolist(),
+                    heightfieldScaling=[sx, sz, 1.0],
+                    physicsClientId=cid,
+                )
+                return shape_id
+            except Exception as e:
+                Logger.warning(f"TerrainCollider: heightfield shape failed: {e}")
+                return -1
         return -1
 
     def create_rigid_body(

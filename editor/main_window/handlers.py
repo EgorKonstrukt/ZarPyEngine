@@ -24,6 +24,8 @@ def on_entity_selected(mw, entity):
     mw._viewport.set_selected_entity(entity)
     if hasattr(mw, '_mesh_editor') and mw._mesh_editor:
         mw._mesh_editor.set_entity(entity)
+    if hasattr(mw, '_terrain_editor') and mw._terrain_editor:
+        mw._terrain_editor.set_entity(entity)
     if hasattr(mw, '_animation') and mw._animation:
         mw._animation.set_entity(entity)
 
@@ -36,6 +38,8 @@ def on_entities_selected(mw, entities):
         mw._inspector.set_selected_entities(entities)
     if hasattr(mw, '_animation') and mw._animation:
         mw._animation.set_entity(entities[0] if entities else None)
+    if hasattr(mw, '_terrain_editor') and mw._terrain_editor:
+        mw._terrain_editor.set_entity(entities[0] if entities else None)
 
 
 def on_entity_selected_from_viewport(mw, entity):
@@ -45,6 +49,8 @@ def on_entity_selected_from_viewport(mw, entity):
     mw._hierarchy.set_selected_entity(entity)
     if hasattr(mw, '_mesh_editor') and mw._mesh_editor:
         mw._mesh_editor.set_entity(entity)
+    if hasattr(mw, '_terrain_editor') and mw._terrain_editor:
+        mw._terrain_editor.set_entity(entity)
     if hasattr(mw, '_animation') and mw._animation:
         mw._animation.set_entity(entity)
 

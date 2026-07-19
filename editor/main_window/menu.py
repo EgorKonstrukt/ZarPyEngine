@@ -131,6 +131,10 @@ def setup_menu(mw):
     mesh_editor_act.setShortcut(QKeySequence("Ctrl+Shift+M"))
     mesh_editor_act.triggered.connect(lambda: _show_mesh_editor(mw))
     tools_menu.addAction(mesh_editor_act)
+    terrain_editor_act = QAction("Terrain Editor", mw)
+    terrain_editor_act.setShortcut(QKeySequence("Ctrl+Shift+T"))
+    terrain_editor_act.triggered.connect(lambda: _show_terrain_editor(mw))
+    tools_menu.addAction(terrain_editor_act)
     tools_menu.addSeparator()
     gui_act = QAction("GUI Editor", mw)
     gui_act.setShortcut(QKeySequence("Ctrl+Shift+G"))
@@ -160,6 +164,14 @@ def _show_mesh_editor(mw):
     sel = getattr(mw._viewport, '_selected_entities', None)
     if sel and len(sel) > 0:
         mw._mesh_editor.set_entity(sel[0])
+
+
+def _show_terrain_editor(mw):
+    mw._terrain_editor.show()
+    mw._terrain_editor.raise_()
+    sel = getattr(mw._viewport, '_selected_entities', None)
+    if sel and len(sel) > 0:
+        mw._terrain_editor.set_entity(sel[0])
 
 
 def _show_build_settings(mw):
