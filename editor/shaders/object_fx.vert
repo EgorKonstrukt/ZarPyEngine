@@ -65,7 +65,7 @@ float hash31(vec3 p) {
     p *= 17.0;
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
-float noise3(vec3 x) {
+float value_noise3(vec3 x) {
     vec3 i = floor(x);
     vec3 f = fract(x);
     f = f * f * (3.0 - 2.0 * f);

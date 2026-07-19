@@ -251,8 +251,8 @@ class RaytracingRenderer(Component):
             if mesh_path:
                 meta = renderer._import_meta_cache.get(mesh_path) if hasattr(renderer, '_import_meta_cache') else None
                 if meta is None:
-                    meta = (1.0, False, False)
-                scale, cp, fuvs = meta
+                    meta = (1.0, False, False, 30.0, True, True)
+                scale, cp, fuvs = meta[0], meta[1], meta[2]
             if not mesh_name:
                 mesh_name = "cube" if not mesh_path else os.path.splitext(os.path.basename(mesh_path))[0]
             mesh = renderer.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)

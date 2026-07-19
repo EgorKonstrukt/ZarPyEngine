@@ -131,7 +131,7 @@ float hash31(vec3 p) {
     p *= 17.0;
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
-float noise3(vec3 x) {
+float value_noise3(vec3 x) {
     vec3 i = floor(x);
     vec3 f = fract(x);
     f = f * f * (3.0 - 2.0 * f);
@@ -155,7 +155,7 @@ float fbm3(vec3 p) {
     float v = 0.0;
     float a = 0.5;
     for (int i = 0; i < 4; i++) {
-        v += a * noise3(p);
+        v += a * value_noise3(p);
         p *= 2.02;
         a *= 0.5;
     }
@@ -358,7 +358,7 @@ void main() {
     if (u_dissolve_amount > 0.0) {
         vec3 d = normalize(u_dissolve_dir + vec3(1e-5));
         float grad = dot(d, v_local_pos) * 0.5 + 0.5;
-        float n = noise3(v_local_pos * u_dissolve_noise_scale);
+        float n = value_noise3(v_local_pos * u_dissolve_noise_scale);
         float field = mix(grad, n, clamp(u_dissolve_noise_strength, 0.0, 1.0));
         if (u_dissolve_invert > 0.5) field = 1.0 - field;
         float thr = u_dissolve_amount;
@@ -372,7 +372,7 @@ void main() {
     if (u_disint_amount > 0.0) {
         vec3 cell = floor((v_local_pos - u_obj_center) / max(0.001, u_disint_cell));
         float h = hash31(cell);
-        float n = noise3(v_local_pos * max(0.1, u_disint_noise_scale));
+        float n = value_noise3(v_local_pos * max(0.1, u_disint_noise_scale));
         float thr = u_disint_amount * u_disint_thr_scale - h * u_disint_stagger;
         if (n < thr) discard;
         float edge = thr + max(0.0001, u_disint_edge);
@@ -409,7 +409,7 @@ void main() {
         float mask = clamp(local * (0.35 + 0.75 * fbm), 0.0, 1.0);
 
         vec3 icy = u_frost_color;
-        float sp = noise3(v_local_pos * u_frost_crack * 6.0 + vec3(animT * 2.0));
+        float sp = value_noise3(v_local_pos * u_frost_crack * 6.0 + vec3(animT * 2.0));
         float glint = smoothstep(0.82, 1.0, sp) * u_frost_sparkle * mask;
 
         vec3 frosted = mix(result, icy, mask * 0.9);

@@ -45,7 +45,7 @@ float hash31(vec3 p) {
     p *= 17.0;
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
-float noise3(vec3 x) {
+float value_noise3(vec3 x) {
     vec3 i = floor(x);
     vec3 f = fract(x);
     f = f * f * (3.0 - 2.0 * f);
@@ -99,7 +99,7 @@ void main() {
     vec3 disp = vel * (speed * s);
     disp += vec3(0.0, -1.0, 0.0) * u_disint_gravity * u_obj_scale * (s * s);
 
-    float jitter = (noise3(cellCenter * max(0.1, u_disint_noise_scale)) - 0.5);
+    float jitter = (value_noise3(cellCenter * max(0.1, u_disint_noise_scale)) - 0.5);
     disp += outward * jitter * t * u_obj_scale * u_disint_jitter;
 
     float rot_angle = t * (h * 6.2831853 + u_disint_rot * (h2 - 0.5) * 4.0 + u_disint_twist);
