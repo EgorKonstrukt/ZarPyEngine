@@ -513,6 +513,14 @@ class SceneViewport(QOpenGLWidget):
                 self._ctx.gc_mode = "context_gc"
             except Exception:
                 pass
+            try:
+                self._gl_info_cache = dict(self._ctx.info)
+            except Exception:
+                self._gl_info_cache = {}
+            try:
+                self._gl_extensions_cache = list(self._ctx.extensions) if hasattr(self._ctx, 'extensions') else []
+            except Exception:
+                self._gl_extensions_cache = []
             self._bind_screen_fbo()
             self._disable_dwm_throttle()
             try:

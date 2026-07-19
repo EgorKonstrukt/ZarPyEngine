@@ -10,9 +10,11 @@ import os
 import platform
 import random
 import sys
+import time
+import datetime
 
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                             QPushButton, QFrame)
+                             QPushButton, QFrame, QTextEdit, QApplication)
 from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QPen, QKeyEvent
 from PyQt6.QtCore import Qt, QRectF, QTimer
 
@@ -187,6 +189,242 @@ class _SnakeGame(QDialog):
         super().closeEvent(e)
 
 
+def _collect_system_info(parent=None) -> str:
+    lines = []
+    lines.append("=" * 60)
+    lines.append("Zarin Engine — System Info")
+    lines.append("=" * 60)
+    lines.append("")
+
+    lines.append("[Application]")
+    lines.append(f"  Version:       {APP_VERSION_DISPLAY}")
+    lines.append(f"  Built:         {time.ctime(os.path.getmtime(os.path.abspath(__file__)))}")
+    lines.append("")
+
+    lines.append("[Platform]")
+    lines.append(f"  OS:            {platform.system()} {platform.release()}")
+    lines.append(f"  OS Version:    {platform.version()}")
+    lines.append(f"  Machine:       {platform.machine()}")
+    lines.append(f"  Processor:     {platform.processor() or 'N/A'}")
+    lines.append(f"  Node:          {platform.node()}")
+    lines.append("")
+
+    lines.append("[CPU]")
+    lines.append(f"  Cores:         {os.cpu_count() or 'N/A'}")
+    lines.append("")
+
+    lines.append("[Python]")
+    lines.append(f"  Version:       {sys.version.split()[0]}")
+    lines.append(f"  Build:         {sys.version.split('(', 1)[1].rstrip(')') if '(' in sys.version else sys.version.split()[1] if len(sys.version.split()) > 1 else 'N/A'}")
+    lines.append(f"  Implementation:{sys.version.split('[')[1].split(']')[0] if '[' in sys.version else 'CPython'}")
+    gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)()
+    lines.append(f"  GIL:           {'Enabled' if gil_enabled else 'Disabled (nogil)'}")
+    lines.append(f"  Executable:    {sys.executable}")
+    lines.append(f"  Prefix:        {sys.prefix}")
+    lines.append("")
+
+    gl_info = {}
+    gl_exts = []
+    try:
+        if parent is not None:
+            vp = getattr(parent, '_viewport', None)
+            if vp is not None:
+                gl_info = getattr(vp, '_gl_info_cache', {}) or {}
+                gl_exts = getattr(vp, '_gl_extensions_cache', []) or []
+    except Exception:
+        pass
+
+    lines.append("[OpenGL]")
+    lines.append(f"  Renderer:      {gl_info.get('GL_RENDERER', 'Unknown')}")
+    lines.append(f"  Vendor:        {gl_info.get('GL_VENDOR', 'Unknown')}")
+    lines.append(f"  Version:       {gl_info.get('GL_VERSION', 'Unknown')}")
+    major = gl_info.get("GL_MAJOR_VERSION", "?")
+    minor = gl_info.get("GL_MINOR_VERSION", "?")
+    lines.append(f"  Profile:       Core {major}.{minor}")
+    lines.append(f"  Double Buf:    {gl_info.get('GL_DOUBLEBUFFER', '?')}")
+    lines.append(f"  Max Texture:   {gl_info.get('GL_MAX_TEXTURE_SIZE', '?')}")
+    lines.append(f"  Max Viewport:  {gl_info.get('GL_MAX_VIEWPORT_DIMS', '?')}")
+    lines.append(f"  Max Renderbuf: {gl_info.get('GL_MAX_RENDERBUFFER_SIZE', '?')}")
+    lines.append(f"  Max Samples:   {gl_info.get('GL_MAX_SAMPLES', '?')}")
+    lines.append(f"  Max Draw Bufs: {gl_info.get('GL_MAX_DRAW_BUFFERS', '?')}")
+    lines.append(f"  Max Tex Units: {gl_info.get('GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS', '?')}")
+    lines.append(f"  Max Vert Atts: {gl_info.get('GL_MAX_VERTEX_ATTRIBS', '?')}")
+    lines.append(f"  Max UBO Bind:  {gl_info.get('GL_MAX_UNIFORM_BUFFER_BINDINGS', '?')}")
+    lines.append(f"  Uniform Align: {gl_info.get('GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT', '?')}")
+    lines.append("")
+
+    if gl_exts:
+        lines.append("[OpenGL Extensions]")
+        for ext in sorted(gl_exts):
+            lines.append(f"  {ext}")
+        lines.append("")
+
+    lines.append("[Display]")
+    try:
+        app = QApplication.instance()
+        if app is not None:
+            screens = app.screens()
+            lines.append(f"  Monitors:      {len(screens)}")
+            for i, scr in enumerate(screens):
+                g = scr.geometry()
+                dpr = scr.devicePixelRatio()
+                dpi = scr.logicalDotsPerInch()
+                lines.append(f"    [{i}] {scr.name()}: {g.width()}x{g.height()} @ {dpr}x  ({dpi:.0f} DPI)")
+            primary = app.primaryScreen()
+            if primary:
+                g = primary.geometry()
+                lines.append(f"  Primary:       {primary.name()} ({g.width()}x{g.height()})")
+        else:
+            lines.append("  (QApplication not available)")
+    except Exception as e:
+        lines.append(f"  (unavailable: {e})")
+    lines.append("")
+
+    lines.append("[Locale / Timezone]")
+    try:
+        lines.append(f"  Locale:        {platform.locale()}")
+    except Exception:
+        lines.append(f"  Locale:        N/A")
+    try:
+        lines.append(f"  Timezone:      {datetime.datetime.now().astimezone().tzinfo}")
+    except Exception:
+        lines.append(f"  Timezone:      N/A")
+    lines.append("")
+
+    engine = None
+    try:
+        if parent is not None:
+            engine = getattr(parent, '_engine', None)
+    except Exception:
+        pass
+
+    scene = None
+    entity_count = 0
+    scene_name = "None"
+    if engine is not None:
+        scene = getattr(engine, 'scene', None)
+        if scene is not None:
+            try:
+                entity_count = len(scene.get_all_entities())
+            except Exception:
+                pass
+            scene_name = getattr(scene, 'name', 'Unnamed')
+
+    lines.append("[Engine]")
+    lines.append(f"  Scene:         {scene_name}")
+    lines.append(f"  Entities:      {entity_count}")
+
+    render_mode = "N/A"
+    try:
+        if parent is not None:
+            vp = getattr(parent, '_viewport', None)
+            r = getattr(vp, '_renderer', None) if vp is not None else None
+            if r is not None:
+                rm = r.render_mode
+                render_mode = rm.value if hasattr(rm, 'value') else str(rm)
+    except Exception:
+        pass
+    lines.append(f"  Render Mode:   {render_mode}")
+
+    play_mode = False
+    try:
+        if engine is not None:
+            play_mode = getattr(engine, 'play_mode', False)
+    except Exception:
+        pass
+    lines.append(f"  Play Mode:     {play_mode}")
+
+    time_scale = 1.0
+    try:
+        if engine is not None:
+            time_scale = getattr(engine, 'time_scale', 1.0)
+    except Exception:
+        pass
+    lines.append(f"  Time Scale:    {time_scale}")
+    lines.append("")
+
+    try:
+        from core.ecs.ecs import ComponentRegistry
+        registered = list(ComponentRegistry._registry.keys())
+        lines.append("[ECS Components]")
+        lines.append(f"  Registered:    {len(registered)}")
+        for name in sorted(registered):
+            lines.append(f"    - {name}")
+        lines.append("")
+    except Exception:
+        pass
+
+    lines.append("[Plugins]")
+    lines.append(f"  Count:         {AboutDialog._count_plugins()}")
+    plugins_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugins")
+    try:
+        for d in sorted(os.listdir(plugins_dir)):
+            full = os.path.join(plugins_dir, d)
+            if os.path.isdir(full) and not d.startswith("_"):
+                lines.append(f"    - {d}")
+    except FileNotFoundError:
+        lines.append("    (none found)")
+    lines.append("")
+
+    lines.append("[Python Packages]")
+    try:
+        from importlib.metadata import distributions
+        for dist in sorted(distributions(), key=lambda d: d.metadata["Name"].lower()):
+            lines.append(f"  {dist.metadata['Name']:30s} {dist.version}")
+    except Exception:
+        lines.append("  (unavailable)")
+    lines.append("")
+
+    lines.append("[Environment]")
+    lines.append(f"  PYTHONPATH:    {os.environ.get('PYTHONPATH', '(not set)')}")
+    path_val = os.environ.get("PATH", "")
+    if len(path_val) > 120:
+        path_val = path_val[:120] + "..."
+    lines.append(f"  PATH:          {path_val}")
+    lines.append(f"  TEMP:          {os.environ.get('TEMP', 'N/A')}")
+    lines.append(f"  HOME:          {os.environ.get('HOME') or os.environ.get('USERPROFILE', 'N/A')}")
+    lines.append("")
+
+    lines.append("=" * 60)
+    return "\n".join(lines)
+
+
+class _SystemInfoDialog(QDialog):
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("System Info")
+        self.setFixedSize(640, 520)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        lbl = QLabel("Full system information for debugging:")
+        root.addWidget(lbl)
+
+        te = QTextEdit()
+        te.setReadOnly(True)
+        te.setPlainText(text)
+        te.setFont(QFont("Consolas", 9))
+        te.setStyleSheet("QTextEdit { background: #1e1e1e; color: #d4d4d4; border: 1px solid #555; }")
+        te.setTabStopDistance(te.fontMetrics().horizontalAdvance(" ") * 4)
+        root.addWidget(te)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.setFixedWidth(150)
+        copy_btn.clicked.connect(lambda: (QApplication.clipboard().setText(text), copy_btn.setText("Copied!"),
+                                          QTimer.singleShot(1500, lambda: copy_btn.setText("Copy to Clipboard"))))
+        btn_row.addWidget(copy_btn)
+        close_btn = QPushButton("Close")
+        close_btn.setFixedWidth(90)
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        root.addLayout(btn_row)
+
+
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -194,7 +432,20 @@ class AboutDialog(QDialog):
         self.setFixedWidth(440)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         self._logo_clicks = 0
+        self._gpu_name = self._detect_gpu(parent)
         self._setup_ui()
+
+    @staticmethod
+    def _detect_gpu(parent) -> str:
+        try:
+            vp = getattr(parent, '_viewport', None)
+            if vp is not None:
+                info = getattr(vp, '_gl_info_cache', None)
+                if info:
+                    return info.get("GL_RENDERER", "Unknown")
+        except Exception:
+            pass
+        return "Unknown"
 
     def _setup_ui(self):
         root = QVBoxLayout(self)
@@ -236,7 +487,8 @@ class AboutDialog(QDialog):
             f"<b>Python:</b> {sys.version.split()[0]}<br>"
             f"<b>GIL:</b> {gil_status}<br>"
             f"<b>Interpreter:</b> {os.path.basename(sys.executable)}<br>"
-            f"<b>Renderer:</b> OpenGL 4.6 Core Profile"
+            f"<b>Renderer:</b> OpenGL 4.6 Core Profile<br>"
+            f"<b>GPU:</b> {self._gpu_name}"
         )
         info.setTextFormat(Qt.TextFormat.RichText)
         root.addWidget(info)
@@ -258,6 +510,10 @@ class AboutDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
+        info_btn = QPushButton("System Info")
+        info_btn.setFixedWidth(110)
+        info_btn.clicked.connect(self._open_system_info)
+        btn_row.addWidget(info_btn)
         close_btn = QPushButton("Close")
         close_btn.setFixedWidth(90)
         close_btn.clicked.connect(self.accept)
@@ -270,6 +526,11 @@ class AboutDialog(QDialog):
             self._logo_clicks = 0
             dlg = _SnakeGame(self)
             dlg.exec()
+
+    def _open_system_info(self):
+        text = _collect_system_info(self.parent())
+        dlg = _SystemInfoDialog(text, self)
+        dlg.exec()
 
     @staticmethod
     def _hline() -> QFrame:

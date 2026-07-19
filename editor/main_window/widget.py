@@ -83,6 +83,16 @@ class EditorMainWindow(QMainWindow):
             render_fps = vp._fps if vp and hasattr(vp, '_fps') else 0.0
             tps = self._engine.tps
             self._status_fps_lbl.setText(f"FPS: {render_fps:.0f} | TPS: {tps:.0f}")
+        if self._status_gpu_name_lbl:
+            try:
+                vp = getattr(self._engine, 'viewport', None)
+                info = getattr(vp, '_gl_info_cache', None) if vp else None
+                if info:
+                    name = info.get("GL_RENDERER", "")
+                    if name and self._status_gpu_name_lbl.text() != name:
+                        self._status_gpu_name_lbl.setText(name)
+            except Exception:
+                pass
         self._update_hw_monitors()
         if self._engine.scene and self._engine.scene.dirty:
             name = self._engine.scene.name

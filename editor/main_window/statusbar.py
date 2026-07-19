@@ -10,10 +10,26 @@ from PyQt6.QtWidgets import QStatusBar, QLabel
 from PyQt6.QtCore import QTimer
 
 
+def _get_gpu_name(mw) -> str:
+    try:
+        vp = getattr(mw, '_viewport', None)
+        ctx = getattr(vp, '_ctx', None)
+        if ctx is not None:
+            info = ctx.info
+            return info.get("GL_RENDERER", "Unknown")
+    except Exception:
+        pass
+    return "Unknown"
+
+
 def setup_statusbar(mw):
     mw._statusbar = QStatusBar(mw)
     mw.setStatusBar(mw._statusbar)
     mw._statusbar.setStyleSheet("QStatusBar::item { border: none; }")
+    gpu_name = _get_gpu_name(mw)
+    mw._status_gpu_name_lbl = QLabel(gpu_name)
+    mw._status_gpu_name_lbl.setStyleSheet("padding: 0 4px; font-weight: bold;")
+    mw._statusbar.addPermanentWidget(mw._status_gpu_name_lbl)
     mw._status_scene_lbl = QLabel("No scene")
     mw._statusbar.addPermanentWidget(mw._status_scene_lbl)
     mw._status_mode_lbl = QLabel("Edit Mode")

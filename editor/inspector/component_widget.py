@@ -914,6 +914,17 @@ class ComponentWidget(QWidget):
             def _paint_gradient(btn, grad_data=value):
                 if not grad_data:
                     return
+                if isinstance(grad_data, dict):
+                    alpha_keys = grad_data.get("alpha_keys", [])
+                    color_keys = grad_data.get("color_keys", [])
+                    alpha_map = {k[0]: k[1] for k in alpha_keys}
+                    color_map = {k[0]: list(k[1]) for k in color_keys}
+                    positions = sorted(set(list(alpha_map.keys()) + list(color_map.keys())))
+                    grad_data = []
+                    for p in positions:
+                        c = color_map.get(p, [1, 1, 1])
+                        a = alpha_map.get(p, 1.0)
+                        grad_data.append((p, [c[0], c[1], c[2], a]))
                 stops = []
                 for pos, rgba in grad_data:
                     r, g, b, a = (int(c * 255) for c in rgba[:4])
@@ -927,9 +938,28 @@ class ComponentWidget(QWidget):
             _paint_gradient(grad_preview)
             def _open_gradient_editor():
                 from editor.gradient_editor import GradientEditorDialog
-                dlg = GradientEditorDialog(value, "Edit Gradient", self)
+                editor_stops = value
+                if isinstance(value, dict):
+                    alpha_keys = value.get("alpha_keys", [])
+                    color_keys = value.get("color_keys", [])
+                    alpha_map = {k[0]: k[1] for k in alpha_keys}
+                    color_map = {k[0]: list(k[1]) for k in color_keys}
+                    positions = sorted(set(list(alpha_map.keys()) + list(color_map.keys())))
+                    editor_stops = []
+                    for p in positions:
+                        c = color_map.get(p, [1, 1, 1])
+                        a = alpha_map.get(p, 1.0)
+                        editor_stops.append((p, [c[0], c[1], c[2], a]))
+                dlg = GradientEditorDialog(editor_stops, "Edit Gradient", self)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     new_gradient = dlg.get_stops()
+                    if isinstance(value, dict):
+                        alpha_keys = []
+                        color_keys = []
+                        for p, rgba in new_gradient:
+                            color_keys.append([p, [rgba[0], rgba[1], rgba[2]]])
+                            alpha_keys.append([p, rgba[3]])
+                        new_gradient = {"alpha_keys": alpha_keys, "color_keys": color_keys}
                     setattr(c, prop_name, new_gradient)
                     _paint_gradient(grad_preview, new_gradient)
                     get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, new_gradient))
