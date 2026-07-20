@@ -314,7 +314,7 @@ class BaseNode(NodeObject):
             widget_tooltip=tooltip,
             tab=tab
         )
-        widget = NodeSpinBox(self.view,  name, label, 0,min_value, max_value ,double)
+        widget = NodeSpinBox(self.view,  name, label, value,min_value, max_value ,double)
         widget.setToolTip(tooltip or '')
         widget.value_changed.connect(lambda k, v: self.set_property(k, v))
         self.view.add_widget(widget)
