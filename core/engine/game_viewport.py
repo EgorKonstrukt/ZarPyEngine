@@ -13,6 +13,8 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QRect
 from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QCursor, QGuiApplication, QPainter, QColor, QFont, QFontMetrics, QPen, QBrush
 from core.input.input_system import Input
 from core.input.input_manager import InputManager
+from core.input.constants import KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E
+from core.math.math3d import Vec3, Quat
 from core.foundation.logger import Logger
 
 if TYPE_CHECKING:
@@ -31,6 +33,16 @@ class GameViewport(QOpenGLWidget):
         self._mouse_captured: bool = False
         self._cursor_blank: bool = False
         self._input_manager = InputManager.instance()
+        self._fallback_yaw: float = 0.0
+        self._fallback_pitch: float = 0.0
+        self._fallback_vel_x: float = 0.0
+        self._fallback_vel_y: float = 0.0
+        self._fallback_vel_z: float = 0.0
+        self._fallback_right_mouse: bool = False
+        self._fallback_move_speed: float = 5.0
+        self._fallback_rotate_speed: float = 0.3
+        self._last_mouse_x: int = 0
+        self._last_mouse_y: int = 0
         from core.config.config import get_global_config
         cfg = get_global_config()
         self._vsync_enabled = cfg.get("rendering.vsync", True)
@@ -167,11 +179,48 @@ class GameViewport(QOpenGLWidget):
             if prof:
                 prof.capture_frame()
             self._input_manager.new_frame()
-            with self._engine._scene_lock:
-                self._engine.tick()
-            self._tick_editor_cameras()
+            if self._engine._game_worker is None:
+                with self._engine._scene_lock:
+                    self._engine.tick()
+                self._tick_editor_cameras()
+            else:
+                self._tick_fallback_camera()
             self._sync_cursor()
             self.update()
+
+    def _find_camera_entity(self):
+        scene = self._engine.scene
+        if not scene:
+            return None
+        try:
+            from core.components import Camera
+            for e in scene.get_entities_with_component(Camera):
+                if e.active:
+                    return e
+        except Exception:
+            pass
+        return None
+
+    def _has_editor_camera(self) -> bool:
+        scene = self._engine.scene
+        if not scene:
+            return False
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _tick_fallback_camera(self):
+        if self._has_editor_camera():
+            return
+        dt = self._paint_dt if self._paint_dt > 0 else 0.016
+        self._fallback_cam_update(dt)
 
     def _tick_editor_cameras(self):
         try:
@@ -180,13 +229,69 @@ class GameViewport(QOpenGLWidget):
             if not scene:
                 return
             dt = self._paint_dt if self._paint_dt > 0 else 0.016
+            found = False
             for e in scene.get_entities_with_component(EditorCamera):
                 if e.active:
                     comp = e.get_component(EditorCamera)
                     if comp.enabled:
                         comp.on_update(dt)
-        except Exception:
-            pass
+                        found = True
+            if not found:
+                self._fallback_cam_update(dt)
+        except Exception as e:
+            Logger.warning(f"_tick_editor_cameras error: {e}")
+
+    def _fallback_cam_update(self, dt: float):
+        cam_e = self._find_camera_entity()
+        if not cam_e:
+            return
+        t = cam_e.transform
+        if not t:
+            return
+        im = self._input_manager
+        if dt > 0.05:
+            dt = 0.05
+        if self._fallback_right_mouse:
+            import math
+            fwd = Vec3(
+                -math.cos(math.radians(self._fallback_pitch)) * math.sin(math.radians(self._fallback_yaw)),
+                -math.sin(math.radians(self._fallback_pitch)),
+                -math.cos(math.radians(self._fallback_pitch)) * math.cos(math.radians(self._fallback_yaw))
+            ).normalized()
+            right = fwd.cross(Vec3.up()).normalized()
+            speed = self._fallback_move_speed
+            accel = Vec3.zero()
+            if im.is_key_pressed(KEY_W):
+                accel = accel + fwd * speed
+            if im.is_key_pressed(KEY_S):
+                accel = accel - fwd * speed
+            if im.is_key_pressed(KEY_A):
+                accel = accel - right * speed
+            if im.is_key_pressed(KEY_D):
+                accel = accel + right * speed
+            if im.is_key_pressed(KEY_E):
+                accel = accel + Vec3.up() * speed
+            if im.is_key_pressed(KEY_Q):
+                accel = accel - Vec3.up() * speed
+            facc = dt * 12.0
+            self._fallback_vel_x += (accel.x - self._fallback_vel_x) * min(facc, 1.0)
+            self._fallback_vel_y += (accel.y - self._fallback_vel_y) * min(facc, 1.0)
+            self._fallback_vel_z += (accel.z - self._fallback_vel_z) * min(facc, 1.0)
+            t.position = Vec3(
+                t.position.x + self._fallback_vel_x * dt,
+                t.position.y + self._fallback_vel_y * dt,
+                t.position.z + self._fallback_vel_z * dt
+            )
+        else:
+            self._fallback_vel_x *= 0.85
+            self._fallback_vel_y *= 0.85
+            self._fallback_vel_z *= 0.85
+            if abs(self._fallback_vel_x) > 0.001 or abs(self._fallback_vel_y) > 0.001 or abs(self._fallback_vel_z) > 0.001:
+                t.position = Vec3(
+                    t.position.x + self._fallback_vel_x * dt,
+                    t.position.y + self._fallback_vel_y * dt,
+                    t.position.z + self._fallback_vel_z * dt
+                )
 
     def _sync_cursor(self):
         locked = Input.cursorLocked
@@ -479,13 +584,39 @@ class GameViewport(QOpenGLWidget):
             scene = self._engine.scene
             if not scene:
                 return
+            found = False
             for e in scene.get_entities_with_component(EditorCamera):
                 if e.active:
                     comp = e.get_component(EditorCamera)
                     if comp.enabled:
                         getattr(comp, method)(*args, **kwargs)
-        except Exception:
-            pass
+                        found = True
+            if not found:
+                self._fallback_cam_method(method, *args, **kwargs)
+        except Exception as e:
+            Logger.warning(f"_forward_to_editor_cam error: {e}")
+
+    def _fallback_cam_method(self, method: str, *args, **kwargs):
+        if method == "on_mouse_press":
+            btn = args[0] if args else 0
+            if btn == 1:
+                self._fallback_right_mouse = True
+        elif method == "on_mouse_release":
+            btn = args[0] if args else 0
+            if btn == 1:
+                self._fallback_right_mouse = False
+        elif method == "on_scroll":
+            delta = args[0] if args else 0
+            cam_e = self._find_camera_entity()
+            if cam_e and cam_e.transform:
+                import math
+                fwd = Vec3(
+                    -math.cos(math.radians(self._fallback_pitch)) * math.sin(math.radians(self._fallback_yaw)),
+                    -math.sin(math.radians(self._fallback_pitch)),
+                    -math.cos(math.radians(self._fallback_pitch)) * math.cos(math.radians(self._fallback_yaw))
+                ).normalized()
+                t = cam_e.transform
+                t.position = t.position + fwd * delta * 0.5
 
     def _forward_to_editor_cam_delta(self, dx: float, dy: float):
         try:
@@ -493,13 +624,27 @@ class GameViewport(QOpenGLWidget):
             scene = self._engine.scene
             if not scene:
                 return
+            found = False
             for e in scene.get_entities_with_component(EditorCamera):
                 if e.active:
                     comp = e.get_component(EditorCamera)
                     if comp.enabled:
                         comp.on_mouse_delta(dx, dy)
-        except Exception:
-            pass
+                        found = True
+            if not found:
+                self._fallback_cam_delta(dx, dy)
+        except Exception as e:
+            Logger.warning(f"_forward_to_editor_cam_delta error: {e}")
+
+    def _fallback_cam_delta(self, dx: float, dy: float):
+        if self._fallback_right_mouse:
+            cam_e = self._find_camera_entity()
+            if not cam_e or not cam_e.transform:
+                return
+            t = cam_e.transform
+            self._fallback_yaw -= dx * self._fallback_rotate_speed
+            self._fallback_pitch = max(-89.0, min(89.0, self._fallback_pitch + dy * self._fallback_rotate_speed))
+            t.local_rotation = Quat.from_euler(-self._fallback_pitch, self._fallback_yaw, 0.0)
 
     def leaveEvent(self, event):
         if self._mouse_captured:
