@@ -26,6 +26,7 @@ class EditorCamera(Component):
     PAN_SPEED = 0.01
     ACCEL = 12.0
     DAMPING = 8.0
+    SPEED_BOOST_RAMP = 2.0
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
@@ -55,6 +56,7 @@ class EditorCamera(Component):
         self._last_mx: int = 0
         self._last_my: int = 0
         self._scroll_accumulator: float = 0.0
+        self._speed_boost_time: float = 0.0
 
     def _forward(self) -> Vec3:
         pr = math.radians(self._pitch)
@@ -141,10 +143,15 @@ class EditorCamera(Component):
             fwd = self._forward()
             right = self._right()
             up = Vec3.up()
+            any_move = im.is_key_pressed(KEY_W) or im.is_key_pressed(KEY_A) or im.is_key_pressed(KEY_S) or im.is_key_pressed(KEY_D) or im.is_key_pressed(KEY_Q) or im.is_key_pressed(KEY_E)
+            if any_move:
+                self._speed_boost_time += dt
+            else:
+                self._speed_boost_time = 0.0
+            boost_t = min(self._speed_boost_time / max(self.SPEED_BOOST_RAMP, 0.001), 1.0)
+            boost_factor = 1.0 + (self.FAST_MULT - 1.0) * boost_t
+            speed = self.move_speed * boost_factor
             accel = Vec3.zero()
-            speed = self.move_speed
-            if im.is_key_pressed(KEY_SHIFT):
-                speed *= self.FAST_MULT
             if im.is_key_pressed(KEY_W):
                 accel = accel + fwd * speed
             if im.is_key_pressed(KEY_S):
@@ -161,6 +168,7 @@ class EditorCamera(Component):
             self._vel = self._vel + (accel - self._vel) * min(facc, 1.0)
             t.position = t.position + self._vel * dt
         else:
+            self._speed_boost_time = 0.0
             self._vel = self._vel * 0.85
             if self._vel.length() > 0.001:
                 t.position = t.position + self._vel * dt
