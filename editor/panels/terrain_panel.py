@@ -283,8 +283,8 @@ class _TerrainNodeGraphWidget(QWidget):
             from editor.terrain_graph.node_preview import update_all_previews
             res = self._res_spin.value() if self._res_spin else 64
             update_all_previews(self._graph, resolution=res)
-        except Exception:
-            pass
+        except Exception as e:
+            Logger.warning(f"TerrainGraph: preview update failed: {e}")
 
     def _on_live_toggle(self, enabled):
         self._panel.set_live(enabled)

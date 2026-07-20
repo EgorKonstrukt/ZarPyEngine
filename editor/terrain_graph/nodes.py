@@ -26,7 +26,7 @@ class _TerrainNode(BaseNode):
                 double=is_double,
             )
             self.set_property(name, info["default"], push_undo=False)
-        self._preview_widget = NodePreviewWidget()
+        self._preview_widget = NodePreviewWidget(parent=self.view)
         self.add_custom_widget(self._preview_widget, widget_type="HIDDEN")
 
     def _get_param(self, name):
