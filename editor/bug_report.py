@@ -221,9 +221,8 @@ def show_bug_report_dialog(parent=None, exc_info: tuple = None):
     body_edit.setPlainText(default_body)
     root.addWidget(body_edit)
 
-    gpu_name = _get_gpu_name()
     token = _get_github_token()
-    status_parts = [f"GPU: {gpu_name}"]
+    status_parts = [f""]
     if token:
         status_parts.append("Authenticated (GITHUB_TOKEN set)")
     else:

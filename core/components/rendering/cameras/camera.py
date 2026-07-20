@@ -10,15 +10,21 @@ from enum import Enum
 from core.ecs.ecs import Component, ComponentRegistry
 from core.math.math3d import Mat4, Vec3
 from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
+from core.components.rendering.cameras.camera_base import CameraBase
+
+
 class CameraProjection(Enum):
     PERSPECTIVE = "perspective"
     ORTHOGRAPHIC = "orthographic"
 
+
 class CameraResolutionMode(Enum):
     NATIVE = "native"
     CUSTOM = "custom"
+
+
 @ComponentRegistry.register
-class Camera(Component):
+class Camera(CameraBase, Component):
     _icon = "Camera.png"
     _gizmo_pass = "camera"
     _gizmo_cache_attrs = ("fov", "near", "far", "projection", "ortho_size")
@@ -39,78 +45,70 @@ class Camera(Component):
         ]
 
     def __init__(self):
-        super().__init__()
-        self.fov: float = 60.0
-        self.near: float = 0.01
-        self.far: float = 1000.0
+        CameraBase.__init__(self)
+        Component.__init__(self)
         self.projection: CameraProjection = CameraProjection.PERSPECTIVE
-        self.ortho_size: float = 5.0
         self.clear_color: list[float] = [0.15, 0.15, 0.15, 1.0]
         self.depth: int = 0
-        self.render_scale: float = 1.0
-        self.resolution_mode: CameraResolutionMode = CameraResolutionMode.NATIVE
-        self.resolution_w: int = 1920
-        self.resolution_h: int = 1080
-    def get_projection_matrix(self, aspect: float) -> Mat4:
-        if self.projection == CameraProjection.PERSPECTIVE:
-            return Mat4.perspective(self.fov, aspect, self.near, self.far)
-        else:
-            hw = self.ortho_size * aspect
-            return Mat4.orthographic(-hw, hw, -self.ortho_size, self.ortho_size, self.near, self.far)
+
     def get_view_matrix(self) -> Mat4:
         t = self.transform
-        if not t: return Mat4.identity()
+        if not t:
+            return Mat4.identity()
         pos = t.position
         fwd = t.forward
         up = t.up
         return Mat4.look_at(pos, pos + fwd, up)
-    def compute_render_size(self, display_w: int, display_h: int) -> tuple[int, int]:
-        if self.resolution_mode == CameraResolutionMode.CUSTOM:
-            return max(1, int(self.resolution_w)), max(1, int(self.resolution_h))
-        scale = max(0.05, min(1.0, self.render_scale))
-        return max(1, int(round(display_w * scale))), max(1, int(round(display_h * scale)))
+
+    def get_projection_matrix(self, aspect: float) -> Mat4:
+        if self.projection == CameraProjection.PERSPECTIVE:
+            return Mat4.perspective(self._fov, aspect, self._near, self._far)
+        hw = self._ortho_size * aspect
+        return Mat4.orthographic(-hw, hw, -self._ortho_size, self._ortho_size, self._near, self._far)
+
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
-            "fov": self.fov, "near": self.near, "far": self.far,
-            "projection": self.projection.value, "ortho_size": self.ortho_size,
+            "fov": self._fov, "near": self._near, "far": self._far,
+            "projection": self.projection.value, "ortho_size": self._ortho_size,
             "clear_color": self.clear_color, "depth": self.depth,
-            "render_scale": self.render_scale,
-            "resolution_mode": self.resolution_mode.value,
-            "resolution_w": self.resolution_w, "resolution_h": self.resolution_h,
+            "render_scale": self._render_scale,
+            "resolution_mode": self._resolution_mode,
+            "resolution_w": self._resolution_w, "resolution_h": self._resolution_h,
         })
         return d
+
     @classmethod
     def deserialize(cls, data: dict) -> Camera:
         c = cls()
         c.enabled = data.get("enabled", True)
-        c.fov = data.get("fov", 60.0)
-        c.near = data.get("near", 0.01)
-        c.far = data.get("far", 1000.0)
+        c._fov = data.get("fov", 60.0)
+        c._near = data.get("near", 0.01)
+        c._far = data.get("far", 1000.0)
         c.projection = CameraProjection(data.get("projection", "perspective"))
-        c.ortho_size = data.get("ortho_size", 5.0)
+        c._ortho_size = data.get("ortho_size", 5.0)
         c.clear_color = data.get("clear_color", [0.15, 0.15, 0.15, 1.0])
         c.depth = data.get("depth", 0)
-        c.render_scale = float(data.get("render_scale", 1.0))
-        c.resolution_mode = CameraResolutionMode(data.get("resolution_mode", "native"))
-        c.resolution_w = int(data.get("resolution_w", 1920))
-        c.resolution_h = int(data.get("resolution_h", 1080))
+        c._render_scale = float(data.get("render_scale", 1.0))
+        c._resolution_mode = data.get("resolution_mode", "native")
+        c._resolution_w = int(data.get("resolution_w", 1920))
+        c._resolution_h = int(data.get("resolution_h", 1080))
         return c
 
     def gizmo_lines(self) -> list[tuple[Vec3, Vec3, list[float]]]:
         tr = self.transform
         if not tr:
             return []
-        near = self.near
-        far = self.far
+        near = self._near
+        far = self._far
         aspect = 16.0 / 9.0
         if self.projection == CameraProjection.ORTHOGRAPHIC:
-            half_w = self.ortho_size * aspect * 0.5
-            half_h = self.ortho_size * 0.5
+            half_w = self._ortho_size * aspect * 0.5
+            half_h = self._ortho_size * 0.5
             half_w_near = half_w_far = half_w
             half_h_near = half_h_far = half_h
         else:
-            fov_rad = math.radians(self.fov)
+            fov_rad = math.radians(self._fov)
             half_h_near = math.tan(fov_rad * 0.5) * near
             half_w_near = half_h_near * aspect
             half_h_far = math.tan(fov_rad * 0.5) * far

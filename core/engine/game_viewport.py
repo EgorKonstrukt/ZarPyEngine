@@ -175,7 +175,12 @@ class GameViewport(QOpenGLWidget):
     def _sync_cursor(self):
         locked = Input.cursorLocked
         visible = Input.cursorVisible
-        want_blank = locked or (not visible)
+        if self._mouse_captured:
+            if not locked:
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+                self._cursor_blank = True
+            return
+        want_blank = not visible
         want_grab = locked
         if want_grab and not self._mouse_captured:
             self._mouse_captured = True
@@ -400,6 +405,12 @@ class GameViewport(QOpenGLWidget):
         if self._engine.play_mode:
             btn = self._mouse_button_index(event.button())
             self._input_manager.feed_mouse_button(btn, True)
+            if event.button() == Qt.MouseButton.RightButton and not self._mouse_captured:
+                self._mouse_captured = True
+                self._cursor_blank = True
+                self.grabMouse()
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+                self._center_cursor()
             event.accept()
             return
         event.ignore()
@@ -418,9 +429,15 @@ class GameViewport(QOpenGLWidget):
         event.ignore()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if self._mouse_captured:
+        if self._engine.play_mode:
             btn = self._mouse_button_index(event.button())
             self._input_manager.feed_mouse_button(btn, False)
+            if event.button() == Qt.MouseButton.RightButton and self._mouse_captured:
+                if not Input.cursorLocked:
+                    self._mouse_captured = False
+                    self.releaseMouse()
+                    QGuiApplication.restoreOverrideCursor()
+                    self._cursor_blank = False
             event.accept()
             return
         event.ignore()
@@ -434,10 +451,10 @@ class GameViewport(QOpenGLWidget):
         event.ignore()
 
     def leaveEvent(self, event):
-        if self._mouse_captured:
+        if self._mouse_captured and not Input.cursorLocked:
             self._release_mouse()
 
     def focusOutEvent(self, event):
-        if self._mouse_captured:
+        if self._mouse_captured and not Input.cursorLocked:
             self._release_mouse()
         super().focusOutEvent(event)

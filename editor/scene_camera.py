@@ -10,13 +10,12 @@ from typing import Optional
 from core.math.math3d import Vec3, Mat4
 from core.input.input_manager import InputManager
 from core.input.constants import KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_SHIFT, MOUSE_R, MOUSE_M, MOUSE_L
-class SceneCamera:
+from core.components.rendering.cameras.camera_base import CameraBase
+
+
+class SceneCamera(CameraBase):
     PERSPECTIVE_TO_ORTHO_FOV = 179.0
     TRANSITION_SPEED = 2.5
-    DEFAULT_FOV = 60.0
-    ORTHO_SIZE = 5.0
-    DEFAULT_NEAR = 0.01
-    DEFAULT_FAR = 1000.0
     MOVE_SPEED = 5.0
     FAST_MULT = 3.0
     ROTATE_SPEED = 0.3
@@ -27,13 +26,12 @@ class SceneCamera:
     ZOOM_SMOOTH_SPEED = 15.0
     SPEED_BOOST_MULT = 3.0
     SPEED_BOOST_RAMP_TIME = 2.0
+
     def __init__(self):
+        super().__init__()
         self._position: Vec3 = Vec3(0.0, 3.0, 10.0)
         self._yaw: float = 0.0
         self._pitch: float = -15.0
-        self._fov: float = self.DEFAULT_FOV
-        self._near: float = self.DEFAULT_NEAR
-        self._far: float = self.DEFAULT_FAR
         self._move_speed: float = self.MOVE_SPEED
         self._fast_mult: float = self.FAST_MULT
         self._rotate_speed: float = self.ROTATE_SPEED
@@ -48,17 +46,12 @@ class SceneCamera:
         self._right_mouse: bool = False
         self._middle_mouse: bool = False
         self._alt_left: bool = False
-        self._render_scale: float = 1.0
-        self._resolution_mode: str = "native"
-        self._resolution_w: int = 1920
-        self._resolution_h: int = 1080
         self._last_mx: int = 0
         self._last_my: int = 0
         self._vel: Vec3 = Vec3.zero()
         self._orbit_target: Vec3 = Vec3.zero()
         self._orbit_dist: float = 10.0
         self._orbiting: bool = False
-        self._is_orthographic: bool = False
         self._transition_blend: float = 0.0
         self._transition_active: bool = False
         self._transition_to_ortho: bool = False
@@ -93,6 +86,7 @@ class SceneCamera:
         self._speed_boost_enabled: bool = True
         self._speed_boost_mult: float = self.SPEED_BOOST_MULT
         self._speed_boost_ramp_time: float = self.SPEED_BOOST_RAMP_TIME
+
     def load_config(self, config) -> None:
         self._fov = config.get("camera.fov", self.DEFAULT_FOV)
         self._near = config.get("camera.near", self.DEFAULT_NEAR)
@@ -115,24 +109,27 @@ class SceneCamera:
         self._resolution_mode = config.get("camera.resolution_mode", "native")
         self._resolution_w = int(config.get("camera.resolution_w", 1920))
         self._resolution_h = int(config.get("camera.resolution_h", 1080))
+
     @property
-    def forward(self) -> Vec3: return self._forward()
+    def forward(self) -> Vec3:
+        return self._forward()
+
     @property
-    def position(self) -> Vec3: return self._position
+    def position(self) -> Vec3:
+        return self._position
+
     @property
-    def yaw(self) -> float: return self._yaw
+    def yaw(self) -> float:
+        return self._yaw
+
     @property
-    def pitch(self) -> float: return self._pitch
+    def pitch(self) -> float:
+        return self._pitch
+
     @property
-    def fov(self) -> float: return self._fov
-    @property
-    def near(self) -> float: return self._near
-    @property
-    def far(self) -> float: return self._far
-    @property
-    def is_orthographic(self) -> bool: return self._is_orthographic
-    @property
-    def is_2d_mode(self) -> bool: return self._is_2d_mode
+    def is_2d_mode(self) -> bool:
+        return self._is_2d_mode
+
     def _forward(self) -> Vec3:
         if self._is_2d_mode:
             return Vec3(0.0, 0.0, -1.0)
@@ -143,18 +140,22 @@ class SceneCamera:
             -math.sin(pr),
             -math.cos(pr) * math.cos(yr)
         ).normalized()
+
     def _right(self) -> Vec3:
         if self._is_2d_mode:
             return Vec3(1.0, 0.0, 0.0)
         return self._forward().cross(Vec3.up()).normalized()
+
     def _up(self) -> Vec3:
         if self._is_2d_mode:
             return Vec3(0.0, 1.0, 0.0)
         return self._right().cross(self._forward()).normalized()
+
     def get_view_matrix(self) -> Mat4:
         if self._focus_active:
             return Mat4.look_at(self._position, self._orbit_target, Vec3.up())
         return Mat4.look_at(self._position, self._position + self._forward(), Vec3.up())
+
     def get_projection_matrix(self, aspect: float) -> Mat4:
         if (self._is_2d_mode or self._mode_2d_transition) and self._use_ortho_in_2d and self._is_orthographic:
             if self._ortho_zoom_distance < 0.5:
@@ -180,6 +181,7 @@ class SceneCamera:
         else:
             half_size = self._ortho_zoom_distance * math.tan(math.radians(self.DEFAULT_FOV) * 0.5)
             return Mat4.orthographic(-half_size*aspect, half_size*aspect, -half_size, half_size, self._near, self._far)
+
     def on_mouse_press(self, btn, x, y, alt_pressed=False):
         self._focus_active = False
         self._focus_transition_blend = 1.0
@@ -191,6 +193,7 @@ class SceneCamera:
             self._alt_left = True
         self._last_mx = x
         self._last_my = y
+
     def on_mouse_release(self, btn):
         if btn == MOUSE_R:
             self._right_mouse = False
@@ -199,15 +202,10 @@ class SceneCamera:
             self._middle_mouse = False
         elif btn == MOUSE_L:
             self._alt_left = False
+
     def set_viewport_size(self, w: int, h: int):
         self._viewport_w = w
         self._viewport_h = h
-
-    def compute_render_size(self, display_w: int, display_h: int) -> tuple[int, int]:
-        if self._resolution_mode == "custom":
-            return max(1, int(self._resolution_w)), max(1, int(self._resolution_h))
-        scale = max(0.05, min(1.0, self._render_scale))
-        return max(1, int(round(display_w * scale))), max(1, int(round(display_h * scale)))
 
     @staticmethod
     def _ease_in_out_cubic(t: float) -> float:
@@ -244,6 +242,7 @@ class SceneCamera:
             u = self._up()
             amt = self._move_speed * self._pan_speed
             self._position = self._position - r * (dx * amt) + u * (dy * amt)
+
     def on_scroll(self, delta, cursor_x=None, cursor_y=None):
         self._focus_active = False
         self._focus_transition_blend = 1.0
@@ -319,6 +318,7 @@ class SceneCamera:
                 self._fov = self._stored_fov_for_2d if hasattr(self, '_stored_fov_for_2d') else self._stored_fov
         if hasattr(self, '_on_projection_changed'):
             self._on_projection_changed()
+
     def toggle_projection(self):
         self._stored_fov = self._fov
         if self._is_orthographic:
@@ -337,6 +337,7 @@ class SceneCamera:
             self._fov = self.PERSPECTIVE_TO_ORTHO_FOV
         if hasattr(self, '_on_projection_changed'):
             self._on_projection_changed()
+
     def update(self, dt):
         if self._transition_active:
             t = min(dt * self._transition_speed, 1.0)
@@ -486,6 +487,7 @@ class SceneCamera:
             accel = Vec3.zero()
             self._vel = self._vel * 0.85
             self._position = self._position + self._vel * dt
+
     def focus_on(self, target: Vec3, distance: float = 5.0):
         dir_to_target = (target - self._position).normalized()
         self._focus_start_pos = self._position
@@ -498,21 +500,22 @@ class SceneCamera:
         self._focus_target_pitch = math.degrees(math.asin(max(-1.0, min(1.0, -dir_to_target.y))))
         self._focus_active = True
         self._focus_transition_blend = 0.0
+
     def frame_bounds(self, center: Vec3, radius: float = 1.0):
         self.focus_on(center, max(radius * 2.5, 1.0))
+
     def serialize(self) -> dict:
-        return {
+        d = self.serialize_base()
+        d.update({
             "position": self._position.to_list(),
-            "yaw": self._yaw, "pitch": self._pitch,
-            "fov": self._fov, "near": self._near, "far": self._far,
-            "is_orthographic": self._is_orthographic
-        }
+            "yaw": self._yaw,
+            "pitch": self._pitch,
+        })
+        return d
+
     def deserialize(self, data: dict):
+        self.deserialize_base(data)
         p = data.get("position", [0, 3, 10])
         self._position = Vec3(*p)
         self._yaw = data.get("yaw", 0.0)
         self._pitch = data.get("pitch", -15.0)
-        self._fov = data.get("fov", self.DEFAULT_FOV)
-        self._near = data.get("near", self.DEFAULT_NEAR)
-        self._far = data.get("far", self.DEFAULT_FAR)
-        self._is_orthographic = data.get("is_orthographic", False)

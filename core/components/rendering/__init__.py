@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from core.components.rendering.cameras.camera import Camera, CameraProjection
+from core.components.rendering.cameras.editor_camera import EditorCamera
 from core.components.rendering.renderers.mesh_filter import MeshFilter
 from core.components.rendering.renderers.mesh_renderer import MeshRenderer
 from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
@@ -28,7 +29,7 @@ from core.components.rendering.effects.wind_sway_effect import WindSwayEffect
 from core.components.rendering.terrain import Terrain
 
 __all__ = [
-    "Camera", "CameraProjection", "MeshFilter", "MeshRenderer",
+    "Camera", "CameraProjection", "EditorCamera", "MeshFilter", "MeshRenderer",
     "SpriteRenderer", "VideoRenderer", "SvgRenderer", "ParticleSystem", "ParticleForceField",
     "Sky", "Cloud", "TextRenderer",
     "ObjectEffect", "DissolveEffect", "PolygonDisintegrationEffect", "SpikeGrowthEffect",
