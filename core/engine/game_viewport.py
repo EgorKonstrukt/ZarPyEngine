@@ -169,14 +169,30 @@ class GameViewport(QOpenGLWidget):
             self._input_manager.new_frame()
             with self._engine._scene_lock:
                 self._engine.tick()
+            self._tick_editor_cameras()
             self._sync_cursor()
             self.update()
+
+    def _tick_editor_cameras(self):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            dt = self._paint_dt if self._paint_dt > 0 else 0.016
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        comp.on_update(dt)
+        except Exception:
+            pass
 
     def _sync_cursor(self):
         locked = Input.cursorLocked
         visible = Input.cursorVisible
         if self._mouse_captured:
-            if not locked:
+            if not self._cursor_blank:
                 QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
                 self._cursor_blank = True
             return
@@ -411,6 +427,10 @@ class GameViewport(QOpenGLWidget):
                 self.grabMouse()
                 QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
                 self._center_cursor()
+            pos = event.position()
+            self._last_mouse_x = int(pos.x())
+            self._last_mouse_y = int(pos.y())
+            self._forward_to_editor_cam("on_mouse_press", btn, 0, 0, bool(event.modifiers() & Qt.KeyboardModifier.AltModifier))
             event.accept()
             return
         event.ignore()
@@ -423,6 +443,7 @@ class GameViewport(QOpenGLWidget):
             dy = local_pos.y() - center.y()
             with self._input_manager._lock:
                 self._input_manager._pending_mouse_delta.append((dx, dy))
+            self._forward_to_editor_cam_delta(dx, dy)
             self._center_cursor()
             event.accept()
             return
@@ -433,11 +454,12 @@ class GameViewport(QOpenGLWidget):
             btn = self._mouse_button_index(event.button())
             self._input_manager.feed_mouse_button(btn, False)
             if event.button() == Qt.MouseButton.RightButton and self._mouse_captured:
-                if not Input.cursorLocked:
-                    self._mouse_captured = False
-                    self.releaseMouse()
-                    QGuiApplication.restoreOverrideCursor()
-                    self._cursor_blank = False
+                Input.set_cursor_visible(True)
+                self._mouse_captured = False
+                self.releaseMouse()
+                QGuiApplication.restoreOverrideCursor()
+                self._cursor_blank = False
+            self._forward_to_editor_cam("on_mouse_release", btn)
             event.accept()
             return
         event.ignore()
@@ -446,15 +468,46 @@ class GameViewport(QOpenGLWidget):
         if self._engine.play_mode:
             delta = event.angleDelta()
             self._input_manager.feed_scroll(delta.x(), delta.y())
+            self._forward_to_editor_cam("on_scroll", delta.y())
             event.accept()
             return
         event.ignore()
 
+    def _forward_to_editor_cam(self, method: str, *args, **kwargs):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        getattr(comp, method)(*args, **kwargs)
+        except Exception:
+            pass
+
+    def _forward_to_editor_cam_delta(self, dx: float, dy: float):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        comp.on_mouse_delta(dx, dy)
+        except Exception:
+            pass
+
     def leaveEvent(self, event):
-        if self._mouse_captured and not Input.cursorLocked:
+        if self._mouse_captured:
+            Input.set_cursor_visible(True)
             self._release_mouse()
 
     def focusOutEvent(self, event):
-        if self._mouse_captured and not Input.cursorLocked:
+        if self._mouse_captured:
+            Input.set_cursor_visible(True)
             self._release_mouse()
         super().focusOutEvent(event)

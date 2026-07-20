@@ -120,6 +120,7 @@ class PlayViewport(QOpenGLWidget):
 
     def _tick(self):
         if self._engine.play_mode and self.isVisible():
+            self._tick_editor_cameras()
             self._sync_cursor()
             self.update()
             canvas = self._overlay_canvas
@@ -130,10 +131,30 @@ class PlayViewport(QOpenGLWidget):
                 except Exception:
                     pass
 
+    def _tick_editor_cameras(self):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            dt = 1.0 / 60.0
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        comp.on_update(dt)
+        except Exception:
+            pass
+
     def _sync_cursor(self):
         locked = Input.cursorLocked
         visible = Input.cursorVisible
-        want_blank = locked or (not visible)
+        if self._mouse_captured:
+            if not self._cursor_blank:
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+                self._cursor_blank = True
+            return
+        want_blank = not visible
         want_grab = locked
         if want_grab and not self._mouse_captured:
             self._mouse_captured = True
@@ -185,6 +206,17 @@ class PlayViewport(QOpenGLWidget):
 
     def mousePressEvent(self, event: QMouseEvent):
         if self._engine.play_mode:
+            btn = self._mouse_button_index(event.button())
+            from core.input.input_manager import InputManager
+            im = InputManager.instance()
+            im.feed_mouse_button(btn, True)
+            if event.button() == Qt.MouseButton.RightButton and not self._mouse_captured:
+                self._mouse_captured = True
+                self._cursor_blank = True
+                self.grabMouse()
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+                self._center_cursor()
+            self._forward_to_editor_cam("on_mouse_press", btn, 0, 0, bool(event.modifiers() & Qt.KeyboardModifier.AltModifier))
             event.accept()
             return
         event.ignore()
@@ -199,19 +231,80 @@ class PlayViewport(QOpenGLWidget):
             im = InputManager.instance()
             with im._lock:
                 im._pending_mouse_delta.append((dx, dy))
+            self._forward_to_editor_cam_delta(dx, dy)
             self._center_cursor()
             event.accept()
             return
         event.ignore()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        if self._mouse_captured:
+        if self._engine.play_mode:
+            btn = self._mouse_button_index(event.button())
+            from core.input.input_manager import InputManager
+            im = InputManager.instance()
+            im.feed_mouse_button(btn, False)
+            if event.button() == Qt.MouseButton.RightButton and self._mouse_captured:
+                Input.set_cursor_visible(True)
+                self._mouse_captured = False
+                self.releaseMouse()
+                QGuiApplication.restoreOverrideCursor()
+                self._cursor_blank = False
+            self._forward_to_editor_cam("on_mouse_release", btn)
             event.accept()
             return
         event.ignore()
 
+    def wheelEvent(self, event):
+        if self._engine.play_mode:
+            delta = event.angleDelta()
+            from core.input.input_manager import InputManager
+            im = InputManager.instance()
+            im.feed_scroll(delta.x(), delta.y())
+            self._forward_to_editor_cam("on_scroll", delta.y())
+            event.accept()
+            return
+        event.ignore()
+
+    def _mouse_button_index(self, qt_btn) -> int:
+        if qt_btn == Qt.MouseButton.LeftButton:
+            return 0
+        if qt_btn == Qt.MouseButton.RightButton:
+            return 1
+        if qt_btn == Qt.MouseButton.MiddleButton:
+            return 2
+        return 0
+
+    def _forward_to_editor_cam(self, method: str, *args, **kwargs):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        getattr(comp, method)(*args, **kwargs)
+        except Exception:
+            pass
+
+    def _forward_to_editor_cam_delta(self, dx: float, dy: float):
+        try:
+            from core.components.rendering.cameras.editor_camera import EditorCamera
+            scene = self._engine.scene
+            if not scene:
+                return
+            for e in scene.get_entities_with_component(EditorCamera):
+                if e.active:
+                    comp = e.get_component(EditorCamera)
+                    if comp.enabled:
+                        comp.on_mouse_delta(dx, dy)
+        except Exception:
+            pass
+
     def leaveEvent(self, event):
         if self._mouse_captured:
+            Input.set_cursor_visible(True)
             self._release_mouse()
 
     def show_overlay(self, canvas: GuiCanvas):
@@ -267,6 +360,7 @@ class PlayViewport(QOpenGLWidget):
 
     def focusOutEvent(self, event):
         if self._mouse_captured:
+            Input.set_cursor_visible(True)
             self._release_mouse()
         super().focusOutEvent(event)
 
