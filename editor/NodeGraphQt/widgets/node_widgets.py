@@ -435,7 +435,7 @@ class NodeSpinBox(NodeBaseWidget):
         spin_box.setValue(value)
         spin_box.setStyleSheet(stylesheet)
         spin_box.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        spin_box.editingFinished.connect(self.on_value_changed)
+        spin_box.valueChanged.connect(self.on_value_changed)
         spin_box.clearFocus()
         self.set_custom_widget(spin_box)
         self.widget().setMaximumWidth(140)
@@ -461,8 +461,12 @@ class NodeSpinBox(NodeBaseWidget):
             text (int): new value.
         """
         if value != self.get_value():
-            self.get_custom_widget().setValue(value)
-            self.on_value_changed()
+            w = self.get_custom_widget()
+            if isinstance(w, QtWidgets.QDoubleSpinBox):
+                value = float(value)
+            elif isinstance(w, QtWidgets.QSpinBox):
+                value = int(value)
+            w.setValue(value)
 class NodeButton(NodeBaseWidget):
     """
     Displays as a ``QPushButton`` in a node.

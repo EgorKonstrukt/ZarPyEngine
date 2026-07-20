@@ -128,6 +128,11 @@ class _TerrainNodeGraphWidget(QWidget):
         self._graph.port_disconnected.connect(self._on_graph_changed)
         self._graph.property_changed.connect(self._on_graph_changed)
 
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(600)
+        self._preview_timer.timeout.connect(self._do_update_previews)
+
         self._view.installEventFilter(self)
 
     def eventFilter(self, obj, event):
@@ -264,11 +269,22 @@ class _TerrainNodeGraphWidget(QWidget):
     def _on_graph_changed(self, *args):
         if self._loading:
             return
-        if self._panel._live and self._panel._terrain is not None:
-            self._panel._on_generate()
+        if self._panel._live:
+            if self._panel._terrain is not None or self._panel._find_or_create_terrain():
+                self._panel._on_generate()
+        self._preview_timer.start()
 
     def _on_preview(self):
         self._panel._on_generate()
+        self._do_update_previews()
+
+    def _do_update_previews(self):
+        try:
+            from editor.terrain_graph.node_preview import update_all_previews
+            res = self._res_spin.value() if self._res_spin else 64
+            update_all_previews(self._graph, resolution=res)
+        except Exception:
+            pass
 
     def _on_live_toggle(self, enabled):
         self._panel.set_live(enabled)
@@ -343,28 +359,45 @@ class TerrainPanel(QDockWidget):
 
     def set_live(self, enabled: bool):
         self._live = enabled
-        if enabled and self._terrain is not None:
+        if enabled and (self._terrain is not None or self._find_or_create_terrain()):
             self._on_generate()
 
     def load_graph(self, path: str):
         if self._graph_widget:
             self._graph_widget._open_graph(path)
-        if self._live and self._terrain is not None:
+        if self._live and (self._terrain is not None or self._find_or_create_terrain()):
             self._on_generate()
 
+    def _find_or_create_terrain(self):
+        if self._terrain is not None:
+            return True
+        if not self._engine or not self._engine.scene:
+            return False
+        scene = self._engine.scene
+        for e in scene.get_all_entities():
+            tc = e.get_component(Terrain)
+            if tc is not None:
+                self._entity = e
+                self._terrain = tc
+                Logger.info("TerrainGraph: auto-selected terrain entity '{}'".format(getattr(e, '_name', '?')))
+                return True
+        return False
+
     def _on_generate(self):
-        if self._terrain is None:
-            Logger.info("TerrainGraph: no terrain component, skipping generate")
-            return
         if self._graph is None:
             Logger.info("TerrainGraph: no graph, skipping generate")
             return
+        if self._terrain is None:
+            if not self._find_or_create_terrain():
+                Logger.info("TerrainGraph: no terrain component in scene, skipping generate")
+                return
         nodes = self._graph.all_nodes()
         if not nodes:
             Logger.info("TerrainGraph: graph has no nodes")
             return
         from editor.terrain_graph.code_generator import generate_shader
-        from editor.terrain_graph.gpu_runner import run_shader
+        from editor.terrain_graph.gpu_runner import run_shader, clear_cache
+        clear_cache()
         res = int(self._res_spin.value()) if self._res_spin else 512
         seed = random.randint(0, 100000)
         source, uniforms, height_scale = generate_shader(self._graph, res)

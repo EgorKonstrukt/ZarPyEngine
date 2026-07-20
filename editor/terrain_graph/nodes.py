@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from editor.NodeGraphQt import BaseNode
+from editor.terrain_graph.preview_widget import NodePreviewWidget
 
 
 class _TerrainNode(BaseNode):
@@ -25,6 +26,8 @@ class _TerrainNode(BaseNode):
                 double=is_double,
             )
             self.set_property(name, info["default"], push_undo=False)
+        self._preview_widget = NodePreviewWidget()
+        self.add_custom_widget(self._preview_widget, widget_type="HIDDEN")
 
     def _get_param(self, name):
         info = self._PARAMS[name]
