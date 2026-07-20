@@ -25,6 +25,7 @@ class Terrain(Component):
         return [
             InspectorField("world_size", "World Size", FieldType.FLOAT),
             InspectorField("material_path", "Material", FieldType.RESOURCE_PATH, file_filter="Materials (*.mat *.zpem)"),
+            InspectorField("graph_path", "Terrain Graph", FieldType.RESOURCE_PATH, file_filter="Terrain Graphs (*.zterr)"),
             InspectorField("auto_regenerate", "Auto Regenerate", FieldType.BOOL),
         ]
 
@@ -32,6 +33,7 @@ class Terrain(Component):
         super().__init__()
         self.world_size: float = 1000.0
         self.material_path: str = ""
+        self.graph_path: str = ""
         self.auto_regenerate: bool = True
         self.settings: TerrainSettings = TerrainSettings()
         self._heightfield: Optional[np.ndarray] = None
@@ -100,6 +102,7 @@ class Terrain(Component):
         d.update({
             "world_size": self.world_size,
             "material_path": self.material_path,
+            "graph_path": self.graph_path,
             "auto_regenerate": self.auto_regenerate,
             "settings": self.settings.to_dict(),
         })
@@ -113,6 +116,7 @@ class Terrain(Component):
         t.enabled = data.get("enabled", True)
         t.world_size = data.get("world_size", 1000.0)
         t.material_path = data.get("material_path", "") or ""
+        t.graph_path = data.get("graph_path", "") or ""
         t.auto_regenerate = data.get("auto_regenerate", True)
         t.settings = TerrainSettings.from_dict(data.get("settings", {}))
         hf = data.get("heightfield")

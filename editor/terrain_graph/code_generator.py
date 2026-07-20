@@ -36,7 +36,7 @@ def _topo_sort(nodes) -> List:
     return result
 
 
-def generate_shader(graph, resolution: int, seed: float = 42.0) -> Tuple[str, dict, float]:
+def generate_shader(graph, resolution: int) -> Tuple[str, dict, float]:
     nodes = list(graph.all_nodes())
 
     if not nodes:
@@ -75,15 +75,8 @@ def generate_shader(graph, resolution: int, seed: float = 42.0) -> Tuple[str, di
         code_blocks.append(block)
 
     all_uniforms["u_resolution"] = resolution
-    all_uniforms["u_seed"] = float(seed)
-    all_uniforms["u_heightScale"] = 1.0
-    all_uniforms["u_offset"] = 0.0
 
     out_var = var_map[id(output_nodes[0])]
-    for n in sorted_nodes:
-        if isinstance(n, HeightOutputNode):
-            all_uniforms["u_heightScale"] = n._get_param("heightScale")
-            all_uniforms["u_offset"] = n._get_param("offset")
 
     code_str = "\n".join("    " + c.replace("\n", "\n    ") for c in code_blocks)
 
@@ -95,7 +88,6 @@ def generate_shader(graph, resolution: int, seed: float = 42.0) -> Tuple[str, di
         "};\n"
         "\n"
         "uniform int u_resolution;\n"
-        "uniform float u_seed;\n"
         "\n"
         + "\n".join(uniform_lines) + "\n"
         "\n"

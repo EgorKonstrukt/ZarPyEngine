@@ -37,6 +37,10 @@ EXTENSIONS = {
         "description": "Zarin Engine Prefab",
         "prog_id": "ZarinEngine.Prefab",
     },
+    ".zterr": {
+        "description": "Zarin Engine Terrain Graph",
+        "prog_id": "ZarinEngine.TerrainGraph",
+    },
 }
 
 SPLASH_WIDTH = 640

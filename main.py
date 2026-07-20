@@ -192,9 +192,15 @@ def main():
     ipc_server.try_bind()
     window.destroyed.connect(ipc_server.stop)
 
-    if args.file and args.file.endswith(".zpes") and os.path.exists(args.file):
-        from editor.main_window.handlers import open_scene_by_path
-        open_scene_by_path(window, args.file)
+    if args.file and os.path.exists(args.file):
+        if args.file.endswith(".zpes"):
+            from editor.main_window.handlers import open_scene_by_path
+            open_scene_by_path(window, args.file)
+        elif args.file.endswith(".zterr"):
+            if hasattr(window, '_terrain_editor') and window._terrain_editor is not None:
+                window._terrain_editor.load_graph(args.file)
+                window._terrain_editor.show()
+                window._terrain_editor.raise_()
 
     window.showNormal()
     SplashScreen.hide_splash()

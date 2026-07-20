@@ -327,8 +327,7 @@ class SlopeMaskNode(_TerrainNode):
     def get_glsl(self, var_name, var_map):
         inp = self._input_var(var_map, 0)
         v = var_name
-        return """{{
-            float _sx_{v} = 0.0;
+        return """    float _sx_{v} = 0.0;
             float _sz_{v} = 0.0;
             if (x > 0 && x < res - 1) {{
                 _sx_{v} = (heights[y * res + x + 1] - heights[y * res + x - 1]) * 0.5;
@@ -337,8 +336,7 @@ class SlopeMaskNode(_TerrainNode):
                 _sz_{v} = (heights[(y + 1) * res + x] - heights[(y - 1) * res + x]) * 0.5;
             }}
             float _slope_{v} = sqrt(_sx_{v} * _sx_{v} + _sz_{v} * _sz_{v});
-            float {v} = 1.0 - smoothstep(u_{v}_minSlope, u_{v}_minSlope + 0.25, _slope_{v});
-        }}""".format(v=v)
+            float {v} = 1.0 - smoothstep(u_{v}_minSlope, u_{v}_minSlope + 0.25, _slope_{v});""".format(v=v)
 
 
 class DuneNode(_TerrainNode):
@@ -409,16 +407,14 @@ class SmoothNode(_TerrainNode):
     def get_glsl(self, var_name, var_map):
         inp = self._input_var(var_map, 0)
         v = var_name
-        return """{{
-            float _avg_{v} = 0.0;
+        return """    float _avg_{v} = 0.0;
             if (x > 0 && x < res - 1 && y > 0 && y < res - 1) {{
                 _avg_{v} = (sample_h(ivec2(x-1,y)) + sample_h(ivec2(x+1,y)) +
                             sample_h(ivec2(x,y-1)) + sample_h(ivec2(x,y+1))) * 0.25;
             }} else {{
                 _avg_{v} = {inp};
             }}
-            float {v} = ({inp} > _avg_{v}) ? mix({inp}, _avg_{v}, u_{v}_strength) : {inp};
-        }}""".format(v=v, inp=inp)
+            float {v} = ({inp} > _avg_{v}) ? mix({inp}, _avg_{v}, u_{v}_strength) : {inp};""".format(v=v, inp=inp)
 
 
 class NormalizeNode(_TerrainNode):

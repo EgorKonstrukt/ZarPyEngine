@@ -592,6 +592,7 @@ class _FilePane(QWidget):
                             ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio",
                             ".txt": "Text Document", ".json": "JSON File",
                             ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
+                            ".zterr": "Terrain Graph",
                         }
                         item.setText(2, type_map.get(ext, f"{ext.upper()} File" if ext else "File"))
                         item.setData(0, Qt.ItemDataRole.UserRole, full)
@@ -836,6 +837,7 @@ class _FilePane(QWidget):
                     ".ini": "INI File", ".cfg": "Configuration",
                     ".vert": "Vertex Shader", ".frag": "Fragment Shader",
                     ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
+                    ".zterr": "Terrain Graph",
                 }
                 item.setText(2, type_map.get(ext, f"{ext.upper()} File" if ext else "File"))
                 try:
@@ -1647,6 +1649,7 @@ class ProjectPanel(QDockWidget):
                         ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio",
                         ".txt": "Text Document", ".json": "JSON File",
                         ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
+                        ".zterr": "Terrain Graph",
                     }
                     item.setText(1, type_map.get(ext, "Renaming..."))
                 else:
@@ -1692,6 +1695,8 @@ class ProjectPanel(QDockWidget):
             elif ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
                 self.import_model_requested.emit(path)
             elif ext in (".animclip", ".animcontroller"):
+                self.file_double_clicked.emit(path)
+            elif ext == ".zterr":
                 self.file_double_clicked.emit(path)
             else:
                 self._open_path_with_default_app(path)
@@ -1769,6 +1774,10 @@ class ProjectPanel(QDockWidget):
                     menu.addAction(act)
                 elif ext in (".animclip", ".animcontroller"):
                     act = QAction("Open", self)
+                    act.triggered.connect(lambda: self.file_double_clicked.emit(path))
+                    menu.addAction(act)
+                elif ext == ".zterr":
+                    act = QAction("Open in Terrain Editor", self)
                     act.triggered.connect(lambda: self.file_double_clicked.emit(path))
                     menu.addAction(act)
                 menu.addSeparator()
@@ -2199,6 +2208,8 @@ class NewScript(Component):
         elif ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
             self.import_model_requested.emit(path)
         elif ext in (".animclip", ".animcontroller"):
+            self.file_double_clicked.emit(path)
+        elif ext == ".zterr":
             self.file_double_clicked.emit(path)
         else:
             self._open_path_with_default_app(path)

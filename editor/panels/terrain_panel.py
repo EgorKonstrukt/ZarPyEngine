@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 import random
+import os
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QToolBar, QToolButton, QLabel,
                              QDoubleSpinBox, QSpinBox,
-                             QPushButton, QPlainTextEdit, QFrame)
+                             QPushButton, QPlainTextEdit, QFrame, QFileDialog)
 from PyQt6.QtCore import Qt, QTimer, QSize
 from core.foundation.commands import AddComponentCommand, get_history
 from core.components.rendering.terrain import Terrain
@@ -29,6 +30,8 @@ class _TerrainNodeGraphWidget(QWidget):
         self._graph = None
         self._view = None
         self._node_classes = {}
+        self._graph_path = ""
+        self._loading = False
         self._setup_ui()
 
     def _setup_ui(self):
@@ -38,6 +41,25 @@ class _TerrainNodeGraphWidget(QWidget):
 
         toolbar = QToolBar()
         toolbar.setIconSize(QSize(16, 16))
+
+        save_btn = QToolButton()
+        save_btn.setText("Save")
+        save_btn.setToolTip("Save graph to .zterr file")
+        save_btn.clicked.connect(lambda: self._save_graph())
+        toolbar.addWidget(save_btn)
+
+        save_as_btn = QToolButton()
+        save_as_btn.setText("Save As")
+        save_as_btn.clicked.connect(lambda: self._save_graph_as())
+        toolbar.addWidget(save_as_btn)
+
+        open_btn = QToolButton()
+        open_btn.setText("Open")
+        open_btn.setToolTip("Open .zterr graph file")
+        open_btn.clicked.connect(lambda: self._open_graph())
+        toolbar.addWidget(open_btn)
+
+        toolbar.addSeparator()
 
         new_btn = QToolButton()
         new_btn.setText("+ New")
@@ -104,6 +126,7 @@ class _TerrainNodeGraphWidget(QWidget):
         self._graph.nodes_deleted.connect(self._on_graph_changed)
         self._graph.port_connected.connect(self._on_graph_changed)
         self._graph.port_disconnected.connect(self._on_graph_changed)
+        self._graph.property_changed.connect(self._on_graph_changed)
 
         self._view.installEventFilter(self)
 
@@ -184,8 +207,63 @@ class _TerrainNodeGraphWidget(QWidget):
 
     def _new_graph(self):
         self._graph.clear()
+        self._graph_path = ""
+        self._update_title()
+
+    def _update_title(self):
+        name = os.path.splitext(os.path.basename(self._graph_path))[0] if self._graph_path else "untitled"
+        self._panel.setWindowTitle(f"Terrain Editor — {name}")
+
+    def _save_graph(self):
+        if self._graph_path:
+            self._do_save(self._graph_path)
+        else:
+            self._save_graph_as()
+
+    def _save_graph_as(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Terrain Graph", self._graph_path or "",
+            "Terrain Graphs (*.zterr)")
+        if not path:
+            return
+        if not path.endswith(".zterr"):
+            path += ".zterr"
+        self._do_save(path)
+        self._graph_path = path
+        self._update_title()
+        if self._panel._terrain is not None:
+            self._panel._terrain.graph_path = path
+
+    def _do_save(self, path):
+        from editor.terrain_graph.graph_serializer import save_graph
+        if save_graph(self._graph, path):
+            Logger.info(f"TerrainGraph: saved to {path}")
+        else:
+            Logger.warning(f"TerrainGraph: failed to save to {path}")
+
+    def _open_graph(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open Terrain Graph", "",
+                "Terrain Graphs (*.zterr)")
+            if not path:
+                return
+        self._loading = True
+        from editor.terrain_graph.graph_serializer import load_graph
+        ok = load_graph(self._graph, path)
+        self._loading = False
+        if ok:
+            self._graph_path = path
+            self._update_title()
+            Logger.info(f"TerrainGraph: loaded from {path}")
+            if self._panel._terrain is not None:
+                self._panel._terrain.graph_path = path
+        else:
+            Logger.warning(f"TerrainGraph: failed to load from {path}")
 
     def _on_graph_changed(self, *args):
+        if self._loading:
+            return
         if self._panel._live and self._panel._terrain is not None:
             self._panel._on_generate()
 
@@ -198,8 +276,7 @@ class _TerrainNodeGraphWidget(QWidget):
     def _show_shader_code(self):
         from editor.terrain_graph.code_generator import generate_shader
         res = self._res_spin.value()
-        source, uniforms, height_scale = generate_shader(
-            self._graph, res, random.randint(0, 100000))
+        source, uniforms, height_scale = generate_shader(self._graph, res)
         if not source:
             Logger.warning("TerrainGraph: empty graph, cannot generate shader")
             return
@@ -266,6 +343,14 @@ class TerrainPanel(QDockWidget):
 
     def set_live(self, enabled: bool):
         self._live = enabled
+        if enabled and self._terrain is not None:
+            self._on_generate()
+
+    def load_graph(self, path: str):
+        if self._graph_widget:
+            self._graph_widget._open_graph(path)
+        if self._live and self._terrain is not None:
+            self._on_generate()
 
     def _on_generate(self):
         if self._terrain is None:
@@ -282,7 +367,7 @@ class TerrainPanel(QDockWidget):
         from editor.terrain_graph.gpu_runner import run_shader
         res = int(self._res_spin.value()) if self._res_spin else 512
         seed = random.randint(0, 100000)
-        source, uniforms, height_scale = generate_shader(self._graph, res, float(seed))
+        source, uniforms, height_scale = generate_shader(self._graph, res)
         if not source:
             Logger.warning("TerrainGraph: code generator returned empty (need Height Output node connected)")
             return
@@ -341,8 +426,21 @@ class TerrainPanel(QDockWidget):
         else:
             self._terrain = entity.get_component(Terrain)
         self.set_entity(entity)
+        self._prompt_save_graph()
         if self._live:
             self._on_generate()
+
+    def _prompt_save_graph(self):
+        if self._graph is None:
+            return
+        nodes = self._graph.all_nodes()
+        if not nodes:
+            return
+        gw = self._graph_widget
+        if gw._graph_path:
+            gw._do_save(gw._graph_path)
+        else:
+            gw._save_graph_as()
 
     def _on_add_collider(self):
         entity = self._get_selected_entity()
