@@ -199,6 +199,9 @@ class CollabServer:
         elif msg_type == MessageType.ASSET_REQUEST:
             data["id"] = info.peer_id
             self._broadcast(MessageType.ASSET_REQUEST, data, exclude=info.peer_id)
+        else:
+            data["id"] = info.peer_id
+            self._broadcast(msg_type, data, exclude=info.peer_id)
 
     def _broadcast(self, msg_type: int, data: dict, exclude: Optional[str] = None):
         msg = make_msg(msg_type, data)

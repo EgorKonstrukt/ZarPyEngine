@@ -32,6 +32,7 @@ class _TerrainNodeGraphWidget(QWidget):
         self._node_classes = {}
         self._graph_path = ""
         self._loading = False
+        self._collab_bridge = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -134,6 +135,15 @@ class _TerrainNodeGraphWidget(QWidget):
         self._preview_timer.timeout.connect(self._do_update_previews)
 
         self._view.installEventFilter(self)
+
+        self._collab_bridge = None
+
+    def set_collaboration_manager(self, mgr):
+        if self._collab_bridge is None:
+            from editor.terrain_graph.collab_bridge import TerrainGraphCollabBridge
+            self._collab_bridge = TerrainGraphCollabBridge(self, mgr)
+        else:
+            self._collab_bridge.set_collaboration_manager(mgr)
 
     def eventFilter(self, obj, event):
         if obj is self._view and event.type() == event.Type.KeyPress:
@@ -357,6 +367,10 @@ class TerrainPanel(QDockWidget):
     def _world_spin(self):
         return self._graph_widget._world_spin if self._graph_widget else None
 
+    def set_collaboration_manager(self, mgr):
+        if self._graph_widget:
+            self._graph_widget.set_collaboration_manager(mgr)
+
     def set_live(self, enabled: bool):
         self._live = enabled
         if enabled and (self._terrain is not None or self._find_or_create_terrain()):
@@ -430,6 +444,23 @@ class TerrainPanel(QDockWidget):
             tc.height_scale = height_scale
         if self._engine and self._engine.scene:
             self._engine.scene._render_version += 1
+        self._collab_sync_terrain()
+
+    def _collab_sync_terrain(self):
+        mgr = getattr(self._engine, "collab_manager", None)
+        if not mgr or not mgr.connected or not self._entity or not self._terrain:
+            return
+        eid = self._entity.id
+        data = {
+            "world_size": self._terrain.world_size,
+            "graph_path": self._graph_widget._graph_path if self._graph_widget else "",
+        }
+        mgr.send_component_sync(eid, "Terrain", data)
+        tc = self._entity.get_component(TerrainCollider)
+        if tc is not None:
+            cd = tc.serialize()
+            cd.pop("height_data", None)
+            mgr.send_component_sync(eid, "TerrainCollider", cd)
 
     def _terrain_size_vec(self, height_scale=1.0):
         from core.math.math3d import Vec3
@@ -446,12 +477,14 @@ class TerrainPanel(QDockWidget):
 
     def _on_create(self):
         entity = self._get_selected_entity()
+        created_entity = False
         if entity is None:
             scene = self._engine.scene
             if not scene:
                 return
             entity = scene.create_entity("Terrain")
             entity.add_component(Transform())
+            created_entity = True
         if entity.get_component(Terrain) is None:
             terrain = Terrain()
             entity.add_component(terrain)
@@ -460,8 +493,22 @@ class TerrainPanel(QDockWidget):
             self._terrain = entity.get_component(Terrain)
         self.set_entity(entity)
         self._prompt_save_graph()
+        self._collab_sync_create(entity, created_entity)
         if self._live:
             self._on_generate()
+
+    def _collab_sync_create(self, entity, created_entity: bool):
+        mgr = getattr(self._engine, "collab_manager", None)
+        if not mgr or not mgr.connected:
+            return
+        if created_entity:
+            mgr.send_entity_create(entity.serialize())
+        else:
+            terrain = entity.get_component(Terrain)
+            if terrain is not None:
+                data = terrain.serialize()
+                data.pop("heightfield", None)
+                mgr.send_component_add(entity.id, "Terrain", data)
 
     def _prompt_save_graph(self):
         if self._graph is None:
@@ -484,12 +531,14 @@ class TerrainPanel(QDockWidget):
         if entity.get_component(Terrain) is None:
             Logger.warning("Terrain Editor: select a terrain object first")
             return
+        added_now = False
         if entity.get_component(TerrainCollider) is None:
             history = get_history()
             if history is not None:
                 history.execute(AddComponentCommand(entity, TerrainCollider()))
             else:
                 entity.add_component(TerrainCollider())
+            added_now = True
         tc = entity.get_component(TerrainCollider)
         if tc is not None:
             hs = 1.0
@@ -498,6 +547,19 @@ class TerrainPanel(QDockWidget):
             tc.size = self._terrain_size_vec(hs)
             tc.height_scale = hs
             tc.resolution = int(self._res_spin.value()) if self._res_spin else 256
+            self._collab_sync_collider(entity, tc, added_now)
+
+    def _collab_sync_collider(self, entity, tc, added_now: bool):
+        mgr = getattr(self._engine, "collab_manager", None)
+        if not mgr or not mgr.connected:
+            return
+        eid = entity.id
+        if added_now:
+            mgr.send_component_add(eid, "TerrainCollider", tc.serialize())
+        else:
+            cd = tc.serialize()
+            cd.pop("height_data", None)
+            mgr.send_component_sync(eid, "TerrainCollider", cd)
 
     def _on_randomize(self):
         if self._graph is None:

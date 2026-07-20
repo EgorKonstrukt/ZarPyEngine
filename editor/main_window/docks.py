@@ -187,6 +187,8 @@ def register_default_docks(mw):
     register_dock(mw, mw._mesh_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._terrain_editor = TerrainPanel(mw._engine, mw)
     mw._terrain_editor.setObjectName("TerrainEditorDock")
+    if mw._engine.collab_manager:
+        mw._terrain_editor.set_collaboration_manager(mw._engine.collab_manager)
     register_dock(mw, mw._terrain_editor, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._animation = AnimationPanel(mw._engine, mw)
     mw._animation.load_config(get_global_config())

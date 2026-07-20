@@ -191,6 +191,7 @@ class CollaborationManager:
         self._on_asset_progress: Optional[Callable[[dict], None]] = None
         self._asset_write_lock = 0
         self._suppressed_paths: set[str] = set()
+        self._custom_handlers: dict[int, Callable] = {}
 
     def _make_stop_event(self) -> threading.Event:
         ev = threading.Event()
@@ -441,6 +442,10 @@ class CollaborationManager:
             pid = data.get("id", "")
             if pid != self._client.peer_id and self._as_host:
                 self._handle_asset_request(data)
+        else:
+            handler = self._custom_handlers.get(msg_type)
+            if handler is not None:
+                handler(data)
 
     def _handle_asset_list(self, data: dict):
         paths = data.get("assets", [])
@@ -638,6 +643,12 @@ class CollaborationManager:
         cfg.set("collab.ping_interval", s.ping_interval)
         cfg.set("collab.poll_interval", s.poll_interval)
         cfg.save()
+
+    def register_handler(self, msg_type: int, callback: Callable[[dict], None]):
+        self._custom_handlers[msg_type] = callback
+
+    def unregister_handler(self, msg_type: int):
+        self._custom_handlers.pop(msg_type, None)
 
     def set_asset_progress_callback(self, cb: Callable[[dict], None]):
         self._on_asset_progress = cb
@@ -863,11 +874,22 @@ class CollaborationManager:
         comp = e.get_component_by_name(comp_key)
         if comp:
             for k, v in comp_data.items():
-                if hasattr(comp, k):
-                    try:
+                if not hasattr(comp, k):
+                    continue
+                try:
+                    current = getattr(comp, k)
+                    if hasattr(current, 'from_list') and isinstance(v, list):
+                        current.from_list(v)
+                    elif hasattr(current, 'x') and isinstance(v, (list, tuple)) and len(v) == 3:
+                        from core.math.math3d import Vec3
+                        setattr(comp, k, Vec3(v[0], v[1], v[2]))
+                    elif hasattr(current, 'x') and isinstance(v, (list, tuple)) and len(v) == 4:
+                        from core.math.math3d import Quat
+                        setattr(comp, k, Quat(v[0], v[1], v[2], v[3]))
+                    else:
                         setattr(comp, k, v)
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
         else:
             registry = ComponentRegistry
             if comp_key in registry._component_types:

@@ -49,6 +49,15 @@ class MessageType(IntEnum):
     ASSET_WATCH = 35
     ASSET_DELETE = 36
     ASSET_REQUEST = 37
+    GRAPH_NODE_MOVE = 38
+    GRAPH_PORT_CONNECT = 39
+    GRAPH_PORT_DISCONNECT = 40
+    GRAPH_PARAM_CHANGE = 41
+    GRAPH_NODE_ADD = 42
+    GRAPH_NODE_DELETE = 43
+    GRAPH_CURSOR = 44
+    GRAPH_SYNC_REQ = 45
+    GRAPH_SYNC = 46
 
 
 def make_msg(msg_type: int, data: dict) -> bytes:
