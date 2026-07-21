@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 import time
 from typing import Optional, TYPE_CHECKING
+import qtawesome as qta
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QTreeWidget, QTreeWidgetItem, QPushButton,
                               QMenu, QLineEdit, QLabel, QInputDialog, QAbstractItemView,
-                              QStyledItemDelegate, QStyle, QApplication, QHeaderView)
+                              QStyledItemDelegate, QApplication, QHeaderView)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt6.QtGui import QKeySequence, QAction, QDrag, QColor, QKeyEvent, QBrush, QPixmap, QIcon
 from editor.inspector.helpers import _flash_overlay
@@ -275,20 +276,19 @@ class HierarchyPanel(QDockWidget):
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(4, 4, 4, 2)
         toolbar.setSpacing(2)
-        add_btn = QPushButton("+")
+        add_btn = QPushButton(qta.icon("fa5s.plus", color="#fff"), "")
         add_btn.setFixedSize(*scale_xy(24, 24))
         add_btn.setToolTip("Create Entity")
-        add_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
+        add_btn.setStyleSheet("QPushButton { background: #2e7d32; }")
         add_btn.clicked.connect(self._show_create_menu)
         toolbar.addWidget(add_btn)
         self._search = QLineEdit()
         self._search.setPlaceholderText("  All")
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search)
-        search_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-        self._search.addAction(search_icon, QLineEdit.ActionPosition.LeadingPosition)
+        self._search.addAction(qta.icon("fa5s.search", color="#d4d4d4"), QLineEdit.ActionPosition.LeadingPosition)
         toolbar.addWidget(self._search, 1)
-        collapse_btn = QPushButton("\u25BC")
+        collapse_btn = QPushButton(qta.icon("fa5s.chevron-up", color="#d4d4d4"), "")
         collapse_btn.setFixedSize(*scale_xy(24, 24))
         collapse_btn.setToolTip("Collapse All")
         collapse_btn.clicked.connect(self._collapse_all)

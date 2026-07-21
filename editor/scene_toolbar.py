@@ -9,7 +9,8 @@ from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QLabel, QPushButton, QCheckBox,
                              QDoubleSpinBox, QComboBox, QFrame, QWidget,
                              QHBoxLayout, QSizePolicy)
-from PyQt6.QtCore import pyqtSignal, Qt
+import qtawesome as qta
+from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from core.gizmo.gizmo import GizmoMode, GizmoSpace
 from core.renderer.types import RenderMode
 
@@ -29,28 +30,25 @@ class SceneToolbar(QToolBar):
     def __init__(self, parent=None):
         super().__init__("Scene Tools", parent)
         self.setMovable(False)
+        self.setIconSize(QSize(16, 16))
         self._setup()
 
     def _setup(self):
         gizmo_label = QLabel("Gizmo: ")
         self.addWidget(gizmo_label)
-        self._btn_none = QPushButton("Q")
-        self._btn_none.setFixedWidth(scale(28))
+        self._btn_none = QPushButton(qta.icon("fa5s.ban", color="#d4d4d4"), "")
         self._btn_none.setToolTip("No Gizmo (Q)")
         self._btn_none.clicked.connect(lambda: self.gizmo_mode_changed.emit(GizmoMode.NONE))
         self.addWidget(self._btn_none)
-        self._btn_translate = QPushButton("W")
-        self._btn_translate.setFixedWidth(scale(28))
+        self._btn_translate = QPushButton(qta.icon("fa5s.arrows-alt", color="#d4d4d4"), "")
         self._btn_translate.setToolTip("Translate (W)")
         self._btn_translate.clicked.connect(lambda: self.gizmo_mode_changed.emit(GizmoMode.TRANSLATE))
         self.addWidget(self._btn_translate)
-        self._btn_rotate = QPushButton("E")
-        self._btn_rotate.setFixedWidth(scale(28))
+        self._btn_rotate = QPushButton(qta.icon("fa5s.sync-alt", color="#d4d4d4"), "")
         self._btn_rotate.setToolTip("Rotate (E)")
         self._btn_rotate.clicked.connect(lambda: self.gizmo_mode_changed.emit(GizmoMode.ROTATE))
         self.addWidget(self._btn_rotate)
-        self._btn_scale = QPushButton("R")
-        self._btn_scale.setFixedWidth(scale(28))
+        self._btn_scale = QPushButton(qta.icon("fa5s.expand-arrows-alt", color="#d4d4d4"), "")
         self._btn_scale.setToolTip("Scale (R)")
         self._btn_scale.clicked.connect(lambda: self.gizmo_mode_changed.emit(GizmoMode.SCALE))
         self.addWidget(self._btn_scale)
@@ -83,35 +81,31 @@ class RenderToolbar(QToolBar):
     def __init__(self, parent=None):
         super().__init__("Render Tools", parent)
         self.setMovable(False)
+        self.setIconSize(QSize(16, 16))
         self._setup()
 
     def _setup(self):
         self.addWidget(QLabel("Render: "))
-        self._shaded_btn = QPushButton("S")
-        self._shaded_btn.setFixedWidth(scale(24))
+        self._shaded_btn = QPushButton(qta.icon("fa5s.fill-drip", color="#d4d4d4"), "")
         self._shaded_btn.setToolTip("Shaded")
         self._shaded_btn.clicked.connect(lambda: self.render_mode_changed.emit(RenderMode.SHADED))
         self.addWidget(self._shaded_btn)
-        self._sh_wire_btn = QPushButton("S+W")
-        self._sh_wire_btn.setFixedWidth(scale(32))
+        self._sh_wire_btn = QPushButton(qta.icon("fa5s.border-all", color="#d4d4d4"), "")
         self._sh_wire_btn.setToolTip("Shaded + Wireframe")
         self._sh_wire_btn.clicked.connect(lambda: self.render_mode_changed.emit(RenderMode.SHADED_WIREFRAME))
         self.addWidget(self._sh_wire_btn)
-        self._flat_btn = QPushButton("F")
-        self._flat_btn.setFixedWidth(scale(24))
+        self._flat_btn = QPushButton(qta.icon("fa5s.adjust", color="#d4d4d4"), "")
         self._flat_btn.setToolTip("Flat (no lighting)")
         self._flat_btn.clicked.connect(lambda: self.render_mode_changed.emit(RenderMode.FLAT))
         self.addWidget(self._flat_btn)
         self.addWidget(_make_sep())
-        self._cam_persp_btn = QPushButton("Perspective")
-        self._cam_persp_btn.setFixedWidth(scale(80))
+        self._cam_persp_btn = QPushButton(qta.icon("fa5s.camera", color="#d4d4d4"), " Perspective")
         self._cam_persp_btn.setToolTip("Toggle Perspective/Orthographic Camera")
         self._cam_persp_btn.setCheckable(True)
         self._cam_persp_btn.setChecked(True)
         self._cam_persp_btn.clicked.connect(self._on_camera_projection_changed)
         self.addWidget(self._cam_persp_btn)
-        self._cam_2d_btn = QPushButton("2D")
-        self._cam_2d_btn.setFixedWidth(scale(32))
+        self._cam_2d_btn = QPushButton(qta.icon("fa5s.crop-alt", color="#d4d4d4"), "")
         self._cam_2d_btn.setToolTip("Toggle 2D Mode")
         self._cam_2d_btn.setCheckable(True)
         self._cam_2d_btn.clicked.connect(self.mode_2d_toggled)

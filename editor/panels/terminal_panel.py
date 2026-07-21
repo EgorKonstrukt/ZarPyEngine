@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QPushButton, QTextEdit, QTabWidget, QPlainTextEdit,
                               QCompleter, QApplication)
 from PyQt6.QtCore import Qt, QStringListModel, pyqtSignal, QTimer, QThread
+import qtawesome as qta
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QKeyEvent, QKeySequence
 
 from core.engine.engine import Engine
@@ -442,29 +443,25 @@ class TerminalPanel(QDockWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(4)
 
-        add_btn = QPushButton("+")
+        add_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), "")
         add_btn.setToolTip("New Python Tab")
-        add_btn.setFixedWidth(scale(24))
         add_btn.clicked.connect(self._add_tab)
         toolbar.addWidget(add_btn)
 
-        ps_btn = QPushButton("PS")
+        ps_btn = QPushButton(qta.icon("fa5s.terminal", color="#d4d4d4"), "")
         ps_btn.setToolTip("New PowerShell Tab (embedded)")
-        ps_btn.setFixedWidth(scale(28))
         ps_btn.clicked.connect(self._open_powershell)
         toolbar.addWidget(ps_btn)
 
         toolbar.addStretch()
 
-        clear_btn = QPushButton("C")
+        clear_btn = QPushButton(qta.icon("fa5s.eraser", color="#d4d4d4"), "")
         clear_btn.setToolTip("Clear Current Tab")
-        clear_btn.setFixedWidth(scale(24))
         clear_btn.clicked.connect(self._clear_current)
         toolbar.addWidget(clear_btn)
 
-        reset_btn = QPushButton("R")
+        reset_btn = QPushButton(qta.icon("fa5s.sync-alt", color="#d4d4d4"), "")
         reset_btn.setToolTip("Reset Python Namespace")
-        reset_btn.setFixedWidth(scale(24))
         reset_btn.clicked.connect(self._reset_namespace)
         toolbar.addWidget(reset_btn)
 

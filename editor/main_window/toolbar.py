@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QToolBar, QPushButton, QLabel, QDoubleSpinBox,
                              QWidget, QSizePolicy, QHBoxLayout, QFrame,
                              QToolButton)
 from PyQt6.QtCore import Qt, QSize
+import qtawesome as qta
 from PyQt6.QtGui import QAction, QIcon
 
 from editor.scene_toolbar import SceneToolbar, RenderToolbar
@@ -20,15 +21,17 @@ from editor.main_window.handlers import toggle_play_stop, reset_camera, on_gizmo
 def _set_play_btn_style(btn, text):
     if text == "Play":
         btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
+        btn.setIcon(qta.icon("fa5s.play", color="#fff"))
     elif text == "Stop":
         btn.setStyleSheet("QPushButton { background: #c0392b; color: #fff; }")
+        btn.setIcon(qta.icon("fa5s.stop", color="#fff"))
     btn.setText(text)
 
 
 def _action_to_toolbutton(action, parent=None) -> QToolButton:
     btn = QToolButton(parent)
     btn.setDefaultAction(action)
-    btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+    btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
     btn.setAutoRaise(True)
     return btn
 
@@ -37,18 +40,20 @@ def setup_toolbar(mw):
     mw._main_toolbar = QToolBar("Main", mw)
     mw._main_toolbar.setObjectName("MainToolbar")
     mw._main_toolbar.setMovable(False)
-    s = scale_xy(20, 20)
+    mw._main_toolbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    s = scale_xy(18, 18)
     mw._main_toolbar.setIconSize(QSize(*s))
     mw.addToolBar(Qt.ToolBarArea.TopToolBarArea, mw._main_toolbar)
 
     # Container widget with QHBoxLayout for proper stretch centering
     container = QWidget()
+    container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     lay = QHBoxLayout(container)
-    lay.setContentsMargins(2, 2, 2, 2)
-    lay.setSpacing(0)
+    lay.setContentsMargins(4, 2, 4, 2)
+    lay.setSpacing(4)
 
     # ── Left section ──
-    mw._gizmo_vis_act = QAction(QIcon.fromTheme("transform-both", QIcon("")), "Gizmo", mw)
+    mw._gizmo_vis_act = QAction(qta.icon("fa5s.mouse-pointer", color="#d4d4d4"), "Gizmo", mw)
     mw._gizmo_vis_act.setCheckable(True)
     mw._gizmo_vis_act.setChecked(True)
     mw._gizmo_vis_act.setToolTip("Toggle Gizmo Visibility")
@@ -56,7 +61,7 @@ def setup_toolbar(mw):
     lay.addWidget(_action_to_toolbutton(mw._gizmo_vis_act, mw))
 
     reset_cam_btn = QToolButton(mw)
-    reset_cam_btn.setText("Reset Camera")
+    reset_cam_btn.setIcon(qta.icon("fa5s.crosshairs", color="#d4d4d4"))
     reset_cam_btn.setToolTip("Reset Camera Position")
     reset_cam_btn.setAutoRaise(True)
     reset_cam_btn.clicked.connect(lambda: reset_camera(mw))
@@ -81,7 +86,7 @@ def setup_toolbar(mw):
     mw._play_btn.clicked.connect(lambda: toggle_play_stop(mw))
     lay.addWidget(mw._play_btn)
 
-    mw._pause_btn = QPushButton("Pause")
+    mw._pause_btn = QPushButton(qta.icon("fa5s.pause", color="#fff"), " Pause")
     mw._pause_btn.setStyleSheet(
         "QPushButton { background: #b7950b; color: #fff; }"
         "QPushButton:disabled { background: #5a5a5a; color: #888; }"

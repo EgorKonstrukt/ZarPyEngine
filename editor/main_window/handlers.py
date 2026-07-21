@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+import qtawesome as qta
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from PyQt6.QtCore import Qt, QTimer
 
@@ -529,7 +530,13 @@ def on_camera_projection_changed(mw):
 
 def on_camera_type_changed(mw):
     is_ortho = mw._viewport.camera.is_orthographic
-    mw._render_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
+    btn = mw._render_toolbar._cam_persp_btn
+    if is_ortho:
+        btn.setIcon(qta.icon("fa5s.camera-retro", color="#d4d4d4"))
+        btn.setText(" Ortho")
+    else:
+        btn.setIcon(qta.icon("fa5s.camera", color="#d4d4d4"))
+        btn.setText(" Perspective")
 
 
 def on_camera_2d_toggled(mw):
@@ -540,8 +547,7 @@ def on_camera_2d_toggled(mw):
 def on_camera_2d_changed(mw):
     is_2d = mw._viewport.camera.is_2d_mode
     mw._render_toolbar._cam_2d_btn.setChecked(is_2d)
-    is_ortho = mw._viewport.camera.is_orthographic
-    mw._render_toolbar._cam_persp_btn.setText("Ortho" if is_ortho else "Perspective")
+    on_camera_type_changed(mw)
 
 
 def on_play_start(mw, _):

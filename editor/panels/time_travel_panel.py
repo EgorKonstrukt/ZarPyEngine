@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QLineEdit, QTabWidget, QTreeWidget, QTreeWidgetItem,
                               QFileDialog, QCheckBox, QAbstractItemView)
 from PyQt6.QtCore import Qt, QTimer, QRectF
+import qtawesome as qta
 from PyQt6.QtGui import (QFont, QPainter, QColor, QPen, QPainterPath, QFontMetrics)
 
 from core.engine.engine import Engine
@@ -395,33 +396,32 @@ class TimeTravelPanel(QDockWidget):
         r1 = QHBoxLayout()
         r1.setSpacing(2)
 
-        def btn(text, tip, cb, w=26):
-            b = QPushButton(text)
+        def btn(icon, tip, cb, w=26):
+            b = QPushButton(icon, "")
             b.setToolTip(tip)
             b.setFixedSize(scale(w), scale(24))
             b.clicked.connect(cb)
             r1.addWidget(b)
             return b
 
-        self._first_btn = btn(chr(0x23EE), "First", self._go_first)
-        self._b10_btn = btn(chr(0x23EA), "Back 10", self._go_back10)
-        self._b1_btn = btn(chr(0x25C0), "Back 1", self._go_back1)
-        self._play_btn = btn(chr(0x25B6), "Play (Space)", self._toggle_play)
-        self._f1_btn = btn(chr(0x25B6), "Forward 1", self._go_forward1)
-        self._f10_btn = btn(chr(0x23E9), "Forward 10", self._go_forward10)
-        self._last_btn = btn(chr(0x23ED), "Last", self._go_last)
+        self._first_btn = btn(qta.icon("fa5s.fast-backward", color="#d4d4d4"), "First", self._go_first)
+        self._b10_btn = btn(qta.icon("fa5s.backward", color="#d4d4d4"), "Back 10", self._go_back10)
+        self._b1_btn = btn(qta.icon("fa5s.caret-left", color="#d4d4d4"), "Back 1", self._go_back1)
+        self._play_btn = btn(qta.icon("fa5s.play", color="#d4d4d4"), "Play (Space)", self._toggle_play)
+        self._f1_btn = btn(qta.icon("fa5s.caret-right", color="#d4d4d4"), "Forward 1", self._go_forward1)
+        self._f10_btn = btn(qta.icon("fa5s.forward", color="#d4d4d4"), "Forward 10", self._go_forward10)
+        self._last_btn = btn(qta.icon("fa5s.fast-forward", color="#d4d4d4"), "Last", self._go_last)
 
         r1.addSpacing(6)
 
-        self._record_btn = btn("R", "Record snapshots", self._toggle_record, w=28)
+        self._record_btn = btn(qta.icon("fa5s.dot-circle", color="#ff4444"), "Record snapshots", self._toggle_record, w=28)
         self._record_btn.setCheckable(True)
         self._record_btn.setStyleSheet(
-            "QPushButton { color: #ff4444; }"
             "QPushButton:checked { color: #fff; background: #cc2222; }")
 
         r1.addSpacing(6)
 
-        self._live_btn = btn("L", "Return to live scene", self._go_live, w=24)
+        self._live_btn = btn(qta.icon("fa5s.undo", color="#d4d4d4"), "Return to live scene", self._go_live, w=24)
         self._live_btn.setEnabled(False)
 
         r1.addSpacing(4)
@@ -437,7 +437,7 @@ class TimeTravelPanel(QDockWidget):
 
         r1.addStretch()
 
-        export_btn = btn("Save", "Export current frame as .zpes", self._export_frame, w=40)
+        export_btn = btn(qta.icon("fa5s.save", color="#d4d4d4"), "Export current frame as .zpes", self._export_frame, w=40)
         layout.addLayout(r1)
 
         r2 = QHBoxLayout()
@@ -448,7 +448,7 @@ class TimeTravelPanel(QDockWidget):
         self._bp_input.setFixedHeight(scale(22))
         self._bp_input.returnPressed.connect(self._set_breakpoint)
         r2.addWidget(self._bp_input)
-        bp_clear = QPushButton("X")
+        bp_clear = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
         bp_clear.setFixedSize(scale(20), scale(22))
         bp_clear.clicked.connect(self._clear_breakpoint)
         r2.addWidget(bp_clear)
@@ -475,7 +475,7 @@ class TimeTravelPanel(QDockWidget):
 
         r3.addStretch()
 
-        clear_btn = btn("Clear", "Clear all frames", self._clear, w=50)
+        clear_btn = btn(qta.icon("fa5s.trash-alt", color="#d4d4d4"), "Clear all frames", self._clear, w=50)
         layout.addLayout(r3)
 
         self._timeline = _TimelineScrubber()
@@ -543,7 +543,7 @@ class TimeTravelPanel(QDockWidget):
         if self._playing:
             self._playing = False
             self._play_timer.stop()
-            self._play_btn.setText(chr(0x25B6))
+            self._play_btn.setIcon(qta.icon("fa5s.play", color="#d4d4d4"))
         else:
             if self._timeline.current_index() < 0 and self._recorder and self._recorder.num_frames > 0:
                 self._on_frame_restore(0)
@@ -552,7 +552,7 @@ class TimeTravelPanel(QDockWidget):
                 speed = max(0.1, self._speed_sb.value())
                 self._play_timer.setInterval(int(33 / speed))
                 self._play_timer.start()
-                self._play_btn.setText(chr(0x23F8))
+                self._play_btn.setIcon(qta.icon("fa5s.pause", color="#d4d4d4"))
 
     def _go_forward1(self):
         n = self._recorder.num_frames if self._recorder else 0
