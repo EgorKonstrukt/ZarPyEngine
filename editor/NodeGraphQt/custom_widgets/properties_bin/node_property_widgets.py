@@ -1,4 +1,4 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
@@ -264,9 +264,7 @@ class _PortConnectionsContainer(QtWidgets.QWidget):
         tree.setItemWidget(item, 2, combo)
 
         focus_btn = QtWidgets.QPushButton()
-        focus_btn.setIcon(QtGui.QIcon(
-            tree.style().standardIcon(QtWidgets.QStyle.SP_DialogYesButton)
-        ))
+        focus_btn.setIcon(qta.icon("fa5s.search", color="#d4d4d4"))
         focus_btn.clicked.connect(
             lambda: self._on_focus_to_node(self._ports.get(combo.currentText()))
         )
@@ -322,11 +320,7 @@ class NodePropEditorWidget(QtWidgets.QWidget):
         self.__tab = QtWidgets.QTabWidget()
 
         close_btn = QtWidgets.QPushButton()
-        close_btn.setIcon(QtGui.QIcon(
-            self.style().standardIcon(
-                QtWidgets.QStyle.SP_DialogCloseButton
-            )
-        ))
+        close_btn.setIcon(qta.icon("fa5s.times", color="#d4d4d4"))
         close_btn.setMaximumWidth(40)
         close_btn.setToolTip('close property')
         close_btn.clicked.connect(self._on_close)

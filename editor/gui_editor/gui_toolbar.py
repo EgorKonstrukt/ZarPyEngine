@@ -1,10 +1,11 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import qtawesome as qta
 from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QPushButton, QLabel,
                              QSpinBox, QCheckBox, QFileDialog, QMessageBox, QComboBox)
@@ -118,13 +119,13 @@ class GuiEditorToolbar(QFrame):
         self._zoom_label = QLabel("100%")
         self._zoom_label.setStyleSheet("color: #ddd; font-size: 11px; min-width: 36px; text-align: center;")
         layout.addWidget(self._zoom_label)
-        self._zoom_in_btn = QPushButton("+")
+        self._zoom_in_btn = QPushButton(qta.icon("fa5s.search-plus", color="#d4d4d4"), "")
         self._zoom_in_btn.setFixedWidth(scale(24))
         self._zoom_in_btn.clicked.connect(lambda: self.zoom_changed.emit(0.1))
         layout.addWidget(self._zoom_in_btn)
         layout.addStretch()
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setStyleSheet("QPushButton { color: #ff6b6b; }")
+        self._clear_btn = QPushButton(qta.icon("fa5s.times-circle", color="#ff6b6b"), " Clear")
+        
         self._clear_btn.clicked.connect(self.clear_requested.emit)
         layout.addWidget(self._clear_btn)
 

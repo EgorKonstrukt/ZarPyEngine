@@ -1,10 +1,11 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
+﻿# This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2026 Zarrakun
 
 #!/usr/bin/python
+import qtawesome as qta
 from PyQt6 import QtWidgets, QtCore
 
 from editor.NodeGraphQt.widgets.dialogs import FileDialog
@@ -24,7 +25,7 @@ class PropFilePath(BaseProperty):
         self._ledit.editingFinished.connect(self._on_value_change)
         self._ledit.clearFocus()
 
-        icon = self.style().standardIcon(QtWidgets.QStyle.StandardPixmap(21))
+        icon = qta.icon("fa5s.folder-open", color="#d4d4d4")
         _button = QtWidgets.QPushButton()
         _button.setIcon(icon)
         _button.clicked.connect(self._on_select_file)

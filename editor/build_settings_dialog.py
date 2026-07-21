@@ -10,6 +10,7 @@ Allows configuring which scenes and plugins are included in the build.
 """
 from __future__ import annotations
 import os
+import qtawesome as qta
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
@@ -55,10 +56,10 @@ class BuildSettingsDialog(QDialog):
         layout.addWidget(self._scene_list)
 
         btn_layout = QHBoxLayout()
-        self._add_btn = QPushButton("+ Add Scene")
+        self._add_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), " Add Scene")
         self._add_btn.clicked.connect(self._add_scene)
         btn_layout.addWidget(self._add_btn)
-        self._remove_btn = QPushButton("- Remove")
+        self._remove_btn = QPushButton(qta.icon("fa5s.minus", color="#e74c3c"), " Remove")
         self._remove_btn.clicked.connect(self._remove_scene)
         btn_layout.addWidget(self._remove_btn)
         btn_layout.addStretch()

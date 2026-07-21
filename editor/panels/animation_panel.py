@@ -7,6 +7,7 @@
 from __future__ import annotations
 import math
 from typing import Optional
+import qtawesome as qta
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QSplitter,
@@ -490,18 +491,18 @@ class AnimationPanel(QDockWidget):
         layout = QHBoxLayout(tb)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
-        self._play_btn = QPushButton("\u25b6")
+        self._play_btn = QPushButton(qta.icon("fa5s.play", color="#d4d4d4"), "")
         self._play_btn.setFixedSize(*scale_xy(26, 22))
         self._play_btn.clicked.connect(self._toggle_play)
         layout.addWidget(self._play_btn)
-        self._stop_btn = QPushButton("\u25a0")
+        self._stop_btn = QPushButton(qta.icon("fa5s.stop", color="#d4d4d4"), "")
         self._stop_btn.setFixedSize(*scale_xy(26, 22))
         self._stop_btn.clicked.connect(self._stop_playback)
         layout.addWidget(self._stop_btn)
-        self._record_btn = QPushButton("\u25cf")
+        self._record_btn = QPushButton(qta.icon("fa5s.dot-circle", color="#ff4444"), "")
         self._record_btn.setFixedSize(*scale_xy(26, 22))
         layout.addWidget(self._record_btn)
-        self._key_btn = QPushButton("K")
+        self._key_btn = QPushButton(qta.icon("fa5s.key", color="#d4d4d4"), "")
         self._key_btn.setFixedSize(*scale_xy(26, 22))
         self._key_btn.setToolTip("Add Keyframe")
         self._key_btn.clicked.connect(self._add_keyframe)
@@ -515,7 +516,7 @@ class AnimationPanel(QDockWidget):
         self._time_spin.setFixedWidth(scale(70))
         self._time_spin.setStyleSheet("border: 1px solid; border-radius: 3px; padding: 1px 4px;")
         layout.addWidget(self._time_spin)
-        self._add_prop_btn = QPushButton("+ Add Property")
+        self._add_prop_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), " Add Property")
         self._add_prop_btn.setFixedHeight(scale(22))
         self._add_prop_btn.clicked.connect(self._add_property)
         layout.addWidget(self._add_prop_btn)
@@ -659,16 +660,16 @@ class AnimationPanel(QDockWidget):
     def _toggle_play(self):
         if self._is_playing:
             self._is_playing = False
-            self._play_btn.setText("\u25b6")
+            self._play_btn.setIcon(qta.icon("fa5s.play", color="#d4d4d4"))
             self._play_timer.stop()
         else:
             self._is_playing = True
-            self._play_btn.setText("\u23f8")
+            self._play_btn.setIcon(qta.icon("fa5s.pause", color="#d4d4d4"))
             self._play_timer.start(int(1000 / _FPS))
 
     def _stop_playback(self):
         self._is_playing = False
-        self._play_btn.setText("\u25b6")
+        self._play_btn.setIcon(qta.icon("fa5s.play", color="#d4d4d4"))
         self._play_timer.stop()
         self._current_time = 0.0
         self._timeline_ruler.set_time(0.0)

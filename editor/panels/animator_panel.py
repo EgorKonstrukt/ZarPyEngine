@@ -7,6 +7,7 @@
 from __future__ import annotations
 import math
 from typing import Optional
+import qtawesome as qta
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QListWidget, QListWidgetItem, QSplitter, QScrollArea,
@@ -504,11 +505,11 @@ class AnimatorPanel(QDockWidget):
         layout = QHBoxLayout(tb)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(4)
-        self._add_state_btn = QPushButton("+ State")
+        self._add_state_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), " State")
         self._add_state_btn.setFixedHeight(scale(22))
         self._add_state_btn.clicked.connect(self._add_state)
         layout.addWidget(self._add_state_btn)
-        self._add_param_btn = QPushButton("+ Parameter")
+        self._add_param_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), " Parameter")
         self._add_param_btn.setFixedHeight(scale(22))
         self._add_param_btn.clicked.connect(self._add_parameter)
         layout.addWidget(self._add_param_btn)
@@ -553,7 +554,7 @@ class AnimatorPanel(QDockWidget):
         self._param_type_combo.setStyleSheet("border: 1px solid; "
                                              "border-radius: 3px; font-size: 10px;")
         ar_layout.addWidget(self._param_type_combo)
-        add_btn = QPushButton("+")
+        add_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), "")
         add_btn.setFixedSize(*scale_xy(22, 22))
         add_btn.clicked.connect(self._add_parameter)
         ar_layout.addWidget(add_btn)

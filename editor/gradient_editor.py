@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import qtawesome as qta
 from PyQt6.QtWidgets import (
     QWidget, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QDoubleSpinBox, QScrollArea
@@ -211,7 +212,7 @@ class _StopRow(QWidget):
         self._color_edit = ColorLineEdit(color)
         layout.addWidget(self._color_edit, 1)
 
-        self._remove_btn = QPushButton("\u00d7")
+        self._remove_btn = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
         self._remove_btn.setFixedSize(24, 24)
         self._remove_btn.setToolTip("Remove stop")
         layout.addWidget(self._remove_btn)

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import qtawesome as qta
 from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import QCheckBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSpinBox, QVBoxLayout, QWidget, QWidgetAction
 from PyQt6.QtGui import QPalette
@@ -41,18 +42,18 @@ def setup_toolbar(vp):
     toolbar_layout.setSpacing(3)
 
     cam_row = QHBoxLayout()
-    vp._cam_menu_btn = QPushButton("Camera")
+    vp._cam_menu_btn = QPushButton(qta.icon("fa5s.camera", color="#d4d4d4"), " Camera")
     vp._cam_menu_btn.setMenu(create_camera_menu(vp))
     vp._cam_menu_btn.setMinimumWidth(60)
     cam_row.addWidget(vp._cam_menu_btn)
 
-    vp._stats_btn = QPushButton("Stats")
+    vp._stats_btn = QPushButton(qta.icon("fa5s.chart-bar", color="#d4d4d4"), " Stats")
     vp._stats_btn.setCheckable(True)
     vp._stats_btn.setMinimumWidth(50)
     vp._stats_btn.clicked.connect(vp._toggle_stats)
     cam_row.addWidget(vp._stats_btn)
 
-    vp._bvh_btn = QPushButton("BVH")
+    vp._bvh_btn = QPushButton(qta.icon("fa5s.sitemap", color="#d4d4d4"), " BVH")
     vp._bvh_btn.setCheckable(True)
     vp._bvh_btn.setMinimumWidth(40)
     vp._bvh_btn.clicked.connect(vp._toggle_bvh_debug)

@@ -7,6 +7,7 @@
 from __future__ import annotations
 import json
 import os
+import qtawesome as qta
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -256,7 +257,7 @@ class _NewProjectDialog(QDialog):
         self._path_edit = QLineEdit()
         self._path_edit.setPlaceholderText(os.path.expanduser("~"))
         path_layout.addWidget(self._path_edit, 1)
-        browse_btn = QPushButton("...")
+        browse_btn = QPushButton(qta.icon("fa5s.folder-open", color="#d4d4d4"), "")
         browse_btn.setFixedWidth(scale(32))
         browse_btn.clicked.connect(self._on_browse)
         path_layout.addWidget(browse_btn)

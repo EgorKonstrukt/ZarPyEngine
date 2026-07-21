@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import qtawesome as qta
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QPushButton, QCheckBox, QLabel, QLineEdit,
                               QSplitter, QPlainTextEdit, QListWidget,
@@ -135,14 +136,14 @@ class ConsolePanel(QDockWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(2)
 
-        clear_btn = QPushButton("Clear")
+        clear_btn = QPushButton(qta.icon("fa5s.trash-alt", color="#d4d4d4"), " Clear")
         clear_btn.setFixedHeight(22)
         clear_btn.clicked.connect(self._clear)
         toolbar.addWidget(clear_btn)
 
         toolbar.addSpacing(4)
 
-        collapse_btn = QPushButton("Collapse")
+        collapse_btn = QPushButton(qta.icon("fa5s.compress-alt", color="#d4d4d4"), " Collapse")
         collapse_btn.setFixedHeight(22)
         collapse_btn.clicked.connect(self._collapse_all)
         toolbar.addWidget(collapse_btn)

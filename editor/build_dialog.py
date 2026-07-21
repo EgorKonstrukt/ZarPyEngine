@@ -8,6 +8,7 @@ import sys
 import os
 import subprocess
 import threading
+import qtawesome as qta
 from pathlib import Path
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QPushButton, QLabel, QLineEdit, QCheckBox,
@@ -53,7 +54,7 @@ class BuildDialog(QDialog):
 
         self._output_dir_edit = QLineEdit()
         self._output_dir_edit.setText(str(ROOT / "build_output"))
-        browse_btn = QPushButton("...")
+        browse_btn = QPushButton(qta.icon("fa5s.folder-open", color="#d4d4d4"), "")
         browse_btn.setFixedWidth(scale(32))
         browse_btn.clicked.connect(self._browse_output_dir)
         h = QHBoxLayout()

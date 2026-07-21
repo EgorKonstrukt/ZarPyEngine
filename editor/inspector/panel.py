@@ -8,6 +8,7 @@ from __future__ import annotations
 import json, os
 import numpy as np
 from typing import Optional, TYPE_CHECKING
+import qtawesome as qta
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QScrollArea, QLabel, QLineEdit, QPushButton, QCheckBox, QDoubleSpinBox,
     QSpinBox, QComboBox, QGroupBox, QFrame, QMenu, QDialog, QTextEdit,
@@ -194,9 +195,9 @@ class InspectorPanel(QDockWidget):
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(6, 4, 6, 6)
-        self._add_comp_btn = QPushButton("+ Add Component")
+        self._add_comp_btn = QPushButton(qta.icon("fa5s.plus", color="#fff"), " Add Component")
         self._add_comp_btn.setFixedHeight(scale(24))
-        self._add_comp_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
+        self._add_comp_btn.setStyleSheet("QPushButton { background: #2e7d32; }")
         self._add_comp_btn.clicked.connect(self._show_add_component_menu)
         bottom_layout.addWidget(self._add_comp_btn)
         outer_layout.addWidget(bottom)
@@ -868,7 +869,7 @@ class InspectorPanel(QDockWidget):
         self._build_section_title("Conditions")
         for cond in trans.conditions:
             self._build_animator_condition_row(trans, cond)
-        add_cond_btn = QPushButton("+ Add Condition")
+        add_cond_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), " Add Condition")
         add_cond_btn.clicked.connect(lambda: self._add_animator_condition(trans))
         add_cond_btn.setStyleSheet(self._animator_btn_style())
         self._content_layout.addWidget(add_cond_btn)
@@ -897,10 +898,10 @@ class InspectorPanel(QDockWidget):
         thresh_sb.valueChanged.connect(lambda v, c=cond: setattr(c, 'threshold', v))
         thresh_sb.setStyleSheet(self._animator_input_style())
         row.addWidget(thresh_sb)
-        del_btn = QPushButton("x")
+        del_btn = QPushButton(qta.icon("fa5s.times", color="#c66"), "")
         del_btn.setFixedSize(*scale_xy(20, 20))
         del_btn.clicked.connect(lambda: self._remove_animator_condition(trans, cond))
-        del_btn.setStyleSheet("QPushButton { color: #c66; border: none; font-size: 10px; } QPushButton:hover { color: #f88; }")
+        del_btn.setStyleSheet("QPushButton { border: none; } QPushButton:hover { }")
         row.addWidget(del_btn)
         self._content_layout.addLayout(row)
 

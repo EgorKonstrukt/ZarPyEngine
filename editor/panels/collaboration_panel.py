@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                               QListWidget, QListWidgetItem, QFrame,
                               QProgressBar, QMessageBox, QFileDialog)
 from PyQt6.QtCore import Qt, QTimer
+import qtawesome as qta
 from PyQt6.QtGui import QColor, QFont
 
 
@@ -91,8 +92,8 @@ class CollaborationPanel(QDockWidget):
         host_row.addWidget(self._port_input)
         layout.addLayout(host_row)
 
-        self._host_btn = QPushButton("Host Session")
-        self._host_btn.setStyleSheet("QPushButton { background: #2471a3; color: #fff; }")
+        self._host_btn = QPushButton(qta.icon("fa5s.server", color="#fff"), " Host Session")
+        self._host_btn.setStyleSheet("QPushButton { background: #2471a3; }")
         self._host_btn.clicked.connect(self._on_host)
         layout.addWidget(self._host_btn)
 
@@ -108,13 +109,13 @@ class CollaborationPanel(QDockWidget):
         connect_row.addWidget(self._connect_port_input)
         layout.addLayout(connect_row)
 
-        self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setStyleSheet("QPushButton { background: #2e7d32; color: #fff; }")
+        self._connect_btn = QPushButton(qta.icon("fa5s.plug", color="#fff"), " Connect")
+        self._connect_btn.setStyleSheet("QPushButton { background: #2e7d32; }")
         self._connect_btn.clicked.connect(self._on_connect)
         layout.addWidget(self._connect_btn)
 
-        self._disconnect_btn = QPushButton("Disconnect")
-        self._disconnect_btn.setStyleSheet("QPushButton { background: #c0392b; color: #fff; }")
+        self._disconnect_btn = QPushButton(qta.icon("fa5s.unlink", color="#fff"), " Disconnect")
+        self._disconnect_btn.setStyleSheet("QPushButton { background: #c0392b; }")
         self._disconnect_btn.clicked.connect(self._on_disconnect)
         self._disconnect_btn.setEnabled(False)
         layout.addWidget(self._disconnect_btn)
@@ -123,7 +124,7 @@ class CollaborationPanel(QDockWidget):
         sep2.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(sep2)
 
-        self._play_btn = QPushButton("Play Mode (Lock)")
+        self._play_btn = QPushButton(qta.icon("fa5s.play", color="#d4d4d4"), " Play Mode (Lock)")
         self._play_btn.setCheckable(True)
         self._play_btn.clicked.connect(self._on_play_toggle)
         layout.addWidget(self._play_btn)
@@ -160,7 +161,7 @@ class CollaborationPanel(QDockWidget):
         self._asset_progress.setVisible(False)
         layout.addWidget(self._asset_progress)
 
-        self._sync_btn = QPushButton("Sync Assets")
+        self._sync_btn = QPushButton(qta.icon("fa5s.sync-alt", color="#d4d4d4"), " Sync Assets")
         self._sync_btn.clicked.connect(self._on_sync_assets)
         layout.addWidget(self._sync_btn)
 
