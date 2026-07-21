@@ -21,10 +21,13 @@ def render_remote_collaborator_gizmos(vp, vp_mat, cam_pos, fw, fh):
     scene = vp._engine.scene
     if not scene:
         return
+    current_tab = collab.current_tab
     aspect = fw / max(1, fh)
     view_mat = vp._cam.get_view_matrix()
     proj_mat = vp._cam.get_projection_matrix(aspect)
     for peer_id, peer in collab.peers.items():
+        if peer.current_tab and current_tab and peer.current_tab != current_tab:
+            continue
         color = peer.color + [1.0]
         cpos_vec = Vec3(*peer.camera_pos)
         cfwd_vec = Vec3(*peer.camera_fwd)
@@ -111,8 +114,11 @@ def draw_remote_cursors(vp, painter):
     collab = vp._engine.collab_manager
     if not collab or not collab.connected:
         return
+    current_tab = collab.current_tab
     painter.save()
     for peer_id, peer in collab.peers.items():
+        if peer.current_tab and current_tab and peer.current_tab != current_tab:
+            continue
         sx, sy = peer.cursor_screen
         if sx <= 0 and sy <= 0:
             continue

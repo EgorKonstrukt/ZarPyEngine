@@ -197,6 +197,14 @@ class CollaborationManager:
         self._on_remote_scene_open: Optional[Callable] = None
         self._on_remote_tab_switch: Optional[Callable] = None
         self._on_remote_tab_close: Optional[Callable] = None
+        self._current_tab: str = ""
+
+    @property
+    def current_tab(self) -> str:
+        return self._current_tab
+
+    def set_current_tab(self, tab_name: str):
+        self._current_tab = tab_name
 
     def _make_stop_event(self) -> threading.Event:
         ev = threading.Event()
@@ -259,6 +267,9 @@ class CollaborationManager:
     def send_scene_open(self, name: str, path: str, data: dict):
         if self._client and self._client.connected:
             self._client.send(MessageType.SCENE_OPEN, {"name": name, "path": path, "data": data})
+            print(f"[COLLAB] send_scene_open called: name={name}, path={path}, data_size={len(str(data))}", flush=True)
+        else:
+            print(f"[COLLAB] send_scene_open skipped: client={self._client is not None}, connected={self._client.connected if self._client else False}", flush=True)
 
     def send_scene_tab_switch(self, name: str):
         if self._client and self._client.connected:
@@ -299,7 +310,8 @@ class CollaborationManager:
         if self._server and self._engine.scene:
             self.update_server_scene(self._engine.scene)
         self._own_name = name
-        self._as_host = False
+        if not self._server:
+            self._as_host = False
         self._client = CollabClient()
         self._client.set_on_disconnected(self._on_disconnected)
         self._client.connect(host, port, name)
@@ -391,17 +403,17 @@ class CollaborationManager:
                 peer.camera_up = data.get("up", [0, 1, 0])
         elif msg_type == MessageType.ENTITY_CREATED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 entity_data = data.get("entity", {})
                 self._create_remote_entity(entity_data)
         elif msg_type == MessageType.ENTITY_DELETED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 entity_id = data.get("entity_id", "")
                 self._delete_remote_entity(entity_id)
         elif msg_type == MessageType.TRANSFORM_UPDATED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 self._apply_remote_transform(data)
         elif msg_type == MessageType.SELECTION_UPDATE:
             pid = data.get("id", "")
@@ -410,15 +422,15 @@ class CollaborationManager:
                 peer.selected_entity_ids = data.get("entity_ids", [])
         elif msg_type == MessageType.COMPONENT_UPDATED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 self._apply_remote_component(data)
         elif msg_type == MessageType.COMPONENT_ADDED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 self._apply_remote_component_add(data)
         elif msg_type == MessageType.COMPONENT_REMOVED:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 self._apply_remote_component_remove(data)
         elif msg_type == MessageType.PONG:
             now = time.time()
@@ -427,7 +439,7 @@ class CollaborationManager:
             self._play_mode_active = data.get("active", False)
         elif msg_type == MessageType.COMPONENT_SYNC:
             pid = data.get("id", "")
-            if pid != self._client.peer_id:
+            if pid != self._client.peer_id and self._tab_matches(data):
                 self._apply_remote_component_sync(data)
         elif msg_type == MessageType.GIZMO_STATE_UPDATE:
             pid = data.get("id", "")
@@ -470,18 +482,24 @@ class CollaborationManager:
                 self._handle_asset_request(data)
         elif msg_type == MessageType.SCENE_OPEN:
             pid = data.get("id", "")
+            pname = data.get("name", "")
+            print(f"[COLLAB] Received SCENE_OPEN: from={pid}, name={pname}, has_callback={self._on_remote_scene_open is not None}", flush=True)
             if pid != self._client.peer_id:
                 if pid in self._peers:
-                    self._peers[pid].current_tab = data.get("name", "")
+                    self._peers[pid].current_tab = pname
                 if self._on_remote_scene_open:
                     self._on_remote_scene_open(data)
+                    print(f"[COLLAB] Forwarded SCENE_OPEN to callback for tab '{pname}'", flush=True)
         elif msg_type == MessageType.SCENE_TAB_SWITCH:
             pid = data.get("id", "")
+            tab = data.get("name", "")
             if pid != self._client.peer_id:
                 if pid in self._peers:
-                    self._peers[pid].current_tab = data.get("name", "")
+                    self._peers[pid].current_tab = tab
+                if tab and tab == self._current_tab:
+                    self._send_full_scene_sync(pid)
                 if self._on_remote_tab_switch:
-                    self._on_remote_tab_switch(pid, data.get("name", ""))
+                    self._on_remote_tab_switch(pid, tab)
         elif msg_type == MessageType.SCENE_TAB_CLOSE:
             pid = data.get("id", "")
             if pid != self._client.peer_id:
@@ -600,23 +618,52 @@ class CollaborationManager:
                 "pos": pos, "fwd": fwd, "up": up
             })
 
+    def _with_tab(self, d: dict) -> dict:
+        if self._current_tab:
+            d["tab"] = self._current_tab
+        return d
+
+    def _tab_matches(self, data: dict) -> bool:
+        msg_tab = data.get("tab", "")
+        return not msg_tab or msg_tab == self._current_tab
+
+    def _send_full_scene_sync(self, target_peer_id: str):
+        if not self._current_tab:
+            return
+        scene = self._engine.scene
+        if not scene:
+            return
+        for eid, entity in scene._entities.items():
+            entity_data = entity.serialize()
+            if self._client and self._client.connected:
+                self._client.send(MessageType.ENTITY_CREATE, self._with_tab({"entity": entity_data}))
+            if entity.transform:
+                t = entity.transform
+                pos = t.local_position.to_list()
+                rot = t.local_rotation.to_list()
+                scl = t.local_scale.to_list()
+                if self._client and self._client.connected:
+                    self._client.send(MessageType.TRANSFORM_UPDATE, self._with_tab({
+                        "entity_id": eid, "p": pos, "r": rot, "s": scl
+                    }))
+
     def send_entity_create(self, entity_data: dict):
         if self._client and self._client.connected:
-            self._client.send(MessageType.ENTITY_CREATE, {"entity": entity_data})
+            self._client.send(MessageType.ENTITY_CREATE, self._with_tab({"entity": entity_data}))
 
     def send_entity_delete(self, entity_id: str):
         if self._client and self._client.connected:
-            self._client.send(MessageType.ENTITY_DELETE, {"entity_id": entity_id})
+            self._client.send(MessageType.ENTITY_DELETE, self._with_tab({"entity_id": entity_id}))
 
     def send_transform(self, entity_id: str, pos: list[float], rot: list[float], scale: list[float]):
         if self._client and self._client.connected:
-            self._client.send(MessageType.TRANSFORM_UPDATE, {
+            self._client.send(MessageType.TRANSFORM_UPDATE, self._with_tab({
                 "entity_id": entity_id, "p": pos, "r": rot, "s": scale
-            })
+            }))
 
     def send_selection(self, entity_ids: list[str]):
         if self._client and self._client.connected:
-            self._client.send(MessageType.SELECTION, {"entity_ids": entity_ids})
+            self._client.send(MessageType.SELECTION, self._with_tab({"entity_ids": entity_ids}))
 
     @staticmethod
     def _collapse_value(v):
@@ -631,30 +678,30 @@ class CollaborationManager:
     def send_component_update(self, entity_id: str, component_key: str,
                               prop: str, value):
         if self._client and self._client.connected:
-            self._client.send(MessageType.COMPONENT_UPDATE, {
+            self._client.send(MessageType.COMPONENT_UPDATE, self._with_tab({
                 "entity_id": entity_id, "component_key": component_key,
                 "prop": prop, "value": self._collapse_value(value)
-            })
+            }))
 
     def send_component_sync(self, entity_id: str, component_key: str, data: dict):
         if self._client and self._client.connected:
-            self._client.send(MessageType.COMPONENT_SYNC, {
+            self._client.send(MessageType.COMPONENT_SYNC, self._with_tab({
                 "entity_id": entity_id, "component_key": component_key,
                 "data": self._collapse_value(data)
-            })
+            }))
 
     def send_component_add(self, entity_id: str, component_key: str, comp_data: dict):
         if self._client and self._client.connected:
-            self._client.send(MessageType.COMPONENT_ADD, {
+            self._client.send(MessageType.COMPONENT_ADD, self._with_tab({
                 "entity_id": entity_id, "component_key": component_key,
                 "data": self._collapse_value(comp_data)
-            })
+            }))
 
     def send_component_remove(self, entity_id: str, component_key: str):
         if self._client and self._client.connected:
-            self._client.send(MessageType.COMPONENT_REMOVE, {
+            self._client.send(MessageType.COMPONENT_REMOVE, self._with_tab({
                 "entity_id": entity_id, "component_key": component_key
-            })
+            }))
 
     def send_play_mode(self, active: bool):
         if self._client and self._client.connected:
@@ -849,13 +896,10 @@ class CollaborationManager:
                 self._peer_joined_callback(peer)
 
     def _apply_scene_snapshot(self, scene_data: dict):
-        scene = self._engine.scene
-        if not scene:
-            return
-        if self._on_scene_sync:
-            if not self._on_scene_sync(scene_data):
-                return
-        self._engine.load_scene_from_data(scene_data)
+        tab_name = scene_data.get("name", "SyncedScene")
+        path = scene_data.get("path", "")
+        if self._on_remote_scene_open:
+            self._on_remote_scene_open({"name": tab_name, "path": path, "data": scene_data})
 
     def _create_remote_entity(self, entity_data: dict):
         scene = self._engine.scene
@@ -870,6 +914,20 @@ class CollaborationManager:
                 parent = scene._entities.get(pid)
                 if parent:
                     e.set_parent(parent)
+        elif eid and eid in scene._entities:
+            e = scene._entities[eid]
+            for cd in entity_data.get("components", []):
+                ctype = cd.get("type")
+                comp_cls = ComponentRegistry.get(ctype)
+                if comp_cls:
+                    existing = e.get_component(comp_cls)
+                    if existing:
+                        for k, v in cd.items():
+                            if k not in ("type", "_key"):
+                                setattr(existing, k, v)
+                    else:
+                        comp = comp_cls.deserialize(cd)
+                        e.add_component(comp)
 
     def _delete_remote_entity(self, entity_id: str):
         scene = self._engine.scene

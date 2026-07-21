@@ -11,8 +11,15 @@ import os
 from typing import Optional
 
 from PyQt6.QtWidgets import QMainWindow, QDockWidget, QWidget
-from PyQt6.QtCore import Qt, QSettings, QTimer
+from PyQt6.QtCore import Qt, QSettings, QTimer, QObject, pyqtSignal
 from PyQt6.QtGui import QCloseEvent
+
+
+class _CollabProxy(QObject):
+    scene_open = pyqtSignal(object)
+    tab_switch = pyqtSignal(str, str)
+    tab_close = pyqtSignal(str)
+    peers_changed = pyqtSignal()
 
 from core.engine.engine import Engine
 from core.foundation.logger import Logger
@@ -79,42 +86,65 @@ class EditorMainWindow(QMainWindow):
         collab = self._engine.collab_manager
         if collab:
             mgr = self._scene_tab_manager
-            collab.set_on_remote_scene_open(lambda data: QTimer.singleShot(0, lambda: self._on_remote_scene_open(data)))
-            collab.set_on_remote_tab_switch(lambda pid, name: QTimer.singleShot(0, lambda: self._on_remote_tab_switch(pid, name)))
-            collab.set_on_remote_tab_close(lambda name: QTimer.singleShot(0, lambda: mgr.remove_tab(name)))
-            collab.set_peer_joined_callback(lambda p: QTimer.singleShot(0, lambda: self._update_tab_peer_indicators()))
-            collab.set_peer_left_callback(lambda p: QTimer.singleShot(0, lambda: self._update_tab_peer_indicators()))
+            self._collab_proxy = _CollabProxy()
+            self._collab_proxy.scene_open.connect(self._on_remote_scene_open)
+            self._collab_proxy.tab_switch.connect(self._on_remote_tab_switch)
+            self._collab_proxy.tab_close.connect(mgr.remove_tab)
+            self._collab_proxy.peers_changed.connect(self._update_tab_peer_indicators)
+            collab.set_on_remote_scene_open(lambda data: self._collab_proxy.scene_open.emit(data))
+            collab.set_on_remote_tab_switch(lambda pid, name: self._collab_proxy.tab_switch.emit(pid, name))
+            collab.set_on_remote_tab_close(lambda name: self._collab_proxy.tab_close.emit(name))
+            collab.set_peer_joined_callback(lambda _: self._collab_proxy.peers_changed.emit())
+            collab.set_peer_left_callback(lambda _: self._collab_proxy.peers_changed.emit())
             mgr.tab_switched.connect(lambda name: self._on_scene_tab_switched(name))
             mgr.tab_added.connect(lambda name: self._on_scene_tab_added(name))
+            print("[COLLAB] Tab callbacks registered", flush=True)
 
     def _on_remote_scene_open(self, data: dict):
-        name = data.get("name", "RemoteScene")
-        path = data.get("path", "")
-        scene_data = data.get("data")
-        if scene_data is None:
-            return
-        from core.ecs.ecs import Scene, ComponentRegistry
-        scene = Scene.deserialize(scene_data, ComponentRegistry)
-        if path:
-            scene.path = path
-        self._tab_add_lock = True
-        self._scene_tab_manager.add_tab(name, path=path, scene=scene)
-        self._tab_add_lock = False
+        try:
+            name = data.get("name", "RemoteScene")
+            path = data.get("path", "")
+            scene_data = data.get("data")
+            print(f"[COLLAB] _on_remote_scene_open called: name={name}, path={path}, has_data={scene_data is not None}", flush=True)
+            if scene_data is None:
+                return
+            from core.ecs.ecs import Scene, ComponentRegistry
+            scene = Scene.deserialize(scene_data, ComponentRegistry)
+            if path:
+                scene.path = path
+            self._tab_add_lock = True
+            tab_name = self._scene_tab_manager.add_tab(name, path=path, scene=scene)
+            print(f"[COLLAB] Tab created: {tab_name}", flush=True)
+            collab = self._engine.collab_manager
+            if collab and tab_name:
+                collab.set_current_tab(tab_name)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._tab_add_lock = False
 
     def _on_scene_tab_added(self, name: str):
-        self._tab_add_lock = getattr(self, '_tab_add_lock', False)
-        if self._tab_add_lock:
+        locked = getattr(self, '_tab_add_lock', False)
+        if locked:
             return
         collab = self._engine.collab_manager
         if collab and collab.connected:
             info = self._scene_tab_manager.get_tab_info(name)
             if info and info.scene:
-                data = info.scene.serialize()
-                collab.send_scene_open(info.name, info.path or "", data)
+                try:
+                    data = info.scene.serialize()
+                    collab.send_scene_open(info.name, info.path or "", data)
+                    if collab.is_host:
+                        collab.update_server_scene(info.scene)
+                    print(f"[COLLAB] Sent SCENE_OPEN for tab '{info.name}' to peers (host={collab.is_host})", flush=True)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+        else:
+            print(f"[COLLAB] _on_scene_tab_added '{name}' skipped: collab={collab is not None}, connected={collab.connected if collab else False}", flush=True)
 
     def _on_remote_tab_switch(self, peer_id: str, tab_name: str):
-        if self._scene_tab_manager.get_tab_info(tab_name):
-            self._scene_tab_manager.switch_to_tab(tab_name)
         self._update_tab_peer_indicators()
 
     def _update_tab_peer_indicators(self):
@@ -128,11 +158,10 @@ class EditorMainWindow(QMainWindow):
 
     def _on_scene_tab_switched(self, name: str):
         collab = self._engine.collab_manager
-        if collab and collab.connected:
-            collab.send_scene_tab_switch(name)
-            if self._engine.scene:
-                collab.update_server_scene(self._engine.scene)
-        self._update_tab_peer_indicators()
+        if collab:
+            collab.set_current_tab(name)
+            if collab.connected:
+                collab.send_scene_tab_switch(name)
 
     def _setup_engine_events(self):
         from editor.main_window.handlers import on_play_start, on_play_stop

@@ -1,15 +1,9 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
-# Copyright (c) 2026 Zarrakun
-
 from __future__ import annotations
 
 from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QPushButton, QLabel, QDoubleSpinBox,
-                             QWidget, QSizePolicy, QHBoxLayout, QFrame,
-                             QToolButton, QTabBar)
+                             QWidget, QSizePolicy, QHBoxLayout, QVBoxLayout,
+                             QFrame, QToolButton, QTabBar)
 from PyQt6.QtCore import Qt, QSize
 import qtawesome as qta
 from PyQt6.QtGui import QAction, QIcon
@@ -45,10 +39,17 @@ def setup_toolbar(mw):
     mw._main_toolbar.setIconSize(QSize(*s))
     mw.addToolBar(Qt.ToolBarArea.TopToolBarArea, mw._main_toolbar)
 
-    # Container widget with QHBoxLayout for proper stretch centering
+    # Main container with vertical layout: row1 = toolbar, row2 = tabs
     container = QWidget()
     container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    lay = QHBoxLayout(container)
+    main_lay = QVBoxLayout(container)
+    main_lay.setContentsMargins(0, 0, 0, 0)
+    main_lay.setSpacing(0)
+
+    # Row 1: toolbar content
+    top_widget = QWidget()
+    top_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    lay = QHBoxLayout(top_widget)
     lay.setContentsMargins(4, 2, 4, 2)
     lay.setSpacing(4)
 
@@ -70,19 +71,6 @@ def setup_toolbar(mw):
     mw._scene_toolbar = SceneToolbar(mw)
     mw._scene_toolbar.setObjectName("SceneToolbar")
     lay.addWidget(mw._scene_toolbar)
-
-    # ── Scene Tabs ──
-    mw._scene_tab_bar = QTabBar()
-    mw._scene_tab_bar.setObjectName("SceneTabBar")
-    mw._scene_tab_bar.setDrawBase(False)
-    mw._scene_tab_bar.setExpanding(False)
-    mw._scene_tab_bar.setTabsClosable(True)
-    mw._scene_tab_bar.setMovable(True)
-    mw._scene_tab_bar.setStyleSheet(
-        "QTabBar::tab { max-width: 180px; min-height: 22px; padding: 2px 8px; }"
-        "QTabBar::close-button { margin-left: 4px; }"
-    )
-    lay.addWidget(mw._scene_tab_bar, 1)
 
     sep_left = QFrame()
     sep_left.setFrameShape(QFrame.Shape.VLine)
@@ -133,6 +121,18 @@ def setup_toolbar(mw):
     lay.addWidget(mw._render_toolbar)
 
     add_plugin_toolbar_actions(mw, lay)
+
+    main_lay.addWidget(top_widget)
+
+    # Row 2: Scene tab bar
+    mw._scene_tab_bar = QTabBar()
+    mw._scene_tab_bar.setObjectName("SceneTabBar")
+    mw._scene_tab_bar.setDrawBase(False)
+    mw._scene_tab_bar.setExpanding(False)
+    mw._scene_tab_bar.setTabsClosable(True)
+    mw._scene_tab_bar.setMovable(True)
+
+    main_lay.addWidget(mw._scene_tab_bar)
 
     mw._main_toolbar.addWidget(container)
 
