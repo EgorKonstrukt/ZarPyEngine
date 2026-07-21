@@ -9,7 +9,7 @@ from __future__ import annotations
 from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import (QToolBar, QPushButton, QLabel, QDoubleSpinBox,
                              QWidget, QSizePolicy, QHBoxLayout, QFrame,
-                             QToolButton)
+                             QToolButton, QTabBar)
 from PyQt6.QtCore import Qt, QSize
 import qtawesome as qta
 from PyQt6.QtGui import QAction, QIcon
@@ -70,6 +70,19 @@ def setup_toolbar(mw):
     mw._scene_toolbar = SceneToolbar(mw)
     mw._scene_toolbar.setObjectName("SceneToolbar")
     lay.addWidget(mw._scene_toolbar)
+
+    # ── Scene Tabs ──
+    mw._scene_tab_bar = QTabBar()
+    mw._scene_tab_bar.setObjectName("SceneTabBar")
+    mw._scene_tab_bar.setDrawBase(False)
+    mw._scene_tab_bar.setExpanding(False)
+    mw._scene_tab_bar.setTabsClosable(True)
+    mw._scene_tab_bar.setMovable(True)
+    mw._scene_tab_bar.setStyleSheet(
+        "QTabBar::tab { max-width: 180px; min-height: 22px; padding: 2px 8px; }"
+        "QTabBar::close-button { margin-left: 4px; }"
+    )
+    lay.addWidget(mw._scene_tab_bar, 1)
 
     sep_left = QFrame()
     sep_left.setFrameShape(QFrame.Shape.VLine)

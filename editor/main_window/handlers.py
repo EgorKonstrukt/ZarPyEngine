@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import qtawesome as qta
@@ -628,18 +629,10 @@ def toggle_pause(mw):
 
 
 def new_scene(mw):
-    if not _confirm_discard_dirty(mw):
-        return
-    mw._engine.new_scene("NewScene")
-    if hasattr(mw, '_viewport') and mw._viewport and hasattr(mw._viewport, 'renderer') and mw._viewport.renderer:
-        mw._viewport.renderer.release_all_caches()
-    mw._hierarchy.refresh()
-    on_entity_selected(mw, None)
+    mw._scene_tab_manager.add_tab("NewScene")
 
 
 def open_scene(mw):
-    if not _confirm_discard_dirty(mw):
-        return
     path, _ = QFileDialog.getOpenFileName(mw, "Open Scene", "scenes/", "Scenes (*.zpes)")
     if path:
         _do_open_scene(mw, path)
@@ -658,16 +651,23 @@ def _confirm_discard_dirty(mw) -> bool:
 
 def _do_open_scene(mw, path):
     try:
-        scene = mw._engine.load_scene(path)
-        if scene is None:
-            Logger.error(f"Failed to load scene: {path}")
-            return
-        if hasattr(mw, '_viewport') and mw._viewport and hasattr(mw._viewport, 'renderer') and mw._viewport.renderer:
-            mw._viewport.renderer.release_all_caches()
-        mw._hierarchy.refresh()
-        on_entity_selected(mw, None)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tab_name = os.path.splitext(os.path.basename(path))[0]
+        mw._engine.resolve_scene_paths(data)
+        mw._scene_tab_manager.add_tab(tab_name, path, data)
     except Exception as e:
         Logger.error(f"Error opening scene: {e}", e)
+
+
+def _sync_tab_after_save(mw):
+    if hasattr(mw, '_scene_tab_manager') and mw._scene_tab_manager:
+        active = mw._scene_tab_manager.active_tab
+        if active:
+            info = mw._scene_tab_manager.get_tab_info(active)
+            if info:
+                info.dirty = mw._engine.scene.dirty if mw._engine.scene else False
+                info.path = mw._engine.scene.path if mw._engine.scene else info.path
 
 
 def save_scene(mw):
@@ -677,6 +677,7 @@ def save_scene(mw):
         save_scene_as(mw)
     else:
         mw._engine.save_scene()
+        _sync_tab_after_save(mw)
 
 
 def save_scene_as(mw):
@@ -687,6 +688,13 @@ def save_scene_as(mw):
         if not path.endswith(".zpes"):
             path += ".zpes"
         mw._engine.save_scene(path)
+        if hasattr(mw, '_scene_tab_manager') and mw._scene_tab_manager:
+            active = mw._scene_tab_manager.active_tab
+            if active:
+                info = mw._scene_tab_manager.get_tab_info(active)
+                if info:
+                    info.path = path
+                    info.dirty = False
 
 
 def sync_after_undo(mw):
@@ -784,8 +792,6 @@ def on_import_model(mw, path: str):
 
 def open_scene_by_path(mw, path: str):
     if not os.path.exists(path):
-        return
-    if not _confirm_discard_dirty(mw):
         return
     _do_open_scene(mw, path)
 

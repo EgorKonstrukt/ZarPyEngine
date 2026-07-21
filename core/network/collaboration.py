@@ -192,6 +192,9 @@ class CollaborationManager:
         self._asset_write_lock = 0
         self._suppressed_paths: set[str] = set()
         self._custom_handlers: dict[int, Callable] = {}
+        self._on_remote_scene_open: Optional[Callable] = None
+        self._on_remote_tab_switch: Optional[Callable] = None
+        self._on_remote_tab_close: Optional[Callable] = None
 
     def _make_stop_event(self) -> threading.Event:
         ev = threading.Event()
@@ -241,6 +244,27 @@ class CollaborationManager:
 
     def set_peer_left_callback(self, cb: Callable):
         self._peer_left_callback = cb
+
+    def set_on_remote_scene_open(self, cb: Callable):
+        self._on_remote_scene_open = cb
+
+    def set_on_remote_tab_switch(self, cb: Callable):
+        self._on_remote_tab_switch = cb
+
+    def set_on_remote_tab_close(self, cb: Callable):
+        self._on_remote_tab_close = cb
+
+    def send_scene_open(self, name: str, path: str, data: dict):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCENE_OPEN, {"name": name, "path": path, "data": data})
+
+    def send_scene_tab_switch(self, name: str):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCENE_TAB_SWITCH, {"name": name})
+
+    def send_scene_tab_close(self, name: str):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCENE_TAB_CLOSE, {"name": name})
 
     def get_peer(self, peer_id: str) -> Optional[RemotePeer]:
         return self._peers.get(peer_id)
@@ -442,6 +466,18 @@ class CollaborationManager:
             pid = data.get("id", "")
             if pid != self._client.peer_id and self._as_host:
                 self._handle_asset_request(data)
+        elif msg_type == MessageType.SCENE_OPEN:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_scene_open:
+                self._on_remote_scene_open(data)
+        elif msg_type == MessageType.SCENE_TAB_SWITCH:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_tab_switch:
+                self._on_remote_tab_switch(data.get("name", ""))
+        elif msg_type == MessageType.SCENE_TAB_CLOSE:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_tab_close:
+                self._on_remote_tab_close(data.get("name", ""))
         else:
             handler = self._custom_handlers.get(msg_type)
             if handler is not None:

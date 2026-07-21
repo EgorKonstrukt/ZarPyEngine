@@ -32,6 +32,8 @@ from editor.main_window.handlers import (
     show_build_dialog, show_about,
     on_scene_loaded,
 )
+from editor.main_window.scene_tabs import SceneTabManager
+from core.network.protocol import MessageType
 
 
 class EditorMainWindow(QMainWindow):
@@ -63,6 +65,8 @@ class EditorMainWindow(QMainWindow):
         setup_docks(self)
         setup_menu(self)
         setup_toolbar(self)
+        self._scene_tab_manager = SceneTabManager(self._engine, self._scene_tab_bar, self)
+        self._init_collab_scene_tabs()
         setup_statusbar(self)
         connect_signals(self)
         restore_camera(self)
@@ -71,6 +75,43 @@ class EditorMainWindow(QMainWindow):
         engine.on("scene_loaded", lambda s: on_scene_loaded(self, s))
         self._setup_engine_events()
         QTimer.singleShot(0, lambda: post_init(self))
+
+    def _init_collab_scene_tabs(self):
+        collab = self._engine.collab_manager
+        if collab:
+            mgr = self._scene_tab_manager
+            collab.set_on_remote_scene_open(lambda data: QTimer.singleShot(0, lambda: self._on_remote_scene_open(data)))
+            collab.set_on_remote_tab_switch(lambda name: QTimer.singleShot(0, lambda: mgr.switch_to_tab(name)))
+            collab.set_on_remote_tab_close(lambda name: QTimer.singleShot(0, lambda: mgr.remove_tab(name)))
+            mgr.tab_switched.connect(lambda name: self._on_scene_tab_switched(name))
+            mgr.tab_added.connect(lambda name: self._on_scene_tab_added(name))
+
+    def _on_remote_scene_open(self, data: dict):
+        name = data.get("name", "RemoteScene")
+        path = data.get("path", "")
+        scene_data = data.get("data")
+        if scene_data is None:
+            return
+        self._tab_add_lock = True
+        self._scene_tab_manager.add_tab(name, path, scene_data)
+        self._tab_add_lock = False
+
+    def _on_scene_tab_added(self, name: str):
+        self._tab_add_lock = getattr(self, '_tab_add_lock', False)
+        if self._tab_add_lock:
+            return
+        collab = self._engine.collab_manager
+        if collab and collab.connected:
+            info = self._scene_tab_manager.get_tab_info(name)
+            if info and info.data:
+                collab.send_scene_open(info.name, info.path or "", info.data)
+
+    def _on_scene_tab_switched(self, name: str):
+        collab = self._engine.collab_manager
+        if collab and collab.connected:
+            collab.send_scene_tab_switch(name)
+            if self._engine.scene:
+                collab.update_server_scene(self._engine.scene)
 
     def _setup_engine_events(self):
         from editor.main_window.handlers import on_play_start, on_play_stop

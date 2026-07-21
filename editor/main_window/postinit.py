@@ -15,6 +15,14 @@ from editor.project_manager import _get_recent_projects
 from editor.splash import SplashScreen
 
 
+def _register_scene_tab(mw):
+    if mw._engine.scene:
+        data = mw._engine.scene.serialize()
+        path = mw._engine.scene.path or ""
+        name = os.path.splitext(os.path.basename(path))[0] if path else (mw._engine.scene.name or "Untitled")
+        mw._scene_tab_manager.add_tab(name, path=path, data=data)
+
+
 def post_init(mw):
     try:
         from PyQt6.QtWidgets import QApplication
@@ -34,6 +42,7 @@ def post_init(mw):
                 switch_project(mw, project_path)
                 QTimer.singleShot(0, lambda: initial_dock_sizes(mw))
                 QTimer.singleShot(100, lambda: load_renderer_config(mw))
+                QTimer.singleShot(200, lambda: _register_scene_tab(mw))
                 return
         SplashScreen.show_message("Creating sample scene...")
         scene = mw._engine.new_scene("SampleScene")
@@ -63,6 +72,8 @@ def post_init(mw):
         cam.add_component(Camera())
         sky_ent = scene.create_entity("Sky")
         sky_ent.add_component(Sky())
+        data = scene.serialize()
+        mw._scene_tab_manager.add_tab("SampleScene", data=data)
         mw._hierarchy.refresh()
         QTimer.singleShot(0, lambda: initial_dock_sizes(mw))
         from core.config.config import get_global_config

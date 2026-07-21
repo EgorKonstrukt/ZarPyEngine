@@ -58,6 +58,9 @@ class MessageType(IntEnum):
     GRAPH_CURSOR = 44
     GRAPH_SYNC_REQ = 45
     GRAPH_SYNC = 46
+    SCENE_OPEN = 47
+    SCENE_TAB_SWITCH = 48
+    SCENE_TAB_CLOSE = 49
 
 
 def make_msg(msg_type: int, data: dict) -> bytes:
