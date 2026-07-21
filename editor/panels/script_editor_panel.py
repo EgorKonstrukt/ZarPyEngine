@@ -1,22 +1,26 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+
 import os
-import keyword
+import re
+import subprocess
+import sys
 from typing import TYPE_CHECKING, Optional
+
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout,
-                              QToolBar, QToolButton, QLabel, QFileDialog,
-                              QPlainTextEdit, QMessageBox, QTabWidget,
-                              QSizePolicy, QComboBox, QFrame, QMenuBar,
-                              QStatusBar, QCompleter, QMenu, QApplication)
-from PyQt6.QtCore import Qt, QRegularExpression, pyqtSignal, QSize, QStringListModel, QTimer
+                             QToolBar, QLabel, QFileDialog,
+                             QPlainTextEdit, QMessageBox, QTabWidget,
+                             QSizePolicy, QComboBox, QMenuBar,
+                             QStatusBar, QCompleter, QTextEdit)
+from PyQt6.QtCore import Qt, pyqtSignal, QSize, QStringListModel, QTimer
 from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QKeyEvent, QWheelEvent,
                          QSyntaxHighlighter, QTextCharFormat, QTextCursor,
-                          QAction, QIcon, QTextDocument, QKeySequence, QPainter, QPixmap)
+                         QAction, QIcon, QKeySequence, QPainter, QPixmap)
+
 if TYPE_CHECKING:
     from core.engine.engine import Engine
 
@@ -24,22 +28,19 @@ try:
     import qtawesome as qta
 except ImportError:
     qta = None
+
 from core.config.editor_scale import scale, scale_xy
 
-
-_PY_KEYWORDS = list(keyword.kwlist)
-_PY_BUILTINS = [
-    "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes", "callable",
-    "chr", "classmethod", "compile", "complex", "dict", "dir", "divmod", "enumerate",
-    "eval", "filter", "float", "format", "frozenset", "getattr", "globals", "hasattr",
-    "hash", "help", "hex", "id", "input", "int", "isinstance", "issubclass", "iter",
-    "len", "list", "locals", "map", "max", "memoryview", "min", "next", "object",
-    "oct", "open", "ord", "pow", "print", "property", "range", "repr", "reversed",
-    "round", "set", "setattr", "slice", "sorted", "staticmethod", "str", "sum", "super",
-    "tuple", "type", "vars", "zip", "True", "False", "None", "self", "Exception",
-    "ValueError", "TypeError", "KeyError", "IndexError", "RuntimeError", "AttributeError",
-    "StopIteration", "FileNotFoundError",
-]
+try:
+    from core.config.syntax_config import (KEYWORDS, BUILTINS, CONSTANTS, EXCEPTIONS,
+                                           SYNTAX_COLORS, SYNTAX_STYLES)
+except ImportError:
+    try:
+        from .syntax_config import (KEYWORDS, BUILTINS, CONSTANTS, EXCEPTIONS,
+                                    SYNTAX_COLORS, SYNTAX_STYLES)
+    except ImportError:
+        from syntax_config import (KEYWORDS, BUILTINS, CONSTANTS, EXCEPTIONS,
+                                   SYNTAX_COLORS, SYNTAX_STYLES)
 
 
 _QTA_COLORS = {
@@ -53,6 +54,7 @@ _QTA_COLORS = {
     "undo": "#d4d4d4",
     "redo": "#d4d4d4",
     "word_wrap": "#d4d4d4",
+    "indent": "#d4d4d4",
     "zoom_in": "#d4d4d4",
     "zoom_out": "#d4d4d4",
     "run": "#9ccc65",
@@ -84,49 +86,148 @@ def _qta_icon(name: str) -> QIcon:
 class _PythonHighlighter(QSyntaxHighlighter):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._rules = []
-
-        kw_fmt = QTextCharFormat()
-        kw_fmt.setForeground(QColor("#569cd6"))
-        kw_fmt.setFontWeight(QFont.Weight.Bold)
-        keywords = (r'\b(def|class|return|if|elif|else|for|while|import|from|'
-                    r'try|except|finally|with|as|yield|lambda|pass|break|'
-                    r'continue|and|or|not|in|is|True|False|None|self|print|'
-                    r'raise|del|global|nonlocal|assert|async|await)\b')
-        self._rules.append((QRegularExpression(keywords), kw_fmt))
-
-        builtins_fmt = QTextCharFormat()
-        builtins_fmt.setForeground(QColor("#4ec9b0"))
-        builtins = r'\b(int|float|str|bool|list|dict|tuple|set|type|len|range|enumerate|zip|map|filter|super|property|staticmethod|classmethod|isinstance|issubclass|hasattr|getattr|setattr|open|abs|min|max|sum|sorted|reversed|any|all|iter|next|object|Exception|ValueError|TypeError|KeyError|IndexError)\b'
-        self._rules.append((QRegularExpression(builtins), builtins_fmt))
-
-        string_fmt = QTextCharFormat()
-        string_fmt.setForeground(QColor("#ce9178"))
-        self._rules.append((QRegularExpression(r'""".*?"""|\'\'\'.*?\'\'\'|".*?"|\'.*?\''), string_fmt))
-
-        number_fmt = QTextCharFormat()
-        number_fmt.setForeground(QColor("#b5cea8"))
-        self._rules.append((QRegularExpression(r'\b\d+\.?\d*\b'), number_fmt))
-
-        comment_fmt = QTextCharFormat()
-        comment_fmt.setForeground(QColor("#6a9955"))
-        comment_fmt.setFontItalic(True)
-        self._rules.append((QRegularExpression(r'#[^\n]*'), comment_fmt))
-
-        decorator_fmt = QTextCharFormat()
-        decorator_fmt.setForeground(QColor("#dcdcaa"))
-        self._rules.append((QRegularExpression(r'@\w+'), decorator_fmt))
-
-        func_fmt = QTextCharFormat()
-        func_fmt.setForeground(QColor("#dcdcaa"))
-        self._rules.append((QRegularExpression(r'\b\w+(?=\()'), func_fmt))
+        self._formats = {}
+        for token, color in SYNTAX_COLORS.items():
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            style = SYNTAX_STYLES.get(token, {})
+            if style.get("bold"):
+                fmt.setFontWeight(QFont.Weight.Bold)
+            if style.get("italic"):
+                fmt.setFontItalic(True)
+            self._formats[token] = fmt
+        self._keywords = set(KEYWORDS)
+        self._builtins = set(BUILTINS)
+        self._constants = set(CONSTANTS)
+        self._exceptions = set(EXCEPTIONS)
 
     def highlightBlock(self, text):
-        for pattern, fmt in self._rules:
-            match_it = pattern.globalMatch(text)
-            while match_it.hasNext():
-                match = match_it.next()
-                self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
+        self.setCurrentBlockState(0)
+        start = 0
+        prev = self.previousBlockState()
+        if prev == 1 or prev == 2:
+            delimiter = '"""' if prev == 1 else "'''"
+            end = text.find(delimiter)
+            if end == -1:
+                self.setFormat(0, len(text), self._formats["string"])
+                self.setCurrentBlockState(prev)
+                return
+            end += 3
+            self.setFormat(0, end, self._formats["string"])
+            start = end
+        self._scan(text, start)
+
+    def _scan(self, text, start):
+        i = start
+        n = len(text)
+        expect_definition = False
+
+        while i < n:
+            c = text[i]
+
+            if c.isspace():
+                i += 1
+                continue
+
+            if c == "#":
+                self.setFormat(i, n - i, self._formats["comment"])
+                return
+
+            if text.startswith('"""', i) or text.startswith("'''", i):
+                delimiter = text[i:i + 3]
+                state = 1 if delimiter == '"""' else 2
+                end = text.find(delimiter, i + 3)
+                if end == -1:
+                    self.setFormat(i, n - i, self._formats["string"])
+                    self.setCurrentBlockState(state)
+                    return
+                self.setFormat(i, end + 3 - i, self._formats["string"])
+                i = end + 3
+                expect_definition = False
+                continue
+
+            if c == '"' or c == "'":
+                quote = c
+                j = i + 1
+                while j < n:
+                    if text[j] == "\\":
+                        j += 2
+                        continue
+                    if text[j] == quote:
+                        j += 1
+                        break
+                    j += 1
+                self.setFormat(i, j - i, self._formats["string"])
+                i = j
+                expect_definition = False
+                continue
+
+            if c == "@":
+                j = i + 1
+                while j < n and (text[j].isalnum() or text[j] in "._"):
+                    j += 1
+                if j > i + 1:
+                    self.setFormat(i, j - i, self._formats["decorator"])
+                    i = j
+                    expect_definition = False
+                    continue
+                i += 1
+                expect_definition = False
+                continue
+
+            if c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
+                j = i
+                if c == "0" and i + 1 < n and text[i + 1] in "xXoObB":
+                    j = i + 2
+                    while j < n and (text[j].isalnum() or text[j] == "_"):
+                        j += 1
+                else:
+                    while j < n and (text[j].isdigit() or text[j] in "._"):
+                        j += 1
+                    if j < n and text[j] in "eE":
+                        j += 1
+                        if j < n and text[j] in "+-":
+                            j += 1
+                        while j < n and text[j].isdigit():
+                            j += 1
+                self.setFormat(i, j - i, self._formats["number"])
+                i = j
+                expect_definition = False
+                continue
+
+            if c.isalpha() or c == "_":
+                j = i
+                while j < n and (text[j].isalnum() or text[j] == "_"):
+                    j += 1
+                word = text[i:j]
+                k = j
+                while k < n and text[k].isspace():
+                    k += 1
+
+                token = None
+                if expect_definition:
+                    token = "function"
+                    expect_definition = False
+                elif word in self._keywords:
+                    token = "keyword"
+                    if word in ("def", "class"):
+                        expect_definition = True
+                elif word in self._constants:
+                    token = "constant"
+                elif word in self._exceptions:
+                    token = "exception"
+                elif word in self._builtins:
+                    token = "builtin"
+                elif k < n and text[k] == "(":
+                    token = "function"
+
+                if token is not None:
+                    self.setFormat(i, j - i, self._formats[token])
+                i = j
+                continue
+
+            i += 1
+            expect_definition = False
 
 
 class _LineNumberArea(QWidget):
@@ -142,13 +243,10 @@ class _LineNumberArea(QWidget):
 
 
 class _Minimap(QWidget):
-    clicked = pyqtSignal(int)
-
     def __init__(self, editor: "_CodeEditor"):
         super().__init__(editor)
         self._editor = editor
-        self.setMinimumWidth(scale(90))
-        self.setMaximumWidth(scale(140))
+        self.setFixedWidth(scale(110))
 
     def sizeHint(self):
         return QSize(scale(110), 0)
@@ -157,8 +255,13 @@ class _Minimap(QWidget):
         self._editor.minimap_paint(event, self)
 
     def mousePressEvent(self, event):
-        ratio = event.position().y() / self.height()
-        self.clicked.emit(int(ratio * self._editor.document().blockCount()))
+        self._editor.minimap_pressed(int(event.position().y()))
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._editor.minimap_dragged(int(event.position().y()))
+            event.accept()
 
 
 class _CodeEditor(QPlainTextEdit):
@@ -173,9 +276,15 @@ class _CodeEditor(QPlainTextEdit):
         self._font_size = self.DEFAULT_FONT
         self._wrap = False
         self._show_indent_guides = True
+
+        self._line_number = _LineNumberArea(self)
+        self._minimap = _Minimap(self)
+        self._minimap_cache = None
+        self._minimap_cache_key = (-1, -1, -1, -1)
+
         self._apply_font()
-        self.setTabStopDistance(QFontMetrics(QFont("Consolas", 10)).horizontalAdvance(' ') * 4)
         self.setUndoRedoEnabled(True)
+        self.setCursorWidth(scale(2))
 
         self._completer = QCompleter([], self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -184,97 +293,199 @@ class _CodeEditor(QPlainTextEdit):
         self._completer.setModelSorting(QCompleter.ModelSorting.CaseInsensitivelySortedModel)
         self._completer.activated.connect(self._insert_completion)
 
-        self._line_number = _LineNumberArea(self)
-        self._minimap = _Minimap(self)
-        self._minimap.clicked.connect(self._goto_line)
-
-        self._minimap_cache = None
-        self._minimap_cache_key = (-1, -1, -1)
-
         self.blockCountChanged.connect(self._update_line_number)
         self.updateRequest.connect(self._on_update_request)
         self.cursorPositionChanged.connect(self._emit_cursor)
+        self.cursorPositionChanged.connect(self._update_current_line_highlight)
         self.textChanged.connect(self._invalidate_minimap)
 
         self._update_line_number()
         self._update_minimap()
+        self._update_current_line_highlight()
 
     def set_indent_guides(self, on: bool):
         self._show_indent_guides = on
         self.viewport().update()
 
-    def _indent_info(self):
-        fm = QFontMetrics(self.font())
-        space_w = fm.horizontalAdvance(' ')
-        tab_w = self.tabStopDistance()
-        left = self.viewportMargins().left()
-        return space_w, tab_w, left
-
     def _indent_levels(self, block) -> int:
         text = block.text()
-        level = 0
+        column = 0
         for ch in text:
-            if ch == ' ':
-                level += 1
-            elif ch == '\t':
-                level += 4
+            if ch == " ":
+                column += 1
+            elif ch == "\t":
+                column += 4
             else:
                 break
-        return level // 4
+        return column // 4
+
+    def _indent_guide_records(self):
+        viewport_h = self.viewport().height()
+        first = self.firstVisibleBlock()
+        if not first.isValid():
+            return [], 0
+
+        visible = []
+        block = first
+        while block.isValid():
+            geom = self.blockBoundingGeometry(block).translated(self.contentOffset())
+            top = int(geom.top())
+            if top > viewport_h:
+                break
+            bottom = top + int(self.blockBoundingRect(block).height())
+            visible.append([block, top, bottom])
+            block = block.next()
+
+        if not visible:
+            return [], 0
+
+        cursor_level = self._indent_levels(self.textCursor().block())
+
+        limit = 200
+
+        prev_level = None
+        p = first.previous()
+        steps = 0
+        while p.isValid() and steps < limit:
+            if p.text().strip():
+                prev_level = self._indent_levels(p)
+                break
+            p = p.previous()
+            steps += 1
+
+        trailing_next = None
+        t = visible[-1][0].next()
+        steps = 0
+        while t.isValid() and steps < limit:
+            if t.text().strip():
+                trailing_next = self._indent_levels(t)
+                break
+            t = t.next()
+            steps += 1
+
+        n = len(visible)
+        raw = [self._indent_levels(v[0]) for v in visible]
+        empty = [not v[0].text().strip() for v in visible]
+
+        prev = [None] * n
+        cur = prev_level
+        for i in range(n):
+            prev[i] = cur
+            if not empty[i]:
+                cur = raw[i]
+
+        nxt = [None] * n
+        cur = trailing_next
+        for i in range(n - 1, -1, -1):
+            nxt[i] = cur
+            if not empty[i]:
+                cur = raw[i]
+
+        for i in range(n):
+            if empty[i]:
+                cand = [c for c in (prev[i], nxt[i]) if c is not None]
+                visible[i].append(min(cand) if cand else 0)
+            else:
+                visible[i].append(raw[i])
+
+        return visible, cursor_level
 
     def paintEvent(self, event):
-        if getattr(self, "_show_indent_guides", True):
-            space_w, tab_w, left = self._indent_info()
-            if space_w > 0 and tab_w > 0:
-                block = self.firstVisibleBlock()
-                max_level = 0
-                b = block
-                while b.isValid() and b.blockNumber() < self.document().blockCount():
-                    top = int(self.blockBoundingGeometry(b).translated(self.contentOffset()).top())
-                    if top > self.viewport().height():
-                        break
-                    max_level = max(max_level, self._indent_levels(b))
-                    b = b.next()
-                painter = QPainter(self.viewport())
-                cur_level = self._indent_levels(self.textCursor().block())
-                guide_color = QColor("#2b2b2b")
-                active_color = QColor("#3f5a7a")
-                for level in range(1, max_level + 1):
-                    x = int(left + level * tab_w) - int(space_w * 0.5)
-                    painter.setPen(active_color if level <= cur_level else guide_color)
-                    painter.drawLine(x, 0, x, self.viewport().height())
-                painter.end()
         super().paintEvent(event)
 
+        if not self._show_indent_guides:
+            return
+
+        tab_w = self.tabStopDistance()
+        if tab_w <= 0:
+            return
+
+        fm = QFontMetrics(self.font())
+        space_w = fm.horizontalAdvance(" ")
+        if space_w <= 0:
+            return
+
+        records, cursor_level = self._indent_guide_records()
+        if not records:
+            return
+
+        offset_x = self.contentOffset().x()
+        width = self.viewport().width()
+        rect_top = event.rect().top()
+        rect_bottom = event.rect().bottom()
+        guide_offset = 2 * space_w
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        guide_color = QColor("#2f2f2f")
+        active_color = QColor("#6b8cb3")
+
+        for block, top, bottom, level in records:
+            if level <= 0:
+                continue
+
+            seg_top = max(top, rect_top)
+            seg_bottom = min(bottom, rect_bottom)
+            if seg_top > seg_bottom:
+                continue
+
+            for L in range(1, level + 1):
+                x = int(offset_x + L * tab_w - guide_offset)
+                if x < 0 or x > width:
+                    continue
+                painter.setPen(active_color if L <= cursor_level else guide_color)
+                painter.drawLine(x, seg_top, x, seg_bottom)
+
+        painter.end()
+
     def _apply_font(self):
-        self.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background: #1e1e1e;
-                color: #d4d4d4;
-                font-family: Consolas, monospace;
-                font-size: {self._font_size}px;
-                border: none;
-                selection-background-color: #264f78;
-            }}
-        """)
+        font = QFont("Consolas", self._font_size)
+        self.setFont(font)
+        self.setTabStopDistance(QFontMetrics(font).horizontalAdvance(" ") * 4)
+        self.setStyleSheet(
+            "QPlainTextEdit { "
+            f"background: #1e1e1e; color: #d4d4d4; font-family: Consolas, monospace; "
+            f"font-size: {self._font_size}px; border: none; "
+            "selection-background-color: #264f78; "
+            "}"
+        )
         self.setLineWrapMode(
             QPlainTextEdit.LineWrapMode.WidgetWidth if self._wrap
-            else QPlainTextEdit.LineWrapMode.NoWrap)
+            else QPlainTextEdit.LineWrapMode.NoWrap
+        )
+        self._minimap_cache = None
         QTimer.singleShot(0, self._update_minimap)
+
+    def _update_current_line_highlight(self):
+        selections = []
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setBackground(QColor("#282828"))
+        selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+        selection.cursor = self.textCursor()
+        selection.cursor.clearSelection()
+        selections.append(selection)
+        self.setExtraSelections(selections)
 
     def line_number_width(self) -> int:
         digits = max(2, len(str(max(1, self.blockCount()))))
-        fm = QFontMetrics(QFont("Consolas", self._font_size))
-        return 6 + int(fm.horizontalAdvance('9') * digits) + 6
+        fm = QFontMetrics(self.font())
+        return 6 + int(fm.horizontalAdvance("9") * digits) + 6
 
     def _update_extra(self):
         lw = self.line_number_width()
         mw = self._minimap.width()
+        if mw <= 0:
+            mw = self._minimap.sizeHint().width()
+
         self._line_number.setFixedWidth(lw)
+        self._minimap.setFixedWidth(mw)
         self.setViewportMargins(lw, 0, mw, 0)
+
         cr = self.contentsRect()
         self._line_number.setGeometry(cr.x(), cr.y(), lw, cr.height())
         self._minimap.setGeometry(cr.x() + cr.width() - mw, cr.y(), mw, cr.height())
+
         self._line_number.update()
         self._minimap.update()
 
@@ -286,6 +497,7 @@ class _CodeEditor(QPlainTextEdit):
 
     def _invalidate_minimap(self):
         self._minimap_cache = None
+        self._minimap.update()
 
     def _on_update_request(self, rect, dy):
         if dy:
@@ -300,113 +512,199 @@ class _CodeEditor(QPlainTextEdit):
         self._update_line_number()
         self._update_minimap()
 
-    def _line_number_geometry(self):
-        cr = self.contentsRect()
-        return cr.x(), cr.y(), self._line_number.width(), cr.height()
-
-    def _minimap_geometry(self):
-        cr = self.contentsRect()
-        return cr.x() + cr.width() - self._minimap.width(), cr.y(), self._minimap.width(), cr.height()
-
-    def _minimap_line_step(self) -> int:
-        return max(1, int(self._font_size * 0.5))
+    def _minimap_line_nominal(self) -> int:
+        return max(3, int(self._font_size * 0.45))
 
     def _rebuild_minimap(self):
-        mw = self._minimap.width()
+        mw = max(1, self._minimap.width())
         mh = max(1, self._minimap.height())
-        mm_step = self._minimap_line_step()
-        blocks = self.document().blockCount()
-        scale_y = min(1.0, mh / max(1, blocks * mm_step))
+        blocks = max(1, self.document().blockCount())
         key = (mw, mh, blocks, self._font_size)
+
         if self._minimap_cache is not None and self._minimap_cache_key == key:
-            return self._minimap_cache, scale_y, mm_step
+            return self._minimap_cache
+
         pm = QPixmap(mw, mh)
         pm.fill(QColor("#161616"))
+
         painter = QPainter(pm)
-        mm_font = QFont("Consolas", max(4, int(self._font_size * 0.42)))
-        painter.setFont(mm_font)
-        fm = painter.fontMetrics()
-        ascent = fm.ascent()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
         pad = scale(3)
-        block = self.document().firstBlock()
-        idx = 0
-        while block.isValid():
-            y = int(idx * mm_step * scale_y)
-            if y > mh:
-                break
-            text = block.text().strip()
-            if text:
-                painter.setPen(QColor("#6b7888"))
-                painter.drawText(pad, y + ascent, text[:48])
-            block = block.next()
-            idx += 1
+        usable = max(0, mw - pad * 2)
+
+        small_size = max(4, int(self._font_size * 0.42))
+        mm_font = QFont("Consolas", small_size)
+        painter.setFont(mm_font)
+
+        fm = QFontMetrics(mm_font)
+        ascent = fm.ascent()
+        char_w = max(1, fm.horizontalAdvance("a"))
+
+        nominal = self._minimap_line_nominal()
+        text_color = QColor("#6b7888")
+        bar_color = QColor("#4f5b66")
+
+        if blocks * nominal <= mh:
+            line_h = nominal
+            draw_text = line_h >= ascent
+
+            block = self.document().firstBlock()
+            idx = 0
+            while block.isValid():
+                y = idx * line_h
+                if y >= mh:
+                    break
+
+                raw = block.text()
+                text = raw.strip()
+                if text:
+                    indent = len(raw) - len(raw.lstrip())
+                    x = pad + min(usable // 2, int(indent * char_w * 0.5))
+                    available = max(0, usable - (x - pad))
+
+                    if draw_text:
+                        available_chars = max(1, int(available / char_w))
+                        painter.setPen(text_color)
+                        painter.drawText(x, y + ascent, text[:available_chars])
+                    else:
+                        if available > 0:
+                            length = min(available, max(2, int(len(text) * char_w * 0.6)))
+                            if length > 0:
+                                painter.setPen(bar_color)
+                                painter.drawLine(x, y + line_h // 2, x + length, y + line_h // 2)
+
+                block = block.next()
+                idx += 1
+        else:
+            pixels_per_block = mh / blocks
+            draw_text = pixels_per_block >= ascent
+
+            if draw_text:
+                block = self.document().firstBlock()
+                idx = 0
+                while block.isValid():
+                    y = int(idx * pixels_per_block)
+                    if y >= mh:
+                        break
+
+                    raw = block.text()
+                    text = raw.strip()
+                    if text:
+                        indent = len(raw) - len(raw.lstrip())
+                        x = pad + min(usable // 2, int(indent * char_w * 0.5))
+                        available = max(0, usable - (x - pad))
+                        available_chars = max(1, int(available / char_w))
+                        painter.setPen(text_color)
+                        painter.drawText(x, y + ascent, text[:available_chars])
+
+                    block = block.next()
+                    idx += 1
+            else:
+                for y in range(mh):
+                    number = int(y * blocks / mh)
+                    block = self.document().findBlockByNumber(number)
+                    if not block.isValid():
+                        continue
+
+                    raw = block.text()
+                    text = raw.strip()
+                    if text:
+                        indent = len(raw) - len(raw.lstrip())
+                        x = pad + min(usable // 2, int(indent * char_w * 0.5))
+                        available = max(0, usable - (x - pad))
+                        if available > 0:
+                            length = min(available, max(2, int(len(text) * char_w * 0.6)))
+                            if length > 0:
+                                painter.setPen(bar_color)
+                                painter.drawLine(x, y, x + length, y)
+
         painter.end()
+
         self._minimap_cache = pm
         self._minimap_cache_key = key
-        return pm, scale_y, mm_step
+        return pm
 
     def line_number_paint(self, event, area):
         painter = QPainter(area)
+        painter.setFont(self.font())
         painter.fillRect(event.rect(), QColor("#181818"))
+
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
         top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
         bottom = top + int(self.blockBoundingRect(block).height())
         cur_block = self.textCursor().blockNumber()
         fm = painter.fontMetrics()
+
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 txt = str(block_number + 1)
                 if block_number == cur_block:
-                    painter.fillRect(0, top, area.width(), int(self.blockBoundingRect(block).height()), QColor("#222"))
+                    painter.fillRect(0, top, area.width(), int(self.blockBoundingRect(block).height()), QColor("#222222"))
                     painter.setPen(QColor("#c8c8c8"))
                 else:
                     painter.setPen(QColor("#5a5a5a"))
                 painter.drawText(0, top, area.width() - scale(4), fm.height(),
                                  Qt.AlignmentFlag.AlignRight, txt)
+
             block = block.next()
             top = bottom
+            if not block.isValid():
+                break
             bottom = top + int(self.blockBoundingRect(block).height())
             block_number += 1
+
         painter.end()
 
     def minimap_paint(self, event, area):
         painter = QPainter(area)
         painter.fillRect(event.rect(), QColor("#161616"))
 
-        pm, scale_y, mm_step = self._rebuild_minimap()
+        pm = self._rebuild_minimap()
         painter.drawPixmap(0, 0, pm)
 
         vsb = self.verticalScrollBar()
-        if vsb is not None and self.document().blockCount() > 0:
-            first_block = self.firstVisibleBlock()
-            first = first_block.blockNumber() if first_block.isValid() else 0
-            visible = max(1, int(self.viewport().height() / max(1, self._real_line_height())))
-            y_top = int(first * mm_step * scale_y)
-            view_h = max(scale(6), int(visible * mm_step * scale_y))
-            y_top = max(0, min(area.height() - 1, y_top))
-            view_h = max(scale(6), min(area.height() - y_top, view_h))
+        if vsb is not None:
+            total = vsb.maximum() + vsb.pageStep()
+            if total > 0:
+                y = int(vsb.value() * area.height() / total)
+                h = int(vsb.pageStep() * area.height() / total)
+            else:
+                y = 0
+                h = area.height()
+
+            y = max(0, min(area.height() - 1, y))
+            h = max(scale(8), min(area.height() - y, h))
+
             painter.setPen(QColor("#3a6ea5"))
             painter.setBrush(QColor(58, 110, 165, 60))
-            painter.drawRect(0, y_top, area.width() - 1, view_h)
+            painter.drawRect(0, y, area.width() - 1, h)
+
+            painter.setPen(QColor("#222222"))
+            painter.drawLine(0, 0, 0, area.height())
 
         painter.end()
 
-    def _real_line_height(self) -> int:
-        block = self.firstVisibleBlock()
-        if block.isValid():
-            h = int(self.blockBoundingRect(block).height())
-            if h > 0:
-                return h
-        return max(1, int(self._font_size * 1.5))
+    def minimap_pressed(self, y: int):
+        self._minimap_scroll_to(y)
 
-    def _goto_line(self, line: int):
-        block = self.document().findBlockByNumber(max(0, line - 1))
-        if block.isValid():
-            cursor = self.textCursor()
-            cursor.setPosition(block.position())
-            self.setTextCursor(cursor)
-            self.centerCursor()
+    def minimap_dragged(self, y: int):
+        self._minimap_scroll_to(y)
+
+    def _minimap_scroll_to(self, y: int):
+        vsb = self.verticalScrollBar()
+        if vsb is None:
+            return
+
+        total = vsb.maximum() + vsb.pageStep()
+        if total <= 0:
+            return
+
+        mh = max(1, self._minimap.height())
+        ratio = max(0.0, min(1.0, y / mh))
+        target = int(ratio * total - vsb.pageStep() * 0.5)
+        vsb.setValue(max(0, min(vsb.maximum(), target)))
 
     def _emit_cursor(self):
         QTimer.singleShot(0, self._report_cursor)
@@ -428,10 +726,10 @@ class _CodeEditor(QPlainTextEdit):
         self._apply_font()
 
     def refresh_completions(self):
-        words = set(_PY_KEYWORDS) | set(_PY_BUILTINS)
+        words = set(KEYWORDS) | set(BUILTINS) | set(CONSTANTS) | set(EXCEPTIONS)
         text = self.toPlainText()
-        for m in __import__("re").finditer(r"[A-Za-z_]\w*", text):
-            words.add(m.group(0))
+        for match in re.finditer(r"[A-Za-z_]\w*", text):
+            words.add(match.group(0))
         model = QStringListModel(sorted(words), self)
         self._completer.setModel(model)
 
@@ -453,34 +751,156 @@ class _CodeEditor(QPlainTextEdit):
         if not prefix or prefix[0].isdigit():
             self._completer.popup().hide()
             return
+
         self._completer.setCompletionPrefix(prefix)
         if self._completer.completionCount() == 0:
             self._completer.popup().hide()
             return
+
+        popup = self._completer.popup()
+        if popup is None:
+            return
+
+        scroll = popup.verticalScrollBar()
+        scroll_width = scroll.sizeHint().width() if scroll is not None else 0
+
         rect = self.cursorRect()
-        rect.setWidth(self._completer.popup().sizeHintForColumn(0)
-                      + self._completer.popup().verticalScrollBar().sizeHint().width())
+        rect.setWidth(popup.sizeHintForColumn(0) + scroll_width)
         self._completer.complete(rect)
 
     def keyPressEvent(self, event: QKeyEvent):
-        if self._completer.popup().isVisible():
+        popup = self._completer.popup()
+        if popup.isVisible():
             if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return,
                                Qt.Key.Key_Tab, Qt.Key.Key_Escape):
                 event.ignore()
                 return
+
         if event.key() == Qt.Key.Key_Tab:
-            cursor = self.textCursor()
-            cursor.insertText("    ")
+            if self.textCursor().hasSelection():
+                self._indent_selected_lines()
+            else:
+                self.textCursor().insertText("    ")
             return
+
+        if event.key() == Qt.Key.Key_Backtab:
+            self._unindent_selected_lines()
+            return
+
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._auto_indent(event)
+            return
+
         if event.key() == Qt.Key.Key_Space and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.refresh_completions()
             self._update_completer_popup()
             return
+
         super().keyPressEvent(event)
+
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Space, Qt.Key.Key_Backspace):
             self.refresh_completions()
+
         if event.text() and event.text().isalnum() or event.key() == Qt.Key.Key_Period:
             self._update_completer_popup()
+
+    def _auto_indent(self, event: QKeyEvent):
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.insertText("\n")
+            self.setTextCursor(cursor)
+            return
+
+        block = cursor.block()
+        text = block.text()
+        indent = len(text) - len(text.lstrip())
+        indent_text = text[:indent]
+
+        code = text.split("#", 1)[0].rstrip()
+        if code.endswith(":"):
+            indent_text += "    "
+
+        cursor.insertText("\n" + indent_text)
+        self.setTextCursor(cursor)
+
+    def _indent_selected_lines(self):
+        cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        cursor.setPosition(start)
+        start_block = cursor.block().blockNumber()
+
+        cursor.setPosition(end)
+        end_block = cursor.block().blockNumber()
+        if end_block > start_block and cursor.atBlockStart() and end != start:
+            end_block -= 1
+
+        if end_block < start_block:
+            return
+
+        cursor.beginEditBlock()
+        for number in range(start_block, end_block + 1):
+            block = self.document().findBlockByNumber(number)
+            cursor.setPosition(block.position())
+            cursor.insertText("    ")
+        cursor.endEditBlock()
+
+        cursor.setPosition(start)
+        cursor.setPosition(end + 4 * (end_block - start_block + 1), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
+
+    def _unindent_selected_lines(self):
+        cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        cursor.setPosition(start)
+        start_block = cursor.block().blockNumber()
+        start_block_pos = self.document().findBlockByNumber(start_block).position()
+
+        cursor.setPosition(end)
+        end_block = cursor.block().blockNumber()
+        if end_block > start_block and cursor.atBlockStart() and end != start:
+            end_block -= 1
+
+        if end_block < start_block:
+            return
+
+        cursor.beginEditBlock()
+        removed_first = 0
+        total_removed = 0
+
+        for number in range(start_block, end_block + 1):
+            block = self.document().findBlockByNumber(number)
+            text = block.text()
+            remove = 0
+
+            if text.startswith("    "):
+                remove = 4
+            elif text.startswith("\t"):
+                remove = 1
+            else:
+                while remove < 4 and remove < len(text) and text[remove] == " ":
+                    remove += 1
+
+            if remove:
+                cursor.setPosition(block.position())
+                cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, remove)
+                cursor.removeSelectedText()
+
+                if number == start_block:
+                    removed_first = remove
+                total_removed += remove
+
+        cursor.endEditBlock()
+
+        new_start = max(start - removed_first, start_block_pos)
+        new_end = end - total_removed
+
+        cursor.setPosition(new_start)
+        cursor.setPosition(max(new_start, new_end), QTextCursor.MoveMode.KeepAnchor)
+        self.setTextCursor(cursor)
 
     def focusInEvent(self, event):
         self._completer.setWidget(self)
@@ -495,13 +915,17 @@ class _CodeEditor(QPlainTextEdit):
 
 
 class _CloseableTabWidget(QTabWidget):
-    tabCloseRequested = pyqtSignal(int)
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTabsClosable(True)
         self.setMovable(True)
         self.tabCloseRequested.connect(self._on_close_requested)
+        self.setStyleSheet(
+            "QTabWidget::pane { border: none; background: #1e1e1e; } "
+            "QTabBar::tab { background: #252526; color: #d4d4d4; padding: 4px 10px; border: 1px solid #1e1e1e; border-bottom: none; } "
+            "QTabBar::tab:selected { background: #1e1e1e; } "
+            "QTabBar::tab:hover { background: #2a2d2e; }"
+        )
 
     def _on_close_requested(self, index: int):
         widget = self.widget(index)
@@ -519,6 +943,7 @@ class _ScriptTab(QWidget):
         super().__init__(parent)
         self._file_path: Optional[str] = None
         self._dirty = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -527,6 +952,7 @@ class _ScriptTab(QWidget):
         self._highlighter = _PythonHighlighter(self._editor.document())
         self._editor.textChanged.connect(self._on_text_changed)
         self._editor.refresh_completions()
+
         layout.addWidget(self._editor)
 
     def set_font_size(self, size: int):
@@ -568,7 +994,8 @@ class _ScriptTab(QWidget):
             f"Save changes to {self._tab_title()} before closing?",
             QMessageBox.StandardButton.Save |
             QMessageBox.StandardButton.Discard |
-            QMessageBox.StandardButton.Cancel)
+            QMessageBox.StandardButton.Cancel
+        )
         if res == QMessageBox.StandardButton.Save:
             self.save()
             return not self._dirty
@@ -576,11 +1003,12 @@ class _ScriptTab(QWidget):
 
     def open_file(self, path: str):
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
             self._editor.setPlainText(content)
             self._file_path = path
             self._dirty = False
+            self._editor.document().setModified(False)
             self._update_title()
         except Exception as e:
             QMessageBox.critical(self, "Open Error", f"Failed to open:\n{e}")
@@ -588,9 +1016,10 @@ class _ScriptTab(QWidget):
     def save(self):
         if self._file_path:
             try:
-                with open(self._file_path, 'w', encoding='utf-8') as f:
+                with open(self._file_path, "w", encoding="utf-8") as f:
                     f.write(self._editor.toPlainText())
                 self._dirty = False
+                self._editor.document().setModified(False)
                 self._update_title()
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
@@ -600,10 +1029,11 @@ class _ScriptTab(QWidget):
     def save_as(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Script", "",
-            "Python Files (*.py)")
+            "Python Files (*.py)"
+        )
         if path:
-            if not path.endswith('.py'):
-                path += '.py'
+            if not path.endswith(".py"):
+                path += ".py"
             self._file_path = path
             self.save()
 
@@ -611,6 +1041,7 @@ class _ScriptTab(QWidget):
         self._editor.clear()
         self._file_path = None
         self._dirty = False
+        self._editor.document().setModified(False)
         self._update_title()
 
 
@@ -635,7 +1066,8 @@ class _ScriptEditorWidget(QWidget):
             "QMenuBar::item { padding: 3px 8px; border-radius: 3px; } "
             "QMenuBar::item:selected { background: #3e3e3e; } "
             "QMenu { background: #2d2d2d; color: #d4d4d4; border: 1px solid #444; } "
-            "QMenu::item:selected { background: #264f78; }")
+            "QMenu::item:selected { background: #264f78; }"
+        )
         self._build_menubar(menubar)
         layout.addWidget(menubar)
 
@@ -644,24 +1076,28 @@ class _ScriptEditorWidget(QWidget):
         toolbar.setIconSize(QSize(*scale_xy(18, 18)))
         toolbar.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextOnly if qta is None
-            else Qt.ToolButtonStyle.ToolButtonIconOnly)
+            else Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
         toolbar.setStyleSheet(
             "QToolBar { background: #2d2d2d; border: none; spacing: 2px; padding: 2px; } "
             "QToolButton { background: transparent; border: none; padding: 3px; border-radius: 3px; } "
             "QToolButton:hover { background: #3e3e3e; } "
-            "QToolButton:pressed { background: #505050; }")
+            "QToolButton:pressed { background: #505050; }"
+        )
 
         toolbar.addAction(self._act_new)
         toolbar.addAction(self._act_open)
         toolbar.addAction(self._act_save)
         toolbar.addAction(self._act_save_as)
         toolbar.addSeparator()
+
         toolbar.addAction(self._act_undo)
         toolbar.addAction(self._act_redo)
         toolbar.addAction(self._act_cut)
         toolbar.addAction(self._act_copy)
         toolbar.addAction(self._act_paste)
         toolbar.addSeparator()
+
         toolbar.addAction(self._act_wrap)
         toolbar.addAction(self._act_indent)
         toolbar.addAction(self._act_zoom_out)
@@ -673,7 +1109,8 @@ class _ScriptEditorWidget(QWidget):
         self._zoom_combo.setFixedWidth(scale(56))
         self._zoom_combo.setToolTip("Font Size")
         self._zoom_combo.currentTextChanged.connect(
-            lambda t: self._apply_zoom(0, int(t) if t.isdigit() else self._zoom))
+            lambda t: self._apply_zoom(0, int(t) if t.isdigit() else self._zoom)
+        )
         toolbar.addWidget(self._zoom_combo)
 
         toolbar.addAction(self._act_zoom_in)
@@ -697,11 +1134,15 @@ class _ScriptEditorWidget(QWidget):
         statusbar = QStatusBar()
         statusbar.setStyleSheet(
             "QStatusBar { background: #1f1f1f; color: #9a9a9a; padding: 1px 4px; } "
-            "QStatusBar::item { border: none; }")
+            "QStatusBar::item { border: none; }"
+        )
+
         self._status_pos = QLabel("Ln 1, Col 1")
         self._status_info = QLabel("")
+
         statusbar.addPermanentWidget(self._status_info, 1)
         statusbar.addPermanentWidget(self._status_pos)
+
         layout.addWidget(statusbar)
         self._statusbar = statusbar
 
@@ -788,20 +1229,24 @@ class _ScriptEditorWidget(QWidget):
         edit_menu.addAction(self._act_paste)
 
         view_menu = menubar.addMenu("View")
+
         self._act_wrap_m = QAction("Word Wrap", self)
         self._act_wrap_m.setCheckable(True)
         self._act_wrap_m.setChecked(self._wrap)
         self._act_wrap_m.triggered.connect(self._toggle_wrap_menu)
         view_menu.addAction(self._act_wrap_m)
+
         self._act_indent_m = QAction("Indentation Guides", self)
         self._act_indent_m.setCheckable(True)
         self._act_indent_m.setChecked(True)
         self._act_indent_m.triggered.connect(self._toggle_indent_menu)
         view_menu.addAction(self._act_indent_m)
+
         act_zoom_in = QAction("Zoom In", self)
         act_zoom_in.setShortcut(QKeySequence("Ctrl+="))
         act_zoom_in.triggered.connect(lambda: self._apply_zoom(1))
         view_menu.addAction(act_zoom_in)
+
         act_zoom_out = QAction("Zoom Out", self)
         act_zoom_out.setShortcut(QKeySequence("Ctrl+-"))
         act_zoom_out.triggered.connect(lambda: self._apply_zoom(-1))
@@ -829,29 +1274,35 @@ class _ScriptEditorWidget(QWidget):
         tab.set_font_size(self._zoom)
         tab.set_wrap(self._wrap)
         self._bind_tab_signals(tab)
+
         self._tabs.add_closeable_tab(tab, "Untitled")
         self._tabs.setCurrentWidget(tab)
+
         self._update_label()
         self._on_cursor(1, 1)
 
     def _open_tab(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Script", "",
-            "Python Files (*.py);;All Files (*)")
+            "Python Files (*.py);;All Files (*)"
+        )
         if path:
             for i in range(self._tabs.count()):
                 existing = self._tabs.widget(i)
                 if existing._file_path == path:
                     self._tabs.setCurrentWidget(existing)
                     return
+
             tab = _ScriptTab()
             tab.closed.connect(self._on_tab_closed)
             tab.set_font_size(self._zoom)
             tab.set_wrap(self._wrap)
             self._bind_tab_signals(tab)
+
             tab.open_file(path)
             self._tabs.add_closeable_tab(tab, tab._tab_title())
             self._tabs.setCurrentWidget(tab)
+
             self._update_label()
             self._on_cursor(1, 1)
 
@@ -894,8 +1345,9 @@ class _ScriptEditorWidget(QWidget):
 
     def _toggle_wrap(self, checked: bool):
         self._wrap = checked
-        self._act_wrap_m.setChecked(checked)
         self._act_wrap.setChecked(checked)
+        if hasattr(self, "_act_wrap_m"):
+            self._act_wrap_m.setChecked(checked)
         for i in range(self._tabs.count()):
             self._tabs.widget(i).set_wrap(self._wrap)
 
@@ -903,12 +1355,13 @@ class _ScriptEditorWidget(QWidget):
         self._toggle_wrap(checked)
 
     def _toggle_indent(self, checked: bool):
-        self._act_indent_m.setChecked(checked)
+        self._act_indent.setChecked(checked)
+        if hasattr(self, "_act_indent_m"):
+            self._act_indent_m.setChecked(checked)
         for i in range(self._tabs.count()):
             self._tabs.widget(i).set_indent_guides(checked)
 
     def _toggle_indent_menu(self, checked: bool):
-        self._act_indent.setChecked(checked)
         self._toggle_indent(checked)
 
     def _apply_zoom(self, delta: int, size: int = 0):
@@ -916,6 +1369,7 @@ class _ScriptEditorWidget(QWidget):
             self._zoom = max(_CodeEditor.MIN_FONT, min(_CodeEditor.MAX_FONT, self._zoom + delta))
         else:
             self._zoom = max(_CodeEditor.MIN_FONT, min(_CodeEditor.MAX_FONT, size))
+
         self._zoom_combo.setCurrentText(str(self._zoom))
         for i in range(self._tabs.count()):
             self._tabs.widget(i).set_font_size(self._zoom)
@@ -924,13 +1378,14 @@ class _ScriptEditorWidget(QWidget):
         tab = self._current_tab()
         if tab is None:
             return
+
         if tab._dirty or not tab._file_path:
             tab.save()
-        if tab._file_path:
-            import subprocess
+
+        if tab._file_path and not tab._dirty:
             try:
-                subprocess.Popen([".venv/Scripts/python", tab._file_path],
-                                 cwd=os.path.dirname(os.path.abspath(__file__)) + "/../..")
+                cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                subprocess.Popen([sys.executable, tab._file_path], cwd=cwd)
             except Exception as e:
                 QMessageBox.critical(self, "Run Error", f"Failed to run:\n{e}")
 
@@ -976,7 +1431,9 @@ class ScriptEditorPanel(QDockWidget):
         self.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable |
             QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-            QDockWidget.DockWidgetFeature.DockWidgetClosable)
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self.setMinimumWidth(200)
+
         self._script_widget = _ScriptEditorWidget()
         self.setWidget(self._script_widget)
