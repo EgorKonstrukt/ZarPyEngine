@@ -7,8 +7,9 @@
 from __future__ import annotations
 import os
 from typing import Optional, Callable
+import qtawesome as qta
 from PyQt6.QtWidgets import QLabel, QWidget, QHBoxLayout, QPushButton, QDoubleSpinBox, QSlider, QDialog, QFileDialog, \
-    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect, QStyle, QSizePolicy
+    QInputDialog, QMessageBox, QFrame, QGraphicsOpacityEffect, QSizePolicy
 from PyQt6.QtCore import Qt, QObject, QEvent, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as QF
 from core.config.editor_scale import scale, scale_xy
@@ -248,7 +249,7 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
             update_resource_icon(icon_lbl, p, 20)
         elif p:
             name_lbl.setStyleSheet(_ERROR_STYLE)
-            icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+            icon_lbl.setPixmap(qta.icon("fa5s.exclamation-triangle", color="#e74c3c").pixmap(20, 20))
         else:
             name_lbl.setStyleSheet(_EMPTY_STYLE)
             update_resource_icon(icon_lbl, p, 20)
@@ -257,7 +258,7 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
         clear_btn.setVisible(bool(p))
         callback(p)
     _apply_state(path)
-    btn = QPushButton("\u25CB")
+    btn = QPushButton(qta.icon("fa5s.folder-open", color="#d4d4d4"), "")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip("Pick Resource")
     _style_picker_btn(btn)
@@ -267,7 +268,7 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
             _update_display(p)
     btn.clicked.connect(_pick)
     layout.addWidget(btn)
-    clear_btn = QPushButton("\u2715")
+    clear_btn = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
     _style_picker_btn(clear_btn)
@@ -323,7 +324,7 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
             name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(eid))
         callback(eid)
-    btn = QPushButton("\u25CB")
+    btn = QPushButton(qta.icon("fa5s.crosshairs", color="#d4d4d4"), "")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip("Pick Entity")
     _style_picker_btn(btn)
@@ -335,7 +336,7 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
                 _update_entity_display(picked_id)
     btn.clicked.connect(_pick)
     layout.addWidget(btn)
-    clear_btn = QPushButton("\u2715")
+    clear_btn = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
     _style_picker_btn(clear_btn)
@@ -377,12 +378,12 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
                 name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
             else:
                 name_lbl.setStyleSheet(_ERROR_STYLE)
-                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+                icon_lbl.setPixmap(qta.icon("fa5s.exclamation-triangle", color="#e74c3c").pixmap(20, 20))
         else:
             name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(p))
         callback(p)
-    btn = QPushButton("\u25CB")
+    btn = QPushButton(qta.icon("fa5s.folder-open", color="#d4d4d4"), "")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip(f"Pick {resource_type}")
     _style_picker_btn(btn)
@@ -392,7 +393,7 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
             _update_display(p)
     btn.clicked.connect(_pick)
     layout.addWidget(btn)
-    clear_btn = QPushButton("\u2715")
+    clear_btn = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
     _style_picker_btn(clear_btn)
@@ -434,12 +435,12 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
                 name_lbl.setStyleSheet(name_lbl._BASE_STYLE)
             else:
                 name_lbl.setStyleSheet(_ERROR_STYLE)
-                icon_lbl.setPixmap(w.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical).pixmap(20, 20))
+                icon_lbl.setPixmap(qta.icon("fa5s.exclamation-triangle", color="#e74c3c").pixmap(20, 20))
         else:
             name_lbl.setStyleSheet(_EMPTY_STYLE)
         clear_btn.setVisible(bool(p))
         callback(p)
-    btn = QPushButton("\u25CB")
+    btn = QPushButton(qta.icon("fa5s.folder-open", color="#d4d4d4"), "")
     btn.setFixedSize(*scale_xy(22, 22))
     btn.setToolTip(f"Pick {asset_type}")
     _style_picker_btn(btn)
@@ -449,7 +450,7 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
             _update_display(p)
     btn.clicked.connect(_pick)
     layout.addWidget(btn)
-    create_btn = QPushButton("+")
+    create_btn = QPushButton(qta.icon("fa5s.plus", color="#9ccc65"), "")
     create_btn.setFixedSize(*scale_xy(22, 22))
     create_btn.setToolTip(f"Create new {asset_type}")
     _style_picker_btn(create_btn)
@@ -457,7 +458,7 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
         _create_asset_dialog(w, asset_type, _update_display)
     create_btn.clicked.connect(_create)
     layout.addWidget(create_btn)
-    clear_btn = QPushButton("\u2715")
+    clear_btn = QPushButton(qta.icon("fa5s.times", color="#d4d4d4"), "")
     clear_btn.setFixedSize(*scale_xy(20, 20))
     clear_btn.setToolTip("Clear")
     _style_picker_btn(clear_btn)
@@ -533,8 +534,7 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
         layout.addWidget(sb)
         spinboxes.append(sb)
     if reset_to is not None:
-        btn = QPushButton()
-        btn.setText("\u21ba")
+        btn = QPushButton(qta.icon("fa5s.undo-alt", color="#d4d4d4"), "")
         btn.setFixedSize(*scale_xy(18, 18))
         btn.setToolTip(f"Reset {label}")
         def _reset():

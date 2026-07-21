@@ -91,8 +91,6 @@ class BuildSettings:
             if self._active_scene_index == old_index:
                 self._active_scene_index = new_index
 
-    # в”Ђв”Ђв”Ђ Plugins в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-
     @property
     def build_plugins(self) -> list[str]:
         return list(self._build_plugins)
@@ -107,8 +105,6 @@ class BuildSettings:
     def remove_plugin(self, name: str):
         if name in self._build_plugins:
             self._build_plugins.remove(name)
-
-    # в”Ђв”Ђв”Ђ Serialization в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     def save(self, path: Optional[str] = None):
         save_path = path or self._path
@@ -141,8 +137,6 @@ class BuildSettings:
             Logger.info(f"BuildSettings loaded: {len(self._scenes)} scenes, {len(self._build_plugins)} plugins")
         except Exception as e:
             Logger.error(f"BuildSettings load failed: {e}")
-
-    # в”Ђв”Ђв”Ђ Asset Resolution в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
     def get_included_scene_paths(self, project_root: str) -> list[str]:
         """Resolve scene paths relative to project root."""

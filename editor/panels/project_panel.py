@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QTreeWidget, QTreeWidgetItem, QPushButton,
                              QLabel, QLineEdit, QMenu, QFileDialog, QSplitter,
                              QListWidget, QListWidgetItem, QAbstractItemView,
-                             QToolButton, QSlider, QStyle, QFileIconProvider,
+                             QToolButton, QSlider, QFileIconProvider,
                              QStackedWidget, QFrame, QHeaderView, QSizePolicy,
                              QGraphicsDropShadowEffect, QStyledItemDelegate,
                              QAbstractItemDelegate, QApplication)
@@ -22,6 +22,28 @@ from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QMimeData, QByteArray, QSize, Q
 from PyQt6.QtGui import (QAction, QDrag, QIcon, QWheelEvent, QKeyEvent, QGuiApplication,
                           QShortcut, QKeySequence, QColor, QPainter, QPainterPath, QFont,
                           QPen, QBrush, QPixmap, QFontMetrics, QPalette)
+
+try:
+    import qtawesome as qta
+except ImportError:
+    qta = None
+
+_QTA_COLORS = {
+    "folder": "#d4d4d4",
+    "file": "#d4d4d4",
+    "nav": "#d4d4d4",
+    "create": "#9ccc65",
+    "refresh": "#d4d4d4",
+    "dual": "#d4d4d4",
+    "view": "#d4d4d4",
+}
+
+
+def _qta_icon(name: str, color: str | None = None) -> QIcon:
+    if qta is None:
+        return QIcon()
+    c = color if color else _QTA_COLORS.get(name.split(".")[-1] if "." in name else name, "#d4d4d4")
+    return qta.icon(name, color=c)
 
 if TYPE_CHECKING:
     from core.engine.engine import Engine
@@ -88,9 +110,11 @@ def _parse_vcs_status(project_path: str) -> dict[str, str]:
 
 
 class _NavButton(QToolButton):
-    def __init__(self, text="", tooltip="", parent=None):
+    def __init__(self, icon_name="", tooltip="", parent=None):
         super().__init__(parent)
-        self.setText(text)
+        if icon_name and qta is not None:
+            self.setIcon(qta.icon(icon_name, color="#d4d4d4"))
+            self.setIconSize(QSize(*scale_xy(14, 14)))
         self.setToolTip(tooltip)
         self.setFixedSize(scale(28), scale(28))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -99,7 +123,6 @@ class _NavButton(QToolButton):
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 3px;
-                font-size: 11px;
                 padding: 0;
             }}
             QToolButton:hover {{
@@ -870,17 +893,17 @@ class _NavBar(QWidget):
         layout.setContentsMargins(scale(4), scale(1), scale(4), scale(1))
         layout.setSpacing(scale(1))
 
-        self._back_btn = _NavButton("\u25C0", "Back (Alt+Left)")
+        self._back_btn = _NavButton("fa5s.arrow-left", "Back (Alt+Left)")
         self._back_btn.setEnabled(False)
         self._back_btn.clicked.connect(self._panel._go_back)
         layout.addWidget(self._back_btn)
 
-        self._forward_btn = _NavButton("\u25B6", "Forward (Alt+Right)")
+        self._forward_btn = _NavButton("fa5s.arrow-right", "Forward (Alt+Right)")
         self._forward_btn.setEnabled(False)
         self._forward_btn.clicked.connect(self._panel._go_forward)
         layout.addWidget(self._forward_btn)
 
-        self._up_btn = _NavButton("\u25B2", "Up (Alt+Up)")
+        self._up_btn = _NavButton("fa5s.arrow-up", "Up (Alt+Up)")
         self._up_btn.clicked.connect(self._panel._go_to_parent)
         layout.addWidget(self._up_btn)
 
@@ -904,7 +927,7 @@ class _NavBar(QWidget):
         layout.addWidget(self._address_bar, 1)
 
         self._search_bar = QLineEdit()
-        self._search_bar.setPlaceholderText("\U0001F50D Search...")
+        self._search_bar.setPlaceholderText(" Search...")
         self._search_bar.setClearButtonEnabled(True)
         self._search_bar.setMaximumWidth(scale(120))
         self._search_bar.textChanged.connect(self._on_search)
@@ -1048,8 +1071,14 @@ class ProjectPanel(QDockWidget):
 
     def _get_file_icon(self, path: str) -> QIcon:
         ext = os.path.splitext(path)[1].lower()
-        if ext in (".py", ".txt", ".json", ".xml", ".csv", ".ini", ".cfg", ".toml", ".yaml", ".yml"):
-            return self._icon_provider.icon(QFileIconProvider.IconType.File)
+        ext_map = {
+            ".py": "fa5s.file-code", ".txt": "fa5s.file-alt", ".json": "fa5s.file-code",
+            ".xml": "fa5s.file-code", ".csv": "fa5s.file-csv", ".ini": "fa5s.file-code",
+            ".cfg": "fa5s.file-code", ".toml": "fa5s.file-code", ".yaml": "fa5s.file-code",
+            ".yml": "fa5s.file-code",
+        }
+        if ext in ext_map:
+            return _qta_icon(ext_map[ext], "#d4d4d4")
         if ext == ".zpes":
             from editor.resource_picker import _draw_scene_icon
             return QIcon(_draw_scene_icon(self._thumb_size))
@@ -1120,7 +1149,10 @@ class ProjectPanel(QDockWidget):
         toolbar_layout.setSpacing(scale(2))
 
         create_btn = QToolButton()
-        create_btn.setText("+ New")
+        if qta is not None:
+            create_btn.setIcon(qta.icon("fa5s.plus", color="#9ccc65"))
+            create_btn.setIconSize(QSize(*scale_xy(12, 12)))
+        create_btn.setText(" New")
         create_btn.setToolTip("Create new asset")
         create_btn.setFixedHeight(scale(20))
         create_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1192,7 +1224,9 @@ class ProjectPanel(QDockWidget):
         self._dual_pane_btn.setToolTip("Dual Pane")
         self._dual_pane_btn.setCheckable(True)
         self._dual_pane_btn.setChecked(False)
-        self._dual_pane_btn.setText("\u258C\u2590")
+        if qta is not None:
+            self._dual_pane_btn.setIcon(qta.icon("fa5s.columns", color="#d4d4d4"))
+            self._dual_pane_btn.setIconSize(QSize(*scale_xy(14, 14)))
         self._dual_pane_btn.toggled.connect(self._toggle_dual_pane)
         self._dual_pane_btn.setStyleSheet(f"""
             QToolButton {{
@@ -1211,7 +1245,9 @@ class ProjectPanel(QDockWidget):
         refresh_btn = QToolButton()
         refresh_btn.setFixedSize(scale(22), scale(22))
         refresh_btn.setToolTip("Refresh (F5)")
-        refresh_btn.setText("\u21BB")
+        if qta is not None:
+            refresh_btn.setIcon(qta.icon("fa5s.sync-alt", color="#d4d4d4"))
+            refresh_btn.setIconSize(QSize(*scale_xy(14, 14)))
         refresh_btn.clicked.connect(self._refresh)
         refresh_btn.setStyleSheet(f"""
             QToolButton {{
@@ -1455,16 +1491,16 @@ class ProjectPanel(QDockWidget):
         return self._active_pane().active_widget()
 
     def _update_view_mode_icon(self):
-        icons = {
-            VIEW_ICON: "\u25A0",
-            VIEW_DETAILS: "\u250C\u2500",
+        icon_map = {
+            VIEW_ICON: ("fa5s.th", "Icon View"),
+            VIEW_DETAILS: ("fa5s.list", "Details View"),
         }
-        self._view_mode_btn.setText(icons.get(self._view_mode, "\u25A0"))
-        tooltips = {
-            VIEW_ICON: "Icon View",
-            VIEW_DETAILS: "Details View",
-        }
-        self._view_mode_btn.setToolTip(tooltips.get(self._view_mode, "View Mode"))
+        icon_name, tip = icon_map.get(self._view_mode, ("fa5s.th", "View Mode"))
+        if qta is not None:
+            self._view_mode_btn.setIcon(qta.icon(icon_name, color="#d4d4d4"))
+            self._view_mode_btn.setIconSize(QSize(*scale_xy(14, 14)))
+            self._view_mode_btn.setText("")
+        self._view_mode_btn.setToolTip(tip)
 
     def _toggle_view_mode(self):
         if self._view_mode == VIEW_ICON:

@@ -10,33 +10,38 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget,
                              QWidget, QFormLayout, QLineEdit, QDoubleSpinBox,
                              QSpinBox, QCheckBox, QPushButton, QListWidgetItem,
                              QStackedWidget, QFrame, QScrollArea, QLabel,
-                             QSlider, QStyle, QApplication, QGroupBox,
+                             QSlider, QApplication, QGroupBox,
                              QGridLayout, QComboBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 from core.config.config import Config
 from core.physics.collision_layers import MAX_LAYERS, DEFAULT_LAYER_NAMES
 from core.config.editor_scale import scale, scale_xy
 
+try:
+    import qtawesome as qta
+except ImportError:
+    qta = None
+
 SECTION_ICONS = {
-    "editor": QStyle.StandardPixmap.SP_FileDialogDetailedView,
-    "camera": QStyle.StandardPixmap.SP_ComputerIcon,
-    "rendering": QStyle.StandardPixmap.SP_FileDialogListView,
-    "gizmo": QStyle.StandardPixmap.SP_ArrowUp,
-    "viewport": QStyle.StandardPixmap.SP_DesktopIcon,
-    "console": QStyle.StandardPixmap.SP_FileDialogContentsView,
-    "terminal": QStyle.StandardPixmap.SP_DriveHDIcon,
-    "profiler": QStyle.StandardPixmap.SP_FileDialogInfoView,
-    "hierarchy": QStyle.StandardPixmap.SP_DirIcon,
-    "inspector": QStyle.StandardPixmap.SP_FileDialogListView,
-    "project": QStyle.StandardPixmap.SP_FileIcon,
-    "engine": QStyle.StandardPixmap.SP_ComputerIcon,
-    "collab": QStyle.StandardPixmap.SP_FileDialogEnd,
-    "undo": QStyle.StandardPixmap.SP_ArrowBack,
-    "input": QStyle.StandardPixmap.SP_FileDialogStart,
-    "physics": QStyle.StandardPixmap.SP_DriveCDIcon,
-    "audio": QStyle.StandardPixmap.SP_MediaVolume,
-    "toolbar": QStyle.StandardPixmap.SP_ToolBarHorizontalExtensionButton,
-    "file_assoc": QStyle.StandardPixmap.SP_FileDialogStart,
+    "editor": "fa5s.edit",
+    "camera": "fa5s.camera",
+    "rendering": "fa5s.palette",
+    "gizmo": "fa5s.arrows-alt",
+    "viewport": "fa5s.desktop",
+    "console": "fa5s.terminal",
+    "terminal": "fa5s.window-maximize",
+    "profiler": "fa5s.chart-bar",
+    "hierarchy": "fa5s.sitemap",
+    "inspector": "fa5s.search",
+    "project": "fa5s.folder-open",
+    "engine": "fa5s.cogs",
+    "collab": "fa5s.users",
+    "undo": "fa5s.undo",
+    "input": "fa5s.keyboard",
+    "physics": "fa5s.atom",
+    "audio": "fa5s.music",
+    "toolbar": "fa5s.wrench",
+    "file_assoc": "fa5s.file-code",
 }
 
 SECTION_DESCRIPTIONS = {
@@ -457,10 +462,10 @@ class SettingsDialog(QDialog):
         self._stack = QStackedWidget()
 
         for section, values in sections:
-            sp = SECTION_ICONS.get(section)
+            icon_name = SECTION_ICONS.get(section)
             item = QListWidgetItem()
-            if sp is not None:
-                item.setIcon(QApplication.style().standardIcon(sp))
+            if icon_name is not None and qta is not None:
+                item.setIcon(qta.icon(icon_name, color="#d4d4d4"))
             item.setText(section.replace("_", " ").title())
             self._list_widget.addItem(item)
             scroll = self._build_page(section, values)

@@ -10,6 +10,7 @@ from typing import Optional
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox, QDoubleSpinBox, QSpinBox, \
     QSlider, QComboBox, QFrame, QMenu, QDialog, QPlainTextEdit, QApplication, QLineEdit, QSizePolicy, QFormLayout, QGroupBox
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
+import qtawesome as qta
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
 from core.config.editor_scale import scale, scale_xy
 from core.math.math3d import Vec2, Vec3, Vec4, Quat
@@ -55,7 +56,7 @@ class ComponentWidget(QWidget):
         header_layout = QHBoxLayout(self._header_widget)
         header_layout.setContentsMargins(6, 3, 6, 3)
         header_layout.setSpacing(4)
-        self._collapse_btn = QPushButton("\u25bc")
+        self._collapse_btn = QPushButton(qta.icon("fa5s.caret-down", color="#d4d4d4"), "")
         self._collapse_btn.setFixedSize(*scale_xy(14, 14))
         self._collapse_btn.setFlat(True)
         self._collapse_btn.clicked.connect(self._toggle_collapse)
@@ -76,12 +77,12 @@ class ComponentWidget(QWidget):
         self._enabled_cb.setChecked(component.enabled)
         self._enabled_cb.toggled.connect(self._on_enabled_toggled)
         header_layout.addWidget(self._enabled_cb)
-        self._move_up_btn = QPushButton("^")
+        self._move_up_btn = QPushButton(qta.icon("fa5s.chevron-up", color="#d4d4d4"), "")
         self._move_up_btn.setFixedSize(*scale_xy(16, 16))
         self._move_up_btn.setFlat(True)
         self._move_up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._component_key))
         header_layout.addWidget(self._move_up_btn)
-        self._move_down_btn = QPushButton("v")
+        self._move_down_btn = QPushButton(qta.icon("fa5s.chevron-down", color="#d4d4d4"), "")
         self._move_down_btn.setFixedSize(*scale_xy(16, 16))
         self._move_down_btn.setFlat(True)
         self._move_down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._component_key))
@@ -142,7 +143,7 @@ class ComponentWidget(QWidget):
 
     def _toggle_collapse(self):
         self._collapsed = not self._collapsed
-        self._collapse_btn.setText("\u25b6" if self._collapsed else "\u25bc")
+        self._collapse_btn.setIcon(qta.icon("fa5s.caret-right" if self._collapsed else "fa5s.caret-down", color="#d4d4d4"))
         self._content_widget.setVisible(not self._collapsed)
 
     def dragEnterEvent(self, event):

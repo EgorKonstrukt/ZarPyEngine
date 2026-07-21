@@ -10,6 +10,7 @@ from typing import Optional
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPushButton, \
     QLabel, QStackedWidget, QSizePolicy, QWidget, QListView, QAbstractItemView
 from PyQt6.QtCore import Qt, QSize
+import qtawesome as qta
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QFont, QPainter, QBrush, QPen
 from core.config.editor_scale import scale, scale_xy
 from editor.inspector.constants import _accent
@@ -82,7 +83,7 @@ class ComponentPickerDialog(QDialog):
         self._nav_layout = QHBoxLayout(self._nav_bar)
         self._nav_layout.setContentsMargins(0, 0, 0, 0)
         self._nav_layout.setSpacing(4)
-        self._back_btn = QPushButton("\u25C0  Back")
+        self._back_btn = QPushButton(qta.icon("fa5s.arrow-left", color=_accent()), " Back")
         self._back_btn.setStyleSheet(f"color: {_accent()}; background: transparent; border: none; font-size: 11px; padding: 2px 4px; text-align: left;")
         self._back_btn.clicked.connect(self._show_categories)
         self._back_btn.hide()
