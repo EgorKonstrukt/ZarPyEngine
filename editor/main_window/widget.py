@@ -42,7 +42,6 @@ class EditorMainWindow(QMainWindow):
         self._engine = engine
         self._settings = QSettings("Zarin", "Editor")
         self._play_dock: Optional[QDockWidget] = None
-        self._scene_snapshot: Optional[dict] = None
         self._prefab_mode: bool = False
         self._saved_scene = None
         self._prefab_path: Optional[str] = None
@@ -81,8 +80,10 @@ class EditorMainWindow(QMainWindow):
         if collab:
             mgr = self._scene_tab_manager
             collab.set_on_remote_scene_open(lambda data: QTimer.singleShot(0, lambda: self._on_remote_scene_open(data)))
-            collab.set_on_remote_tab_switch(lambda name: QTimer.singleShot(0, lambda: mgr.switch_to_tab(name)))
+            collab.set_on_remote_tab_switch(lambda pid, name: QTimer.singleShot(0, lambda: self._on_remote_tab_switch(pid, name)))
             collab.set_on_remote_tab_close(lambda name: QTimer.singleShot(0, lambda: mgr.remove_tab(name)))
+            collab.set_peer_joined_callback(lambda p: QTimer.singleShot(0, lambda: self._update_tab_peer_indicators()))
+            collab.set_peer_left_callback(lambda p: QTimer.singleShot(0, lambda: self._update_tab_peer_indicators()))
             mgr.tab_switched.connect(lambda name: self._on_scene_tab_switched(name))
             mgr.tab_added.connect(lambda name: self._on_scene_tab_added(name))
 
@@ -111,12 +112,27 @@ class EditorMainWindow(QMainWindow):
                 data = info.scene.serialize()
                 collab.send_scene_open(info.name, info.path or "", data)
 
+    def _on_remote_tab_switch(self, peer_id: str, tab_name: str):
+        if self._scene_tab_manager.get_tab_info(tab_name):
+            self._scene_tab_manager.switch_to_tab(tab_name)
+        self._update_tab_peer_indicators()
+
+    def _update_tab_peer_indicators(self):
+        collab = self._engine.collab_manager
+        peers = collab.peers if collab and collab.connected else {}
+        tab_peers: dict[str, list[list[float]]] = {}
+        for p in peers.values():
+            if p.current_tab:
+                tab_peers.setdefault(p.current_tab, []).append(p.color)
+        self._scene_tab_manager.update_peer_indicators(tab_peers)
+
     def _on_scene_tab_switched(self, name: str):
         collab = self._engine.collab_manager
         if collab and collab.connected:
             collab.send_scene_tab_switch(name)
             if self._engine.scene:
                 collab.update_server_scene(self._engine.scene)
+        self._update_tab_peer_indicators()
 
     def _setup_engine_events(self):
         from editor.main_window.handlers import on_play_start, on_play_stop

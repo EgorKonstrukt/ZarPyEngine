@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, Qt
+from PyQt6.QtGui import QPixmap, QPainter, QColor, QBrush, QIcon
 from PyQt6.QtWidgets import QTabBar, QMessageBox
 
 from core.ecs.ecs import Scene
@@ -16,13 +17,20 @@ from core.math.math3d import Vec3
 
 
 class SceneTabInfo:
-    __slots__ = ("name", "path", "scene", "dirty", "camera_state")
+    __slots__ = ("name", "path", "scene", "dirty", "camera_state",
+                 "selected_entity_ids", "play_mode", "scene_snapshot",
+                 "prefab_path", "origin_tab")
     def __init__(self, name: str = "Scene", path: Optional[str] = None, scene: Optional[Scene] = None):
         self.name = name
         self.path = path
         self.scene = scene
         self.dirty = False
         self.camera_state: Optional[dict] = None
+        self.selected_entity_ids: list[str] = []
+        self.play_mode: bool = False
+        self.scene_snapshot: Optional[dict] = None
+        self.prefab_path: Optional[str] = None
+        self.origin_tab: Optional[str] = None
 
 
 class SceneTabManager(QObject):
@@ -125,6 +133,9 @@ class SceneTabManager(QObject):
                     "near": cam._near,
                     "far": cam._far,
                 }
+            if vp:
+                info.selected_entity_ids = [e.id for e in vp._selected_entities]
+            info.play_mode = self._engine.play_mode
 
     def _on_tab_changed(self, idx: int):
         if self._switching:
@@ -136,6 +147,20 @@ class SceneTabManager(QObject):
                 return
 
             self._save_current_to_tab()
+
+            if self._engine.play_mode:
+                self._engine.stop_play()
+                from core.ecs.ecs import Scene as S
+                from core.engine.engine import Engine as Eng
+                active_info = self._tabs.get(self._active_tab)
+                if active_info and active_info.scene_snapshot:
+                    restored = S.deserialize(active_info.scene_snapshot, Eng.instance()._component_registry)
+                    restored.path = self._engine.scene.path if self._engine.scene else active_info.path
+                    self._engine._scene = restored
+                    self._engine._plugin_manager.notify_scene_loaded(restored)
+                    active_info.scene = restored
+                    active_info.scene_snapshot = None
+                    active_info.play_mode = False
 
             info = self._tabs.get(target)
             if info is None:
@@ -153,6 +178,31 @@ class SceneTabManager(QObject):
             return
         info = self._tabs.get(tab_name)
         scene = info.scene if info else None
+
+        if info and info.prefab_path:
+            from core.ecs.prefab import PrefabLibrary
+            pref = PrefabLibrary.load(info.prefab_path)
+            prefab_guid = pref.guid if pref else None
+            scene = info.scene
+            if scene:
+                from editor.main_window.handlers import _save_prefab_direct
+                _save_prefab_direct(info.prefab_path, scene)
+            origin = info.origin_tab
+            if origin and origin in self._tabs:
+                origin_info = self._tabs.get(origin)
+                if origin_info and origin_info.scene and prefab_guid:
+                    from editor.main_window.handlers import _refresh_prefab_instances
+                    _refresh_prefab_instances(origin_info.scene, prefab_guid, self._mw._engine._component_registry)
+            if tab_name == self._active_tab:
+                self._active_tab = None
+            self.remove_tab(tab_name)
+            self._mw._prefab_mode = False
+            self._mw._prefab_path = None
+            self._mw._viewport._prefab_btns.hide()
+            from core.config.editor_scale import scale
+            self._mw._viewport._toolbar.setFixedHeight(scale(30))
+            return
+
         is_dirty = scene.dirty if scene else False
         if is_dirty and scene:
             reply = QMessageBox.question(
@@ -166,6 +216,16 @@ class SceneTabManager(QObject):
                 return
             if reply == QMessageBox.StandardButton.Yes:
                 self._save_scene_tab(info)
+
+        if tab_name == self._active_tab and self._engine.play_mode:
+            self._engine.stop_play()
+            if info and info.scene_snapshot:
+                from core.ecs.ecs import Scene as S
+                from core.engine.engine import Engine as Eng
+                restored = S.deserialize(info.scene_snapshot, Eng.instance()._component_registry)
+                restored.path = self._engine.scene.path if self._engine.scene else info.path
+                self._engine._scene = restored
+                self._engine._plugin_manager.notify_scene_loaded(restored)
 
         if tab_name == self._active_tab:
             self._active_tab = None
@@ -203,6 +263,15 @@ class SceneTabManager(QObject):
             cam._near = cs.get("near", cam.DEFAULT_NEAR)
             cam._far = cs.get("far", cam.DEFAULT_FAR)
 
+        if vp:
+            resolved = [info.scene.get_entity(eid) for eid in info.selected_entity_ids if info.scene.get_entity(eid)]
+            vp._selected_entities = resolved
+            vp._set_gizmo_entity(resolved[0] if resolved else None)
+            vp.entity_selected.emit(resolved[0] if resolved else None)
+            vp.entities_selected.emit(resolved)
+            from editor.viewport.collaboration import send_collab_selection
+            send_collab_selection(vp)
+
         if hasattr(self._mw, '_hierarchy'):
             self._mw._hierarchy.refresh()
         self._tab_bar.setTabText(self._tab_names.index(info.name) if info.name in self._tab_names else 0, info.name)
@@ -221,6 +290,38 @@ class SceneTabManager(QObject):
                     path += ".zpes"
                 info.path = path
                 Engine.instance().save_scene(path)
+
+    def find_prefab_tab(self) -> Optional[str]:
+        for name, info in self._tabs.items():
+            if info.prefab_path:
+                return name
+        return None
+
+    def update_peer_indicators(self, tab_peers: dict[str, list[list[float]]]):
+        DOT_SIZE = 8
+        PAD = 2
+        for tab_name in self._tab_names:
+            colors = tab_peers.get(tab_name, [])
+            if colors:
+                n = len(colors)
+                pw = DOT_SIZE * n + PAD * (n - 1) + PAD * 2
+                ph = DOT_SIZE + PAD * 2
+                pix = QPixmap(pw, ph)
+                pix.fill(Qt.GlobalColor.transparent)
+                with QPainter(pix) as p:
+                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    for i, rgb in enumerate(colors):
+                        r, g, b = (int(c * 255) for c in rgb[:3])
+                        p.setBrush(QBrush(QColor(r, g, b)))
+                        p.setPen(Qt.PenStyle.NoPen)
+                        cx = PAD + i * (DOT_SIZE + PAD) + DOT_SIZE // 2
+                        cy = PAD + DOT_SIZE // 2
+                        p.drawEllipse(cx - DOT_SIZE // 2, cy - DOT_SIZE // 2, DOT_SIZE, DOT_SIZE)
+                idx = self._tab_names.index(tab_name)
+                self._tab_bar.setTabIcon(idx, QIcon(pix))
+            else:
+                idx = self._tab_names.index(tab_name)
+                self._tab_bar.setTabIcon(idx, QIcon())
 
     def update_tab_name(self, old_name: str, new_name: str):
         if old_name not in self._tabs:

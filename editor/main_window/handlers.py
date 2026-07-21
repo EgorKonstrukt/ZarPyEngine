@@ -106,23 +106,27 @@ def on_open_prefab_editor(mw, path: str):
     if not pref:
         Logger.warning(f"Cannot load prefab: {path}")
         return
-    mw._saved_scene = mw._engine.scene
-    mw._prefab_path = path
-    edit_scene = Scene(f"Prefab: {pref.name}")
+    tab_name = f"Prefab: {pref.name}"
+    edit_scene = Scene(tab_name)
     pref.instantiate(edit_scene, mw._engine._component_registry)
     edit_scene.mark_clean()
-    mw._engine._scene = edit_scene
-    mw._engine._plugin_manager.notify_scene_loaded(edit_scene)
-    mw._engine._emit_event("scene_loaded", edit_scene)
+    origin = mw._scene_tab_manager.active_tab
+    mw._scene_tab_manager.add_tab(tab_name, scene=edit_scene)
+    info = mw._scene_tab_manager.get_tab_info(tab_name)
+    if info:
+        info.prefab_path = path
+        info.origin_tab = origin
     mw._prefab_mode = True
+    mw._prefab_path = path
     mw._viewport._prefab_btns.show()
     from core.config.editor_scale import scale
     mw._viewport._toolbar.setFixedHeight(scale(56))
-    _start_prefab_autosave(mw)
+    _start_prefab_autosave(mw, tab_name)
 
 
-def _start_prefab_autosave(mw):
+def _start_prefab_autosave(mw, prefab_tab_name: str = ""):
     from PyQt6.QtCore import QTimer
+    mw._prefab_autosave_tab = prefab_tab_name
     if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
         mw._prefab_save_timer.stop()
     mw._prefab_save_timer = QTimer()
@@ -147,11 +151,17 @@ def _on_prefab_modified(mw):
 def _do_auto_save(mw):
     if not mw._prefab_mode:
         return
+    tab_name = getattr(mw, '_prefab_autosave_tab', '')
+    mgr = getattr(mw, '_scene_tab_manager', None)
+    if tab_name and mgr:
+        info = mgr.get_tab_info(tab_name)
+        if info and info.scene:
+            _save_prefab_direct(mw._prefab_path, info.scene)
+            return
     on_save_prefab(mw)
 
 
 def on_return_to_scene(mw):
-    prefab_guid = None
     if hasattr(mw, '_prefab_modified_slot'):
         try:
             mw._viewport.scene_modified.disconnect(mw._prefab_modified_slot)
@@ -161,26 +171,35 @@ def on_return_to_scene(mw):
     if hasattr(mw, '_prefab_save_timer') and mw._prefab_save_timer:
         mw._prefab_save_timer.stop()
         mw._prefab_save_timer = None
-    if mw._prefab_mode:
+    mgr = mw._scene_tab_manager
+    prefab_tab = mgr.find_prefab_tab() if mgr else None
+    if not prefab_tab:
+        mw._prefab_mode = False
+        mw._prefab_path = None
+        mw._viewport._prefab_btns.hide()
+        from core.config.editor_scale import scale
+        mw._viewport._toolbar.setFixedHeight(scale(30))
+        return
+    info = mgr.get_tab_info(prefab_tab)
+    origin = info.origin_tab if info else None
+    prefab_path = info.prefab_path if info else None
+    if prefab_path:
         from core.ecs.prefab import Prefab, PrefabLibrary
-        pref = PrefabLibrary.load(mw._prefab_path) if mw._prefab_path else None
-        if pref:
-            prefab_guid = pref.guid
-        on_save_prefab(mw)
-    if mw._saved_scene:
-        if prefab_guid:
-            _refresh_prefab_instances(mw._saved_scene, prefab_guid, mw._engine._component_registry)
-        mw._saved_scene.mark_clean()
-        mw._engine._scene = mw._saved_scene
-        mw._engine._plugin_manager.notify_scene_loaded(mw._saved_scene)
-        mw._engine._emit_event("scene_loaded", mw._saved_scene)
-    mw._saved_scene = None
-    mw._prefab_path = None
+        pref = PrefabLibrary.load(prefab_path)
+        prefab_guid = pref.guid if pref else None
+        if info and info.scene:
+            _save_prefab_direct(prefab_path, info.scene)
+        if origin and origin in mgr._tabs:
+            origin_info = mgr.get_tab_info(origin)
+            if origin_info and origin_info.scene and prefab_guid:
+                _refresh_prefab_instances(origin_info.scene, prefab_guid, mw._engine._component_registry)
+    mgr.remove_tab(prefab_tab)
     mw._prefab_mode = False
+    mw._prefab_path = None
+    mw._prefab_autosave_tab = ""
     mw._viewport._prefab_btns.hide()
     from core.config.editor_scale import scale
     mw._viewport._toolbar.setFixedHeight(scale(30))
-    mw._hierarchy.refresh()
 
 
 def _refresh_prefab_instances(scene, prefab_guid, registry):
@@ -226,17 +245,25 @@ def _refresh_prefab_instances(scene, prefab_guid, registry):
                 t.local_scale = Vec3(*data["scale"])
 
 
-def on_save_prefab(mw):
-    if not mw._prefab_path or not mw._engine.scene:
-        return
+def _save_prefab_direct(path: str, scene):
     from core.ecs.prefab import Prefab, PrefabLibrary
-    pref = Prefab.load(mw._prefab_path)
+    pref = Prefab.load(path)
     if not pref:
         return
-    roots = mw._engine.scene.get_root_entities()
+    roots = scene.get_root_entities()
     prefab_roots = [e for e in roots if getattr(e, '_prefab_guid', None) == pref.guid]
     if not prefab_roots:
         return
+    pref.capture(prefab_roots)
+    pref.save(path)
+    PrefabLibrary._prefabs[path] = pref
+    PrefabLibrary._guids[pref.guid] = path
+
+
+def on_save_prefab(mw):
+    if not mw._prefab_path or not mw._engine.scene:
+        return
+    _save_prefab_direct(mw._prefab_path, mw._engine.scene)
     pref.capture(prefab_roots)
     pref.save(mw._prefab_path)
     PrefabLibrary._prefabs[mw._prefab_path] = pref
@@ -582,21 +609,30 @@ def on_play_stop(mw, _):
         mw._gui_editor_widget.canvas.edit_mode = True
 
 
+def _tab_info(mw):
+    if hasattr(mw, '_scene_tab_manager') and mw._scene_tab_manager:
+        return mw._scene_tab_manager.get_tab_info(mw._scene_tab_manager.active_tab) if mw._scene_tab_manager.active_tab else None
+    return None
+
+
 def toggle_play_stop(mw):
     if mw._engine.play_mode:
         mw._engine.stop_play()
         mw._viewport_dock.raise_()
-        if mw._scene_snapshot and mw._engine.scene:
+        info = _tab_info(mw)
+        if info and info.scene_snapshot and mw._engine.scene:
             from core.components.rendering.postfx.graphics_effect import GraphicsEffect
             GraphicsEffect.cleanup_registry()
             from core.ecs.ecs import Scene as S
             from core.engine.engine import Engine as Eng
-            restored = S.deserialize(mw._scene_snapshot, Eng.instance()._component_registry)
+            restored = S.deserialize(info.scene_snapshot, Eng.instance()._component_registry)
             restored.path = mw._engine.scene.path
             mw._engine._scene = restored
             mw._engine._plugin_manager.notify_scene_loaded(restored)
             mw._engine._emit_event("scene_loaded", restored)
-            mw._scene_snapshot = None
+            info.scene = restored
+            info.scene_snapshot = None
+            info.play_mode = False
         if hasattr(mw, "_pre_play_selected_id") and mw._pre_play_selected_id:
             e = mw._engine.scene.get_entity(mw._pre_play_selected_id)
             if e:
@@ -605,7 +641,10 @@ def toggle_play_stop(mw):
         sel = getattr(mw._hierarchy, "_selected_entity", None)
         mw._pre_play_selected_id = sel.id if sel else None
         if mw._engine.scene:
-            mw._scene_snapshot = mw._engine.scene.serialize()
+            info = _tab_info(mw)
+            if info:
+                info.scene_snapshot = mw._engine.scene.serialize()
+                info.play_mode = True
         mw._engine.start_play()
         mw._play_dock.raise_()
 
@@ -613,17 +652,20 @@ def toggle_play_stop(mw):
 def toggle_pause(mw):
     if mw._play_dock:
         mw._play_dock._toggle_pause()
-    if mw._scene_snapshot and mw._engine.scene:
+    info = _tab_info(mw)
+    if info and info.scene_snapshot and mw._engine.scene:
         from core.components.rendering.postfx.graphics_effect import GraphicsEffect
         GraphicsEffect.cleanup_registry()
         from core.ecs.ecs import Scene as S
         from core.engine.engine import Engine as Eng
-        restored = S.deserialize(mw._scene_snapshot, Eng.instance()._component_registry)
+        restored = S.deserialize(info.scene_snapshot, Eng.instance()._component_registry)
         restored.path = mw._engine.scene.path
         mw._engine._scene = restored
         mw._engine._plugin_manager.notify_scene_loaded(restored)
         mw._engine._emit_event("scene_loaded", restored)
-        mw._scene_snapshot = None
+        info.scene = restored
+        info.scene_snapshot = None
+        info.play_mode = False
     if hasattr(mw, "_pre_play_selected_id") and mw._pre_play_selected_id:
         e = mw._engine.scene.get_entity(mw._pre_play_selected_id)
         if e:

@@ -118,7 +118,8 @@ class _PollThread(threading.Thread):
 
 
 class RemotePeer:
-    __slots__ = ("peer_id", "name", "color", "cursor_screen", "cursor_hit",
+    __slots__ = ("peer_id", "name", "color", "current_tab",
+                 "cursor_screen", "cursor_hit",
                  "camera_pos", "camera_fwd", "camera_up",
                  "selected_entity_ids", "transform_data", "transform_deltas", "last_seen",
                  "ping_ms", "ping_timestamp",
@@ -128,6 +129,7 @@ class RemotePeer:
         self.peer_id = peer_id
         self.name = name
         self.color = color
+        self.current_tab: str = ""
         self.cursor_screen: tuple[float, float] = (0, 0)
         self.cursor_hit: Optional[list[float]] = None
         self.camera_pos: list[float] = [0, 0, 0]
@@ -468,16 +470,25 @@ class CollaborationManager:
                 self._handle_asset_request(data)
         elif msg_type == MessageType.SCENE_OPEN:
             pid = data.get("id", "")
-            if pid != self._client.peer_id and self._on_remote_scene_open:
-                self._on_remote_scene_open(data)
+            if pid != self._client.peer_id:
+                if pid in self._peers:
+                    self._peers[pid].current_tab = data.get("name", "")
+                if self._on_remote_scene_open:
+                    self._on_remote_scene_open(data)
         elif msg_type == MessageType.SCENE_TAB_SWITCH:
             pid = data.get("id", "")
-            if pid != self._client.peer_id and self._on_remote_tab_switch:
-                self._on_remote_tab_switch(data.get("name", ""))
+            if pid != self._client.peer_id:
+                if pid in self._peers:
+                    self._peers[pid].current_tab = data.get("name", "")
+                if self._on_remote_tab_switch:
+                    self._on_remote_tab_switch(pid, data.get("name", ""))
         elif msg_type == MessageType.SCENE_TAB_CLOSE:
             pid = data.get("id", "")
-            if pid != self._client.peer_id and self._on_remote_tab_close:
-                self._on_remote_tab_close(data.get("name", ""))
+            if pid != self._client.peer_id:
+                if pid in self._peers and self._peers[pid].current_tab == data.get("name", ""):
+                    self._peers[pid].current_tab = ""
+                if self._on_remote_tab_close:
+                    self._on_remote_tab_close(data.get("name", ""))
         else:
             handler = self._custom_handlers.get(msg_type)
             if handler is not None:
