@@ -9,17 +9,20 @@ import os
 import re
 import subprocess
 import sys
+import time
 from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout,
                              QToolBar, QLabel, QFileDialog,
                              QPlainTextEdit, QMessageBox, QTabWidget,
                              QSizePolicy, QComboBox, QMenuBar,
-                             QStatusBar, QCompleter, QTextEdit)
+                             QStatusBar, QCompleter, QTextEdit, QMenu,
+                             QInputDialog, QApplication, QDialog)
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QStringListModel, QTimer
 from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QKeyEvent, QWheelEvent,
                          QSyntaxHighlighter, QTextCharFormat, QTextCursor,
-                         QAction, QIcon, QKeySequence, QPainter, QPixmap)
+                         QAction, QIcon, QKeySequence, QPainter, QPixmap,
+                         QTextBlock, QMouseEvent)
 
 if TYPE_CHECKING:
     from core.engine.engine import Engine
@@ -41,6 +44,8 @@ except ImportError:
     except ImportError:
         from syntax_config import (KEYWORDS, BUILTINS, CONSTANTS, EXCEPTIONS,
                                    SYNTAX_COLORS, SYNTAX_STYLES)
+
+from editor.panels.vcs_panel import _Git
 
 
 _QTA_COLORS = {
@@ -241,6 +246,24 @@ class _LineNumberArea(QWidget):
     def paintEvent(self, event):
         self._editor.line_number_paint(event, self)
 
+    def mouseMoveEvent(self, event: QMouseEvent):
+        self._editor.line_number_mouse_move(event, self)
+
+    def leaveEvent(self, event):
+        self._editor.line_number_mouse_leave(event)
+
+
+class _VcsBlameGutter(QWidget):
+    def __init__(self, editor: "_CodeEditor"):
+        super().__init__(editor)
+        self._editor = editor
+
+    def sizeHint(self):
+        return QSize(self._editor.blame_gutter_width(), 0)
+
+    def paintEvent(self, event):
+        self._editor.blame_gutter_paint(event, self)
+
 
 class _Minimap(QWidget):
     def __init__(self, editor: "_CodeEditor"):
@@ -276,8 +299,18 @@ class _CodeEditor(QPlainTextEdit):
         self._font_size = self.DEFAULT_FONT
         self._wrap = False
         self._show_indent_guides = True
+        self._show_blame = False
+
+        self._vcs_git: _Git | None = None
+        self._vcs_file_path: str = ""
+        self._vcs_blame_data: dict[int, dict] = {}
+        self._vcs_diff_data: dict[int, str] = {}
+        self._vcs_status: str = ""
+        self._vcs_branch: str = ""
+        self._vcs_hover_line: int = -1
 
         self._line_number = _LineNumberArea(self)
+        self._blame_gutter = _VcsBlameGutter(self)
         self._minimap = _Minimap(self)
         self._minimap_cache = None
         self._minimap_cache_key = (-1, -1, -1, -1)
@@ -285,6 +318,7 @@ class _CodeEditor(QPlainTextEdit):
         self._apply_font()
         self.setUndoRedoEnabled(True)
         self.setCursorWidth(scale(2))
+        self.setMouseTracking(True)
 
         self._completer = QCompleter([], self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -393,9 +427,16 @@ class _CodeEditor(QPlainTextEdit):
     def paintEvent(self, event):
         super().paintEvent(event)
 
-        if not self._show_indent_guides:
-            return
+        if self._show_indent_guides:
+            self._draw_indent_guides(event)
 
+        if self._vcs_diff_data:
+            self._draw_diff_markers(event)
+
+        if self._show_blame and self._vcs_blame_data:
+            self._draw_blame_overlay(event)
+
+    def _draw_indent_guides(self, event):
         tab_w = self.tabStopDistance()
         if tab_w <= 0:
             return
@@ -439,6 +480,74 @@ class _CodeEditor(QPlainTextEdit):
 
         painter.end()
 
+    def _draw_diff_markers(self, event):
+        viewport_h = self.viewport().height()
+        first = self.firstVisibleBlock()
+        if not first.isValid():
+            return
+
+        painter = QPainter(self.viewport())
+        offset_x = self.contentOffset().x()
+        marker_w = scale(3)
+
+        block = first
+        while block.isValid():
+            line = block.blockNumber()
+            status = self._vcs_diff_data.get(line, "")
+            if status:
+                geom = self.blockBoundingGeometry(block).translated(self.contentOffset())
+                top = int(geom.top())
+                bottom = top + int(self.blockBoundingRect(block).height())
+                if top > viewport_h:
+                    break
+                if bottom >= event.rect().top():
+                    if status == "added":
+                        painter.fillRect(int(offset_x), top, marker_w, bottom - top, QColor("#3C9B3C"))
+                    elif status == "modified":
+                        painter.fillRect(int(offset_x), top, marker_w, bottom - top, QColor("#3C6E9B"))
+                    elif status == "deleted":
+                        painter.fillRect(int(offset_x), top + (bottom - top) // 2 - 1, marker_w, 2, QColor("#9B3C3C"))
+            block = block.next()
+
+        painter.end()
+
+    def _draw_blame_overlay(self, event):
+        if not self._vcs_blame_data:
+            return
+
+        painter = QPainter(self.viewport())
+        fm = painter.fontMetrics()
+        text_color = QColor("#6b7888")
+
+        first = self.firstVisibleBlock()
+        if not first.isValid():
+            painter.end()
+            return
+
+        viewport_w = self.viewport().width()
+        viewport_h = self.viewport().height()
+
+        block = first
+        while block.isValid():
+            line = block.blockNumber()
+            info = self._vcs_blame_data.get(line)
+            if info:
+                geom = self.blockBoundingGeometry(block).translated(self.contentOffset())
+                top = int(geom.top())
+                if top > viewport_h:
+                    break
+                author = info.get("author", "?")
+                when = info.get("time_str", "")
+                label = f"{author} {when}"
+                text_w = fm.horizontalAdvance(label)
+                x = viewport_w - text_w - scale(8)
+                if x > scale(40):
+                    painter.setPen(text_color)
+                    painter.drawText(x, top + fm.ascent(), label)
+            block = block.next()
+
+        painter.end()
+
     def _apply_font(self):
         font = QFont("Consolas", self._font_size)
         self.setFont(font)
@@ -472,21 +581,43 @@ class _CodeEditor(QPlainTextEdit):
         fm = QFontMetrics(self.font())
         return 6 + int(fm.horizontalAdvance("9") * digits) + 6
 
+    def blame_gutter_width(self) -> int:
+        if not self._show_blame or not self._vcs_blame_data:
+            return 0
+        fm = QFontMetrics(self.font())
+        max_w = 0
+        for info in self._vcs_blame_data.values():
+            author = info.get("author", "?")
+            when = info.get("time_str", "")
+            label = f"{author} {when}"
+            w = fm.horizontalAdvance(label)
+            if w > max_w:
+                max_w = w
+        return max_w + scale(16) if max_w > 0 else 0
+
     def _update_extra(self):
         lw = self.line_number_width()
         mw = self._minimap.width()
         if mw <= 0:
             mw = self._minimap.sizeHint().width()
 
+        bw = self.blame_gutter_width()
+
         self._line_number.setFixedWidth(lw)
+        self._blame_gutter.setFixedWidth(bw)
         self._minimap.setFixedWidth(mw)
-        self.setViewportMargins(lw, 0, mw, 0)
+
+        right_margin = mw + bw
+        self.setViewportMargins(lw, 0, right_margin, 0)
 
         cr = self.contentsRect()
         self._line_number.setGeometry(cr.x(), cr.y(), lw, cr.height())
-        self._minimap.setGeometry(cr.x() + cr.width() - mw, cr.y(), mw, cr.height())
+        blame_x = cr.x() + cr.width() - right_margin
+        self._blame_gutter.setGeometry(blame_x, cr.y(), bw, cr.height())
+        self._minimap.setGeometry(blame_x + bw, cr.y(), mw, cr.height())
 
         self._line_number.update()
+        self._blame_gutter.update()
         self._minimap.update()
 
     def _update_line_number(self):
@@ -502,8 +633,10 @@ class _CodeEditor(QPlainTextEdit):
     def _on_update_request(self, rect, dy):
         if dy:
             self._line_number.scroll(0, dy)
+            self._blame_gutter.scroll(0, dy)
         else:
             self._line_number.update(0, rect.y(), self._line_number.width(), rect.height())
+            self._blame_gutter.update(0, rect.y(), self._blame_gutter.width(), rect.height())
         self._minimap.update()
 
     def resizeEvent(self, event):
@@ -637,16 +770,39 @@ class _CodeEditor(QPlainTextEdit):
         cur_block = self.textCursor().blockNumber()
         fm = painter.fontMetrics()
 
+        vcs_colors = {
+            "added": QColor("#3C9B3C"),
+            "modified": QColor("#3C6E9B"),
+            "deleted": QColor("#9B3C3C"),
+        }
+
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
-                txt = str(block_number + 1)
-                if block_number == cur_block:
+                line = block_number
+                txt = str(line + 1)
+
+                vcs_status = self._vcs_diff_data.get(line, "")
+
+                if line == cur_block:
                     painter.fillRect(0, top, area.width(), int(self.blockBoundingRect(block).height()), QColor("#222222"))
                     painter.setPen(QColor("#c8c8c8"))
+                elif vcs_status in vcs_colors:
+                    painter.setPen(vcs_colors[vcs_status])
                 else:
                     painter.setPen(QColor("#5a5a5a"))
+
+                if vcs_status in vcs_colors:
+                    marker_w = scale(3)
+                    painter.fillRect(0, top, marker_w, int(self.blockBoundingRect(block).height()), vcs_colors[vcs_status])
+
                 painter.drawText(0, top, area.width() - scale(4), fm.height(),
                                  Qt.AlignmentFlag.AlignRight, txt)
+
+                if vcs_status:
+                    painter.setPen(QColor("#5a5a5a"))
+                    offset_x = area.width()
+                    dot_size = scale(4)
+                    painter.drawRect(offset_x - dot_size - scale(2), top + (fm.height() - dot_size) // 2, dot_size, dot_size)
 
             block = block.next()
             top = bottom
@@ -654,6 +810,71 @@ class _CodeEditor(QPlainTextEdit):
                 break
             bottom = top + int(self.blockBoundingRect(block).height())
             block_number += 1
+
+        painter.end()
+
+    def line_number_mouse_move(self, event: QMouseEvent, area):
+        y = int(event.position().y())
+        block = self._find_block_at_y(y)
+        if block is not None:
+            line = block.blockNumber()
+            if line in self._vcs_blame_data:
+                self._vcs_hover_line = line
+                info = self._vcs_blame_data[line]
+                author = info.get("author", "?")
+                email = info.get("email", "")
+                when = info.get("time_str", "")
+                rev = info.get("short", "")
+                msg = info.get("message", "")
+                tip = f"{author} <{email}>  {when}\n{rev}  {msg}"
+                self.setToolTip(tip)
+            else:
+                self._vcs_hover_line = -1
+                self.setToolTip("")
+        area.update()
+
+    def line_number_mouse_leave(self, event):
+        self._vcs_hover_line = -1
+        self.setToolTip("")
+
+    def _find_block_at_y(self, y: int) -> QTextBlock | None:
+        block = self.firstVisibleBlock()
+        while block.isValid():
+            geom = self.blockBoundingGeometry(block).translated(self.contentOffset())
+            top = int(geom.top())
+            bottom = top + int(self.blockBoundingRect(block).height())
+            if top <= y <= bottom:
+                return block
+            if top > y:
+                return None
+            block = block.next()
+        return None
+
+    def blame_gutter_paint(self, event, area):
+        painter = QPainter(area)
+        painter.fillRect(event.rect(), QColor("#1b1b1b"))
+        painter.setFont(self.font())
+
+        if not self._show_blame or not self._vcs_blame_data:
+            painter.end()
+            return
+
+        text_color = QColor("#6b7888")
+        fm = painter.fontMetrics()
+
+        block = self.firstVisibleBlock()
+        while block.isValid():
+            line = block.blockNumber()
+            info = self._vcs_blame_data.get(line)
+            if info:
+                geom = self.blockBoundingGeometry(block).translated(self.contentOffset())
+                top = int(geom.top())
+                author = info.get("author", "?")
+                when = info.get("time_str", "")
+                label = f"{author} {when}"
+                painter.setPen(text_color)
+                painter.drawText(scale(4), top + fm.ascent(), label)
+            block = block.next()
 
         painter.end()
 
@@ -913,6 +1134,126 @@ class _CodeEditor(QPlainTextEdit):
             return
         super().wheelEvent(event)
 
+    def vcs_set_git(self, git: _Git | None):
+        self._vcs_git = git
+
+    def vcs_set_file(self, path: str):
+        self._vcs_file_path = path
+        self.vcs_refresh()
+
+    def vcs_refresh(self):
+        self._vcs_blame_data = {}
+        self._vcs_diff_data = {}
+        self._vcs_status = ""
+        self._vcs_branch = ""
+
+        if not self._vcs_git or not self._vcs_git.available or not self._vcs_git.repo_root:
+            self._update_extra()
+            return
+
+        if not self._vcs_file_path:
+            self._update_extra()
+            return
+
+        try:
+            rel = os.path.relpath(self._vcs_file_path, self._vcs_git.repo_root)
+        except ValueError:
+            self._update_extra()
+            return
+        rel = rel.replace("\\", "/")
+
+        self._vcs_branch = self._vcs_git.current_branch()
+
+        rc, out, _ = self._vcs_git.status()
+        if rc == 0:
+            for entry in out.strip().split("\n"):
+                entry = entry.rstrip()
+                if not entry or len(entry) < 3:
+                    continue
+                xy = entry[:2]
+                path = entry[3:]
+                if path == rel:
+                    if xy[0] == "?" and xy[1] == "?":
+                        self._vcs_status = "untracked"
+                    elif xy[0] == "M" or xy[1] == "M" or xy[0] == "A":
+                        self._vcs_status = "modified"
+                    elif xy[0] == "D" or xy[1] == "D":
+                        self._vcs_status = "deleted"
+                    elif xy[0] == "U" or xy[1] == "U":
+                        self._vcs_status = "conflict"
+                    break
+
+        diff_text = self._vcs_git.file_diff(rel)
+        if diff_text:
+            added_lines = set()
+            for line in diff_text.split("\n"):
+                m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                if m:
+                    current = int(m.group(1))
+                    continue
+
+            for line in diff_text.split("\n"):
+                if line.startswith("@@ "):
+                    m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                    if m:
+                        current = int(m.group(1))
+                elif line.startswith("+"):
+                    self._vcs_diff_data[current - 1] = "added"
+                    current += 1
+                elif line.startswith("-"):
+                    pass
+                elif line.startswith(" "):
+                    current += 1
+
+        if self._show_blame:
+            if "GIT_AUTHOR_NAME" not in os.environ:
+                os.environ["GIT_AUTHOR_NAME"] = ""
+            if "GIT_COMMITTER_NAME" not in os.environ:
+                os.environ["GIT_COMMITTER_NAME"] = ""
+            blame_text = self._vcs_git.blame(self._vcs_file_path)
+            if blame_text:
+                for bline in blame_text.strip().split("\n"):
+                    if not bline.strip():
+                        continue
+                    parts = bline.split("\t")
+                    if len(parts) >= 4:
+                        try:
+                            rev_info = parts[0].strip()
+                            line_num_part = parts[2].strip().rstrip(")")
+                            line_num = int(line_num_part.split()[0]) - 1
+                            author = parts[1].strip()
+                            time_str = parts[3].strip() if len(parts) > 3 else ""
+                            self._vcs_blame_data[line_num] = {
+                                "author": author,
+                                "short": rev_info[:7],
+                                "time_str": time_str,
+                                "email": "",
+                                "message": "",
+                            }
+                        except (ValueError, IndexError):
+                            pass
+
+        self._update_extra()
+        self._line_number.update()
+        self._blame_gutter.update()
+        self.viewport().update()
+
+    def vcs_set_blame_visible(self, visible: bool):
+        self._show_blame = visible
+        self.vcs_refresh()
+        self._update_extra()
+        self._blame_gutter.update()
+        self.viewport().update()
+
+    def vcs_is_blame_visible(self) -> bool:
+        return self._show_blame
+
+    def vcs_branch(self) -> str:
+        return self._vcs_branch
+
+    def vcs_file_status(self) -> str:
+        return self._vcs_status
+
 
 class _CloseableTabWidget(QTabWidget):
     def __init__(self, parent=None):
@@ -939,10 +1280,11 @@ class _CloseableTabWidget(QTabWidget):
 class _ScriptTab(QWidget):
     closed = pyqtSignal(QWidget)
 
-    def __init__(self, parent=None):
+    def __init__(self, git: _Git | None = None, parent=None):
         super().__init__(parent)
         self._file_path: Optional[str] = None
         self._dirty = False
+        self._vcs_git = git
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -952,6 +1294,7 @@ class _ScriptTab(QWidget):
         self._highlighter = _PythonHighlighter(self._editor.document())
         self._editor.textChanged.connect(self._on_text_changed)
         self._editor.refresh_completions()
+        self._editor.vcs_set_git(git)
 
         layout.addWidget(self._editor)
 
@@ -971,7 +1314,8 @@ class _ScriptTab(QWidget):
 
     def _tab_title(self) -> str:
         base = os.path.basename(self._file_path) if self._file_path else "Untitled"
-        return f"{base}*" if self._dirty else base
+        suffix = "*" if self._dirty else ""
+        return f"{base}{suffix}"
 
     def _update_title(self):
         tabs = self.parent()
@@ -1009,6 +1353,7 @@ class _ScriptTab(QWidget):
             self._file_path = path
             self._dirty = False
             self._editor.document().setModified(False)
+            self._editor.vcs_set_file(path)
             self._update_title()
         except Exception as e:
             QMessageBox.critical(self, "Open Error", f"Failed to open:\n{e}")
@@ -1020,6 +1365,7 @@ class _ScriptTab(QWidget):
                     f.write(self._editor.toPlainText())
                 self._dirty = False
                 self._editor.document().setModified(False)
+                self._editor.vcs_set_file(self._file_path)
                 self._update_title()
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Failed to save:\n{e}")
@@ -1042,6 +1388,11 @@ class _ScriptTab(QWidget):
         self._file_path = None
         self._dirty = False
         self._editor.document().setModified(False)
+        self._editor._vcs_diff_data = {}
+        self._editor._vcs_blame_data = {}
+        self._editor._vcs_status = ""
+        self._editor._vcs_branch = ""
+        self._editor._update_extra()
         self._update_title()
 
 
@@ -1050,7 +1401,47 @@ class _ScriptEditorWidget(QWidget):
         super().__init__(parent)
         self._zoom = _CodeEditor.DEFAULT_FONT
         self._wrap = False
+
+        self._git = _Git()
+        self._git_available = False
+        self._vcs_refresh_timer = QTimer(self)
+        self._vcs_refresh_timer.timeout.connect(self._vcs_timer_tick)
+        self._vcs_refresh_timer.start(3000)
+
         self._setup_ui()
+        self._try_detect_repo()
+
+    def _try_detect_repo(self):
+        eng = None
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+        except Exception:
+            pass
+        if eng:
+            project_path = getattr(eng, "_project_path", "") or ""
+            if project_path:
+                self._git_available = self._git.detect(project_path)
+                self._update_vcs_statusbar()
+                return
+        self._git_available = False
+        self._update_vcs_statusbar()
+
+    def _vcs_timer_tick(self):
+        eng = None
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+        except Exception:
+            pass
+        if eng:
+            project_path = getattr(eng, "_project_path", "") or ""
+            if project_path:
+                self._git_available = self._git.detect(project_path)
+                tab = self._current_tab()
+                if tab and tab._file_path and self._git_available:
+                    tab._editor.vcs_refresh()
+                self._update_vcs_statusbar()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -1120,6 +1511,14 @@ class _ScriptEditorWidget(QWidget):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
+
+        self._vcs_branch_label = QLabel("")
+        self._vcs_branch_label.setStyleSheet("color: #9a9a9a; padding: 0 4px; font-weight: bold;")
+        toolbar.addWidget(self._vcs_branch_label)
+
+        self._vcs_status_label = QLabel("")
+        self._vcs_status_label.setStyleSheet("color: #9a9a9a; padding: 0 4px;")
+        toolbar.addWidget(self._vcs_status_label)
 
         self._file_label = QLabel("  No file")
         self._file_label.setStyleSheet("color: #9a9a9a; padding: 0 6px;")
@@ -1212,6 +1611,31 @@ class _ScriptEditorWidget(QWidget):
         self._act_run.setToolTip("Run Script")
         self._act_run.triggered.connect(self._run_current)
 
+        self._act_blame = QAction("Annotate with Git Blame", self)
+        self._act_blame.setToolTip("Toggle git blame annotations")
+        self._act_blame.setCheckable(True)
+        self._act_blame.setShortcut(QKeySequence("Ctrl+Shift+B"))
+        self._act_blame.triggered.connect(self._toggle_blame)
+
+        self._act_vcs_commit = QAction("Commit File...", self)
+        self._act_vcs_commit.setToolTip("Commit current file")
+        self._act_vcs_commit.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        self._act_vcs_commit.triggered.connect(self._vcs_commit)
+
+        self._act_vcs_diff = QAction("Diff with HEAD", self)
+        self._act_vcs_diff.setToolTip("Show diff of current file against HEAD")
+        self._act_vcs_diff.setShortcut(QKeySequence("Ctrl+Shift+D"))
+        self._act_vcs_diff.triggered.connect(self._vcs_diff)
+
+        self._act_vcs_history = QAction("Show History", self)
+        self._act_vcs_history.setToolTip("Show git log for current file")
+        self._act_vcs_history.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        self._act_vcs_history.triggered.connect(self._vcs_history)
+
+        self._act_vcs_revert = QAction("Revert File...", self)
+        self._act_vcs_revert.setToolTip("Discard changes and revert to HEAD")
+        self._act_vcs_revert.triggered.connect(self._vcs_revert)
+
     def _build_menubar(self, menubar: QMenuBar):
         file_menu = menubar.addMenu("File")
         file_menu.addAction(self._act_new)
@@ -1242,6 +1666,9 @@ class _ScriptEditorWidget(QWidget):
         self._act_indent_m.triggered.connect(self._toggle_indent_menu)
         view_menu.addAction(self._act_indent_m)
 
+        view_menu.addSeparator()
+        view_menu.addAction(self._act_blame)
+
         act_zoom_in = QAction("Zoom In", self)
         act_zoom_in.setShortcut(QKeySequence("Ctrl+="))
         act_zoom_in.triggered.connect(lambda: self._apply_zoom(1))
@@ -1251,6 +1678,13 @@ class _ScriptEditorWidget(QWidget):
         act_zoom_out.setShortcut(QKeySequence("Ctrl+-"))
         act_zoom_out.triggered.connect(lambda: self._apply_zoom(-1))
         view_menu.addAction(act_zoom_out)
+
+        vcs_menu = menubar.addMenu("VCS")
+        vcs_menu.addAction(self._act_vcs_commit)
+        vcs_menu.addAction(self._act_vcs_diff)
+        vcs_menu.addAction(self._act_vcs_history)
+        vcs_menu.addSeparator()
+        vcs_menu.addAction(self._act_vcs_revert)
 
         run_menu = menubar.addMenu("Run")
         self._act_run_m = QAction("Run Script", self)
@@ -1269,7 +1703,7 @@ class _ScriptEditorWidget(QWidget):
         tab._editor.modificationChanged.connect(self._on_modified)
 
     def _new_tab(self):
-        tab = _ScriptTab()
+        tab = _ScriptTab(git=self._git)
         tab.closed.connect(self._on_tab_closed)
         tab.set_font_size(self._zoom)
         tab.set_wrap(self._wrap)
@@ -1279,6 +1713,7 @@ class _ScriptEditorWidget(QWidget):
         self._tabs.setCurrentWidget(tab)
 
         self._update_label()
+        self._update_vcs_statusbar()
         self._on_cursor(1, 1)
 
     def _open_tab(self):
@@ -1293,7 +1728,7 @@ class _ScriptEditorWidget(QWidget):
                     self._tabs.setCurrentWidget(existing)
                     return
 
-            tab = _ScriptTab()
+            tab = _ScriptTab(git=self._git)
             tab.closed.connect(self._on_tab_closed)
             tab.set_font_size(self._zoom)
             tab.set_wrap(self._wrap)
@@ -1304,6 +1739,7 @@ class _ScriptEditorWidget(QWidget):
             self._tabs.setCurrentWidget(tab)
 
             self._update_label()
+            self._update_vcs_statusbar()
             self._on_cursor(1, 1)
 
     def _save_current(self):
@@ -1311,12 +1747,14 @@ class _ScriptEditorWidget(QWidget):
         if tab is not None:
             tab.save()
             self._update_label()
+            self._update_vcs_statusbar()
 
     def _save_current_as(self):
         tab = self._current_tab()
         if tab is not None:
             tab.save_as()
             self._update_label()
+            self._update_vcs_statusbar()
 
     def _undo(self):
         ed = self._active_editor()
@@ -1364,6 +1802,12 @@ class _ScriptEditorWidget(QWidget):
     def _toggle_indent_menu(self, checked: bool):
         self._toggle_indent(checked)
 
+    def _toggle_blame(self, checked: bool):
+        for i in range(self._tabs.count()):
+            tab = self._tabs.widget(i)
+            if isinstance(tab, _ScriptTab):
+                tab._editor.vcs_set_blame_visible(checked)
+
     def _apply_zoom(self, delta: int, size: int = 0):
         if delta != 0:
             self._zoom = max(_CodeEditor.MIN_FONT, min(_CodeEditor.MAX_FONT, self._zoom + delta))
@@ -1389,8 +1833,128 @@ class _ScriptEditorWidget(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Run Error", f"Failed to run:\n{e}")
 
+    def _vcs_commit(self):
+        tab = self._current_tab()
+        if not tab or not tab._file_path:
+            return
+        if not self._git_available or not self._git.repo_root:
+            QMessageBox.information(self, "No Repository", "No git repository detected.")
+            return
+
+        try:
+            rel = os.path.relpath(tab._file_path, self._git.repo_root)
+        except ValueError:
+            return
+        rel = rel.replace("\\", "/")
+
+        rc, _, _ = self._git.add([rel])
+        if rc != 0:
+            QMessageBox.warning(self, "Stage Failed", "Failed to stage file.")
+            return
+
+        msg, ok = QInputDialog.getText(self, "Commit", "Commit message:")
+        if not ok or not msg.strip():
+            self._git.unstage([rel])
+            return
+
+        rc, out, err = self._git.commit(msg.strip())
+        if rc == 0:
+            QMessageBox.information(self, "Committed", f"Committed:\n{msg.strip()}")
+            tab._editor.vcs_refresh()
+            self._update_vcs_statusbar()
+        else:
+            QMessageBox.critical(self, "Commit Failed", f"Error:\n{err or out}")
+
+    def _vcs_diff(self):
+        tab = self._current_tab()
+        if not tab or not tab._file_path:
+            return
+        if not self._git_available or not self._git.repo_root:
+            return
+
+        try:
+            rel = os.path.relpath(tab._file_path, self._git.repo_root)
+        except ValueError:
+            return
+        rel = rel.replace("\\", "/")
+
+        diff = self._git.file_diff(rel)
+        if not diff:
+            diff = self._git.file_diff(rel, staged=True)
+        if not diff:
+            diff = "No changes against HEAD"
+
+        from editor.panels.vcs_panel import _DiffView
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Diff: {os.path.basename(tab._file_path)}")
+        dlg.setMinimumSize(scale(700), scale(500))
+        layout = QVBoxLayout(dlg)
+        diff_view = _DiffView()
+        diff_view.show_diff(diff)
+        layout.addWidget(diff_view)
+        dlg.exec()
+
+    def _vcs_history(self):
+        tab = self._current_tab()
+        if not tab or not tab._file_path:
+            return
+        if not self._git_available or not self._git.repo_root:
+            return
+
+        try:
+            rel = os.path.relpath(tab._file_path, self._git.repo_root)
+        except ValueError:
+            return
+        rel = rel.replace("\\", "/")
+
+        rc, out, _ = self._git.run_sync("log", "--oneline", "--decorate", "--", rel, timeout=15)
+        if rc != 0 or not out.strip():
+            QMessageBox.information(self, "History", "No history for this file.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"History: {os.path.basename(tab._file_path)}")
+        dlg.setMinimumSize(scale(600), scale(400))
+        layout = QVBoxLayout(dlg)
+        te = QPlainTextEdit()
+        te.setReadOnly(True)
+        te.setFont(QFont("Courier New", 10))
+        te.setPlainText(out)
+        layout.addWidget(te)
+        dlg.exec()
+
+    def _vcs_revert(self):
+        tab = self._current_tab()
+        if not tab or not tab._file_path:
+            return
+        if not self._git_available or not self._git.repo_root:
+            return
+
+        reply = QMessageBox.question(
+            self, "Revert File",
+            f"Discard all changes to {os.path.basename(tab._file_path)}?\n"
+            f"This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            rel = os.path.relpath(tab._file_path, self._git.repo_root)
+        except ValueError:
+            return
+        rel = rel.replace("\\", "/")
+
+        rc, _, err = self._git.restore([rel])
+        if rc == 0:
+            tab.open_file(tab._file_path)
+            self._update_vcs_statusbar()
+        else:
+            QMessageBox.critical(self, "Revert Failed", f"Error:\n{err}")
+
     def _on_tab_changed(self, index: int):
         self._update_label()
+        self._update_vcs_statusbar()
         ed = self._active_editor()
         if ed is not None:
             line = ed.textCursor().blockNumber() + 1
@@ -1420,6 +1984,36 @@ class _ScriptEditorWidget(QWidget):
             self._file_label.setText(f"  {os.path.basename(tab._file_path)}")
         else:
             self._file_label.setText("  Untitled Script")
+
+    def _update_vcs_statusbar(self):
+        branch = ""
+        status = ""
+        if self._git_available and self._git.repo_root:
+            branch = self._git.current_branch()
+            if not branch:
+                branch = ""
+
+            tab = self._current_tab()
+            if isinstance(tab, _ScriptTab):
+                ed = tab._editor
+                file_status = ed.vcs_file_status()
+                if file_status:
+                    status_labels = {
+                        "modified": "● modified",
+                        "untracked": "● untracked",
+                        "deleted": "● deleted",
+                        "conflict": "● conflict",
+                    }
+                    status = status_labels.get(file_status, file_status)
+
+        if branch:
+            self._vcs_branch_label.setText(f"  [{branch}]  ")
+            self._vcs_branch_label.show()
+            self._vcs_status_label.setText(status)
+            self._vcs_status_label.show()
+        else:
+            self._vcs_branch_label.hide()
+            self._vcs_status_label.hide()
 
 
 class ScriptEditorPanel(QDockWidget):
