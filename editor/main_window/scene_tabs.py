@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal, Qt
@@ -14,6 +15,47 @@ from PyQt6.QtWidgets import QTabBar, QMessageBox
 
 from core.ecs.ecs import Scene
 from core.math.math3d import Vec3
+
+try:
+    import qtawesome as qta
+except ImportError:
+    qta = None
+
+_QTA_COLORS = {"#d4d4d4": "#d4d4d4"}
+
+def _qta_icon(name: str) -> QIcon:
+    if qta is None:
+        return QIcon()
+    return qta.icon(name, color="#d4d4d4")
+
+def _icon_for_script(path: str) -> QIcon:
+    ext = os.path.splitext(path)[1].lower()
+    mapping = {
+        ".py": "fa5b.python",
+        ".txt": "fa5s.file-alt",
+        ".md": "fa5s.file-alt",
+        ".json": "fa5s.file-code",
+        ".xml": "fa5s.file-code",
+        ".yaml": "fa5s.file-code",
+        ".yml": "fa5s.file-code",
+        ".toml": "fa5s.file-code",
+        ".cfg": "fa5s.file-code",
+        ".ini": "fa5s.file-code",
+        ".csv": "fa5s.file-csv",
+        ".html": "fa5s.file-code",
+        ".css": "fa5s.file-code",
+        ".js": "fa5s.file-code",
+        ".ts": "fa5s.file-code",
+        ".sh": "fa5s.terminal",
+        ".bat": "fa5s.terminal",
+        ".ps1": "fa5s.terminal",
+        ".cpp": "fa5s.file-code",
+        ".h": "fa5s.file-code",
+        ".rs": "fa5s.file-code",
+        ".go": "fa5s.file-code",
+    }
+    name = mapping.get(ext, "fa5s.file")
+    return _qta_icon(name)
 
 
 class SceneTabInfo:
@@ -36,6 +78,10 @@ class SceneTabInfo:
 class SceneTabManager(QObject):
     tab_switched = pyqtSignal(str)
     tab_added = pyqtSignal(str)
+    script_tab_selected = pyqtSignal(str)
+    script_tab_closed = pyqtSignal(str)
+
+    SCRIPT_TAB_PREFIX = "__script__"
 
     def __init__(self, engine, tab_bar: QTabBar, mw):
         super().__init__(mw)
@@ -49,10 +95,65 @@ class SceneTabManager(QObject):
 
         tab_bar.currentChanged.connect(self._on_tab_changed)
         tab_bar.tabCloseRequested.connect(self._on_tab_close_requested)
+        tab_bar.tabMoved.connect(self._on_tab_moved)
         tab_bar.setTabsClosable(True)
         tab_bar.setMovable(True)
         tab_bar.setDrawBase(False)
         tab_bar.setExpanding(False)
+
+    def add_script_tab(self, path: str, title: str) -> int:
+        pos = len(self._tab_names)
+        idx = self._tab_bar.insertTab(pos, title)
+        self._tab_bar.setTabData(idx, self.SCRIPT_TAB_PREFIX + path)
+        self._tab_bar.setTabIcon(idx, _icon_for_script(path))
+        return idx
+
+    def is_script_tab(self, idx: int) -> bool:
+        data = self._tab_bar.tabData(idx)
+        return isinstance(data, str) and data.startswith(self.SCRIPT_TAB_PREFIX)
+
+    def script_path_at(self, idx: int) -> str:
+        data = self._tab_bar.tabData(idx)
+        if isinstance(data, str) and data.startswith(self.SCRIPT_TAB_PREFIX):
+            return data[len(self.SCRIPT_TAB_PREFIX):]
+        return ""
+
+    def update_script_tab_title(self, path: str, title: str):
+        for i in range(self._tab_bar.count()):
+            if self.script_path_at(i) == path:
+                self._tab_bar.setTabText(i, title)
+                break
+
+    def remove_script_tab_by_path(self, path: str):
+        for i in range(self._tab_bar.count()):
+            if self.script_path_at(i) == path:
+                self._tab_bar.removeTab(i)
+                break
+
+    def _on_tab_moved(self, from_idx: int, to_idx: int):
+        self._tab_names = []
+        for i in range(self._tab_bar.count()):
+            data = self._tab_bar.tabData(i)
+            if isinstance(data, str) and not data.startswith(self.SCRIPT_TAB_PREFIX):
+                self._tab_names.append(data)
+
+    _ZARIN_ICON = None
+
+    @classmethod
+    def _get_zarin_icon(cls) -> QIcon:
+        if cls._ZARIN_ICON is None:
+            svg = os.path.join(os.path.dirname(__file__), "..", "..", "zarin_icon.svg")
+            if os.path.exists(svg):
+                cls._ZARIN_ICON = QIcon(svg)
+            else:
+                cls._ZARIN_ICON = QIcon()
+        return cls._ZARIN_ICON
+
+    def _scene_tab_idx(self, tab_name: str) -> int:
+        for i in range(self._tab_bar.count()):
+            if self._tab_bar.tabData(i) == tab_name:
+                return i
+        return -1
 
     def add_tab(self, name: str, path: Optional[str] = None, scene: Optional[Scene] = None) -> str:
         tab_name = self._unique_name(name)
@@ -65,29 +166,35 @@ class SceneTabManager(QObject):
             scene = self._engine.scene
         info = SceneTabInfo(tab_name, path, scene)
         self._tabs[tab_name] = info
+        pos = len(self._tab_names)
         self._tab_names.append(tab_name)
-        self._tab_bar.addTab(tab_name)
-        self._tab_bar.setCurrentIndex(self._tab_bar.count() - 1)
+        idx = self._tab_bar.insertTab(pos, tab_name)
+        self._tab_bar.setTabData(idx, tab_name)
+        self._tab_bar.setTabIcon(idx, self._get_zarin_icon())
+        self._tab_bar.setCurrentIndex(idx)
         self.tab_added.emit(tab_name)
         return tab_name
 
     def remove_tab(self, tab_name: str):
         if tab_name not in self._tabs:
             return
-        idx = self._tab_names.index(tab_name)
+        idx = self._scene_tab_idx(tab_name)
         self._tab_names.remove(tab_name)
         self._tabs.pop(tab_name, None)
-        self._tab_bar.removeTab(idx)
+        if idx >= 0:
+            self._tab_bar.removeTab(idx)
 
     def switch_to_tab(self, tab_name: str):
         if tab_name not in self._tabs:
             return
-        idx = self._tab_names.index(tab_name)
-        self._tab_bar.setCurrentIndex(idx)
+        idx = self._scene_tab_idx(tab_name)
+        if idx >= 0:
+            self._tab_bar.setCurrentIndex(idx)
 
     def tab_name_at(self, idx: int) -> Optional[str]:
-        if 0 <= idx < len(self._tab_names):
-            return self._tab_names[idx]
+        data = self._tab_bar.tabData(idx)
+        if isinstance(data, str) and not data.startswith(self.SCRIPT_TAB_PREFIX):
+            return data
         return None
 
     @property
@@ -140,6 +247,11 @@ class SceneTabManager(QObject):
     def _on_tab_changed(self, idx: int):
         if self._switching:
             return
+        if self.is_script_tab(idx):
+            self._save_current_to_tab()
+            self._active_tab = None
+            self.script_tab_selected.emit(self.script_path_at(idx))
+            return
         self._switching = True
         try:
             target = self.tab_name_at(idx)
@@ -173,6 +285,11 @@ class SceneTabManager(QObject):
             self._switching = False
 
     def _on_tab_close_requested(self, idx: int):
+        if self.is_script_tab(idx):
+            path = self.script_path_at(idx)
+            self.script_tab_closed.emit(path)
+            self._tab_bar.removeTab(idx)
+            return
         tab_name = self.tab_name_at(idx)
         if tab_name is None:
             return
@@ -274,7 +391,9 @@ class SceneTabManager(QObject):
 
         if hasattr(self._mw, '_hierarchy'):
             self._mw._hierarchy.refresh()
-        self._tab_bar.setTabText(self._tab_names.index(info.name) if info.name in self._tab_names else 0, info.name)
+        idx = self._scene_tab_idx(info.name)
+        if idx >= 0:
+            self._tab_bar.setTabText(idx, info.name)
 
     def _save_scene_tab(self, info: SceneTabInfo):
         if info.scene is None:
@@ -302,6 +421,9 @@ class SceneTabManager(QObject):
         PAD = 2
         for tab_name in self._tab_names:
             colors = tab_peers.get(tab_name, [])
+            idx = self._scene_tab_idx(tab_name)
+            if idx < 0:
+                continue
             if colors:
                 n = len(colors)
                 pw = DOT_SIZE * n + PAD * (n - 1) + PAD * 2
@@ -317,10 +439,8 @@ class SceneTabManager(QObject):
                         cx = PAD + i * (DOT_SIZE + PAD) + DOT_SIZE // 2
                         cy = PAD + DOT_SIZE // 2
                         p.drawEllipse(cx - DOT_SIZE // 2, cy - DOT_SIZE // 2, DOT_SIZE, DOT_SIZE)
-                idx = self._tab_names.index(tab_name)
                 self._tab_bar.setTabIcon(idx, QIcon(pix))
             else:
-                idx = self._tab_names.index(tab_name)
                 self._tab_bar.setTabIcon(idx, QIcon())
 
     def update_tab_name(self, old_name: str, new_name: str):
@@ -329,8 +449,11 @@ class SceneTabManager(QObject):
         info = self._tabs.pop(old_name)
         info.name = new_name
         self._tabs[new_name] = info
-        idx = self._tab_names.index(old_name)
-        self._tab_names[idx] = new_name
-        self._tab_bar.setTabText(idx, new_name)
+        idx = self._scene_tab_idx(old_name)
+        if idx >= 0:
+            self._tab_bar.setTabData(idx, new_name)
+            self._tab_bar.setTabText(idx, new_name)
+        name_idx = self._tab_names.index(old_name)
+        self._tab_names[name_idx] = new_name
         if self._active_tab == old_name:
             self._active_tab = new_name

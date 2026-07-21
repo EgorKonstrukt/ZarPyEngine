@@ -73,6 +73,7 @@ class EditorMainWindow(QMainWindow):
         setup_toolbar(self)
         self._scene_tab_manager = SceneTabManager(self._engine, self._scene_tab_bar, self)
         self._init_collab_scene_tabs()
+        self._init_script_tabs()
         setup_statusbar(self)
         connect_signals(self)
         restore_camera(self)
@@ -83,9 +84,11 @@ class EditorMainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: post_init(self))
 
     def _init_collab_scene_tabs(self):
+        mgr = self._scene_tab_manager
+        mgr.tab_switched.connect(lambda name: self._on_scene_tab_switched(name))
+        mgr.tab_added.connect(lambda name: self._on_scene_tab_added(name))
         collab = self._engine.collab_manager
         if collab:
-            mgr = self._scene_tab_manager
             self._collab_proxy = _CollabProxy()
             self._collab_proxy.scene_open.connect(self._on_remote_scene_open)
             self._collab_proxy.tab_switch.connect(self._on_remote_tab_switch)
@@ -96,9 +99,71 @@ class EditorMainWindow(QMainWindow):
             collab.set_on_remote_tab_close(lambda name: self._collab_proxy.tab_close.emit(name))
             collab.set_peer_joined_callback(lambda _: self._collab_proxy.peers_changed.emit())
             collab.set_peer_left_callback(lambda _: self._collab_proxy.peers_changed.emit())
-            mgr.tab_switched.connect(lambda name: self._on_scene_tab_switched(name))
-            mgr.tab_added.connect(lambda name: self._on_scene_tab_added(name))
             print("[COLLAB] Tab callbacks registered", flush=True)
+
+    def _init_script_tabs(self):
+        sw = self._script_editor._script_widget
+        mgr = self._scene_tab_manager
+        self._syncing_script = False
+
+        for i in range(sw._tabs.count()):
+            tab = sw._tabs.widget(i)
+            path = tab._file_path or ""
+            mgr.add_script_tab(path, tab._tab_title())
+
+        sw.tab_opened.connect(self._on_script_tab_opened)
+        sw.tab_closed.connect(self._on_script_tab_closed_internal)
+        sw.tab_switched.connect(self._on_script_internal_tab_switched)
+        mgr.script_tab_selected.connect(self._on_script_tab_in_bar_selected)
+        mgr.script_tab_closed.connect(self._on_script_tab_closed_from_bar)
+
+    def _on_script_tab_opened(self, path: str):
+        sw = self._script_editor._script_widget
+        for i in range(sw._tabs.count()):
+            tab = sw._tabs.widget(i)
+            if tab._file_path == path:
+                self._scene_tab_manager.add_script_tab(path, tab._tab_title())
+                return
+
+    def _on_script_tab_closed_internal(self, path: str):
+        self._scene_tab_manager.remove_script_tab_by_path(path)
+
+    def _on_script_tab_in_bar_selected(self, path: str):
+        sw = self._script_editor._script_widget
+        tab = sw._current_tab()
+        if tab and (tab._file_path or "") == path:
+            self._script_editor.show()
+            self._script_editor.raise_()
+            return
+        if self._syncing_script:
+            return
+        self._syncing_script = True
+        try:
+            sw.open_script(path)
+            self._script_editor.show()
+            self._script_editor.raise_()
+        finally:
+            self._syncing_script = False
+
+    def _on_script_tab_closed_from_bar(self, path: str):
+        sw = self._script_editor._script_widget
+        for i in range(sw._tabs.count()):
+            tab = sw._tabs.widget(i)
+            if tab._file_path == path:
+                tab._close_self()
+                return
+
+    def _on_script_internal_tab_switched(self, path: str):
+        if self._syncing_script:
+            return
+        mgr = self._scene_tab_manager
+        for i in range(self._scene_tab_bar.count()):
+            if mgr.script_path_at(i) == path:
+                if self._scene_tab_bar.currentIndex() != i:
+                    self._scene_tab_bar.blockSignals(True)
+                    self._scene_tab_bar.setCurrentIndex(i)
+                    self._scene_tab_bar.blockSignals(False)
+                return
 
     def _on_remote_scene_open(self, data: dict):
         try:
@@ -157,6 +222,8 @@ class EditorMainWindow(QMainWindow):
         self._scene_tab_manager.update_peer_indicators(tab_peers)
 
     def _on_scene_tab_switched(self, name: str):
+        self._viewport_dock.show()
+        self._viewport_dock.raise_()
         collab = self._engine.collab_manager
         if collab:
             collab.set_current_tab(name)

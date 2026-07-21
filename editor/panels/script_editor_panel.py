@@ -1397,6 +1397,10 @@ class _ScriptTab(QWidget):
 
 
 class _ScriptEditorWidget(QWidget):
+    tab_opened = pyqtSignal(str)
+    tab_closed = pyqtSignal(str)
+    tab_switched = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._zoom = _CodeEditor.DEFAULT_FONT
@@ -1715,6 +1719,29 @@ class _ScriptEditorWidget(QWidget):
         self._update_label()
         self._update_vcs_statusbar()
         self._on_cursor(1, 1)
+        self.tab_opened.emit("")
+
+    def open_script(self, path: str):
+        for i in range(self._tabs.count()):
+            existing = self._tabs.widget(i)
+            if existing._file_path == path:
+                self._tabs.setCurrentWidget(existing)
+                return
+
+        tab = _ScriptTab(git=self._git)
+        tab.closed.connect(self._on_tab_closed)
+        tab.set_font_size(self._zoom)
+        tab.set_wrap(self._wrap)
+        self._bind_tab_signals(tab)
+
+        tab.open_file(path)
+        self._tabs.add_closeable_tab(tab, tab._tab_title())
+        self._tabs.setCurrentWidget(tab)
+
+        self._update_label()
+        self._update_vcs_statusbar()
+        self._on_cursor(1, 1)
+        self.tab_opened.emit(path)
 
     def _open_tab(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1722,25 +1749,7 @@ class _ScriptEditorWidget(QWidget):
             "Python Files (*.py);;All Files (*)"
         )
         if path:
-            for i in range(self._tabs.count()):
-                existing = self._tabs.widget(i)
-                if existing._file_path == path:
-                    self._tabs.setCurrentWidget(existing)
-                    return
-
-            tab = _ScriptTab(git=self._git)
-            tab.closed.connect(self._on_tab_closed)
-            tab.set_font_size(self._zoom)
-            tab.set_wrap(self._wrap)
-            self._bind_tab_signals(tab)
-
-            tab.open_file(path)
-            self._tabs.add_closeable_tab(tab, tab._tab_title())
-            self._tabs.setCurrentWidget(tab)
-
-            self._update_label()
-            self._update_vcs_statusbar()
-            self._on_cursor(1, 1)
+            self.open_script(path)
 
     def _save_current(self):
         tab = self._current_tab()
@@ -1960,13 +1969,18 @@ class _ScriptEditorWidget(QWidget):
             line = ed.textCursor().blockNumber() + 1
             col = ed.textCursor().positionInBlock() + 1
             self._on_cursor(line, col)
+        tab = self._current_tab()
+        if tab is not None:
+            self.tab_switched.emit(tab._file_path or "")
 
     def _on_tab_closed(self, tab: QWidget):
+        path = tab._file_path or ""
         index = self._tabs.indexOf(tab)
         if index >= 0:
             self._tabs.removeTab(index)
         if self._tabs.count() == 0:
             self._new_tab()
+        self.tab_closed.emit(path)
 
     def _on_cursor(self, line: int, col: int):
         self._status_pos.setText(f"Ln {line}, Col {col}")
