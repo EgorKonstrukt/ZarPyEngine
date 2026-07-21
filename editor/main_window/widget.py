@@ -92,8 +92,12 @@ class EditorMainWindow(QMainWindow):
         scene_data = data.get("data")
         if scene_data is None:
             return
+        from core.ecs.ecs import Scene, ComponentRegistry
+        scene = Scene.deserialize(scene_data, ComponentRegistry)
+        if path:
+            scene.path = path
         self._tab_add_lock = True
-        self._scene_tab_manager.add_tab(name, path, scene_data)
+        self._scene_tab_manager.add_tab(name, path=path, scene=scene)
         self._tab_add_lock = False
 
     def _on_scene_tab_added(self, name: str):
@@ -103,8 +107,9 @@ class EditorMainWindow(QMainWindow):
         collab = self._engine.collab_manager
         if collab and collab.connected:
             info = self._scene_tab_manager.get_tab_info(name)
-            if info and info.data:
-                collab.send_scene_open(info.name, info.path or "", info.data)
+            if info and info.scene:
+                data = info.scene.serialize()
+                collab.send_scene_open(info.name, info.path or "", data)
 
     def _on_scene_tab_switched(self, name: str):
         collab = self._engine.collab_manager

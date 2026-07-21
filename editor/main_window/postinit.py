@@ -17,10 +17,9 @@ from editor.splash import SplashScreen
 
 def _register_scene_tab(mw):
     if mw._engine.scene:
-        data = mw._engine.scene.serialize()
         path = mw._engine.scene.path or ""
         name = os.path.splitext(os.path.basename(path))[0] if path else (mw._engine.scene.name or "Untitled")
-        mw._scene_tab_manager.add_tab(name, path=path, data=data)
+        mw._scene_tab_manager.add_tab(name, path=path, scene=mw._engine.scene)
 
 
 def post_init(mw):
@@ -72,8 +71,7 @@ def post_init(mw):
         cam.add_component(Camera())
         sky_ent = scene.create_entity("Sky")
         sky_ent.add_component(Sky())
-        data = scene.serialize()
-        mw._scene_tab_manager.add_tab("SampleScene", data=data)
+        mw._scene_tab_manager.add_tab("SampleScene", scene=scene)
         mw._hierarchy.refresh()
         QTimer.singleShot(0, lambda: initial_dock_sizes(mw))
         from core.config.config import get_global_config

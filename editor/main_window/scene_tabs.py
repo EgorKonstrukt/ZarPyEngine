@@ -11,16 +11,18 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QTabBar, QMessageBox
 
-from core.ecs.ecs import Scene, ComponentRegistry
+from core.ecs.ecs import Scene
+from core.math.math3d import Vec3
 
 
 class SceneTabInfo:
-    __slots__ = ("name", "path", "data", "dirty")
-    def __init__(self, name: str = "Scene", path: Optional[str] = None, data: Optional[dict] = None):
+    __slots__ = ("name", "path", "scene", "dirty", "camera_state")
+    def __init__(self, name: str = "Scene", path: Optional[str] = None, scene: Optional[Scene] = None):
         self.name = name
         self.path = path
-        self.data = data
+        self.scene = scene
         self.dirty = False
+        self.camera_state: Optional[dict] = None
 
 
 class SceneTabManager(QObject):
@@ -44,18 +46,16 @@ class SceneTabManager(QObject):
         tab_bar.setDrawBase(False)
         tab_bar.setExpanding(False)
 
-    def add_tab(self, name: str, path: Optional[str] = None, data: Optional[dict] = None) -> str:
+    def add_tab(self, name: str, path: Optional[str] = None, scene: Optional[Scene] = None) -> str:
         tab_name = self._unique_name(name)
-        if data is None:
+        if scene is None:
             self._save_current_to_tab()
+            self._active_tab = tab_name
             self._engine.new_scene(tab_name)
             if path:
                 self._engine.scene.path = path
-            data = self._engine.scene.serialize()
-            if hasattr(self._mw, '_hierarchy'):
-                self._mw._hierarchy.refresh()
-            self._active_tab = tab_name
-        info = SceneTabInfo(tab_name, path, data)
+            scene = self._engine.scene
+        info = SceneTabInfo(tab_name, path, scene)
         self._tabs[tab_name] = info
         self._tab_names.append(tab_name)
         self._tab_bar.addTab(tab_name)
@@ -104,11 +104,27 @@ class SceneTabManager(QObject):
     def _save_current_to_tab(self):
         if self._active_tab and self._active_tab in self._tabs and self._engine.scene:
             info = self._tabs[self._active_tab]
-            info.data = self._engine.scene.serialize()
+            info.scene = self._engine.scene
             info.dirty = self._engine.scene.dirty
             scene_path = getattr(self._engine.scene, 'path', None)
             if scene_path:
                 info.path = scene_path
+            vp = getattr(self._mw, '_viewport', None)
+            if vp and hasattr(vp, '_cam'):
+                cam = vp._cam
+                info.camera_state = {
+                    "position": cam._position.to_list(),
+                    "yaw": cam._yaw,
+                    "pitch": cam._pitch,
+                    "orbit_target": cam._orbit_target.to_list(),
+                    "orbit_dist": cam._orbit_dist,
+                    "is_2d_mode": cam._is_2d_mode,
+                    "ortho_zoom_distance": cam._ortho_zoom_distance,
+                    "stored_ortho_size": cam._stored_ortho_size,
+                    "fov": cam._fov,
+                    "near": cam._near,
+                    "far": cam._far,
+                }
 
     def _on_tab_changed(self, idx: int):
         if self._switching:
@@ -136,10 +152,9 @@ class SceneTabManager(QObject):
         if tab_name is None:
             return
         info = self._tabs.get(tab_name)
-        is_dirty = info.dirty if info else False
-        if tab_name == self._active_tab and self._engine.scene and self._engine.scene.dirty:
-            is_dirty = True
-        if is_dirty and info and info.data:
+        scene = info.scene if info else None
+        is_dirty = scene.dirty if scene else False
+        if is_dirty and scene:
             reply = QMessageBox.question(
                 self._mw, "Unsaved Changes",
                 f"Scene '{info.name}' has unsaved changes. Save before closing?",
@@ -153,33 +168,47 @@ class SceneTabManager(QObject):
                 self._save_scene_tab(info)
 
         if tab_name == self._active_tab:
-            self._save_current_to_tab()
             self._active_tab = None
 
         self.remove_tab(tab_name)
 
     def _load_scene(self, info: SceneTabInfo):
-        if info.data is None:
+        if info.scene is None:
             self._engine.new_scene(info.name)
             if info.path:
                 self._engine.scene.path = info.path
+            info.scene = self._engine.scene
         else:
+            if self._engine.scene:
+                self._engine._plugin_manager.notify_scene_unloaded(self._engine.scene)
             from core.components.rendering.postfx.graphics_effect import GraphicsEffect
             GraphicsEffect.cleanup_registry()
-            scene = Scene.deserialize(info.data, ComponentRegistry)
-            scene.path = info.path or ""
-            self._engine._scene = scene
-            self._engine._plugin_manager.notify_scene_loaded(scene)
-            self._engine._emit_event("scene_loaded", scene)
+            self._engine._scene = info.scene
+            self._engine._plugin_manager.notify_scene_loaded(info.scene)
+        self._engine._emit_event("scene_loaded", info.scene)
 
-        if hasattr(self._mw, '_viewport') and self._mw._viewport and hasattr(self._mw._viewport, 'renderer') and self._mw._viewport.renderer:
-            self._mw._viewport.renderer.release_all_caches()
+        vp = getattr(self._mw, '_viewport', None)
+        if vp and hasattr(vp, '_cam') and info.camera_state:
+            cs = info.camera_state
+            cam = vp._cam
+            cam._position = Vec3(*cs["position"])
+            cam._yaw = cs["yaw"]
+            cam._pitch = cs["pitch"]
+            cam._orbit_target = Vec3(*cs["orbit_target"])
+            cam._orbit_dist = cs["orbit_dist"]
+            cam._is_2d_mode = cs["is_2d_mode"]
+            cam._ortho_zoom_distance = cs["ortho_zoom_distance"]
+            cam._stored_ortho_size = cs["stored_ortho_size"]
+            cam._fov = cs.get("fov", cam.DEFAULT_FOV)
+            cam._near = cs.get("near", cam.DEFAULT_NEAR)
+            cam._far = cs.get("far", cam.DEFAULT_FAR)
+
         if hasattr(self._mw, '_hierarchy'):
             self._mw._hierarchy.refresh()
         self._tab_bar.setTabText(self._tab_names.index(info.name) if info.name in self._tab_names else 0, info.name)
 
     def _save_scene_tab(self, info: SceneTabInfo):
-        if info.data is None:
+        if info.scene is None:
             return
         if info.path:
             from core.engine.engine import Engine

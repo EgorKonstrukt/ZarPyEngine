@@ -452,9 +452,11 @@ def _rel_path(mw, path: str) -> str:
 
 
 def on_scene_loaded(mw, scene):
-    name = scene.name if scene else "None"
-    mw._status_scene_lbl.setText(f"Scene: {name}")
-    mw.setWindowTitle(f"Zarin Engine Editor - {name}")
+    tab_name = (mw._scene_tab_manager.active_tab
+                if hasattr(mw, '_scene_tab_manager') and mw._scene_tab_manager and mw._scene_tab_manager.active_tab
+                else (scene.name if scene else "None"))
+    mw._status_scene_lbl.setText(f"Scene: {tab_name}")
+    mw.setWindowTitle(f"Zarin Engine Editor - {tab_name}")
     if hasattr(mw, '_viewport') and mw._viewport and hasattr(mw._viewport, 'renderer') and mw._viewport.renderer:
         mw._viewport.renderer.clear_scene_caches()
 
@@ -655,7 +657,11 @@ def _do_open_scene(mw, path):
             data = json.load(f)
         tab_name = os.path.splitext(os.path.basename(path))[0]
         mw._engine.resolve_scene_paths(data)
-        mw._scene_tab_manager.add_tab(tab_name, path, data)
+        from core.ecs.ecs import Scene, ComponentRegistry
+        scene = Scene.deserialize(data, ComponentRegistry)
+        scene.path = path
+        scene.mark_clean()
+        mw._scene_tab_manager.add_tab(tab_name, path=path, scene=scene)
     except Exception as e:
         Logger.error(f"Error opening scene: {e}", e)
 
@@ -666,7 +672,6 @@ def _sync_tab_after_save(mw):
         if active:
             info = mw._scene_tab_manager.get_tab_info(active)
             if info:
-                info.dirty = mw._engine.scene.dirty if mw._engine.scene else False
                 info.path = mw._engine.scene.path if mw._engine.scene else info.path
 
 
@@ -694,7 +699,6 @@ def save_scene_as(mw):
                 info = mw._scene_tab_manager.get_tab_info(active)
                 if info:
                     info.path = path
-                    info.dirty = False
 
 
 def sync_after_undo(mw):
