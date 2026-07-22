@@ -20,6 +20,9 @@ class _CollabProxy(QObject):
     tab_switch = pyqtSignal(str, str)
     tab_close = pyqtSignal(str)
     peers_changed = pyqtSignal()
+    script_open = pyqtSignal(str, str)
+    script_change = pyqtSignal(str, str)
+    script_cursor = pyqtSignal(str, object)
 
 from core.engine.engine import Engine
 from core.foundation.logger import Logger
@@ -29,7 +32,7 @@ from editor.main_window.menu import setup_menu
 from editor.main_window.toolbar import setup_toolbar
 from editor.main_window.statusbar import setup_statusbar
 from editor.main_window.connections import connect_signals
-from editor.main_window.state import restore_camera, save_state
+from editor.main_window.state import restore_camera, save_state, restore_script_tabs
 from editor.main_window.postinit import post_init, initial_dock_sizes
 from editor.main_window.project import switch_project, open_project_manager, open_project_browse
 from editor.main_window.handlers import (
@@ -99,12 +102,19 @@ class EditorMainWindow(QMainWindow):
             collab.set_on_remote_tab_close(lambda name: self._collab_proxy.tab_close.emit(name))
             collab.set_peer_joined_callback(lambda _: self._collab_proxy.peers_changed.emit())
             collab.set_peer_left_callback(lambda _: self._collab_proxy.peers_changed.emit())
+            self._collab_proxy.script_open.connect(self._on_remote_script_open)
+            self._collab_proxy.script_change.connect(self._on_remote_script_change)
+            self._collab_proxy.script_cursor.connect(self._on_remote_script_cursor)
+            collab.set_on_remote_script_open(lambda data: self._collab_proxy.script_open.emit(data.get("path", ""), data.get("content", "")))
+            collab.set_on_remote_script_change(lambda data: self._collab_proxy.script_change.emit(data.get("path", ""), data.get("content", "")))
+            collab.set_on_remote_script_cursor(lambda pid, data: self._collab_proxy.script_cursor.emit(pid, data))
             print("[COLLAB] Tab callbacks registered", flush=True)
 
     def _init_script_tabs(self):
         sw = self._script_editor._script_widget
         mgr = self._scene_tab_manager
         self._syncing_script = False
+        self._script_peer_editors: dict[str, list[list[float]]] = {}
 
         for i in range(sw._tabs.count()):
             tab = sw._tabs.widget(i)
@@ -116,6 +126,22 @@ class EditorMainWindow(QMainWindow):
         sw.tab_switched.connect(self._on_script_internal_tab_switched)
         mgr.script_tab_selected.connect(self._on_script_tab_in_bar_selected)
         mgr.script_tab_closed.connect(self._on_script_tab_closed_from_bar)
+        collab = self._engine.collab_manager
+        if collab:
+            sw.collab_file_opened.connect(lambda path, content: collab.send_script_open(path, content))
+            sw.collab_file_saved.connect(lambda path, content: collab.send_script_change(path, content))
+            sw.collab_cursor_changed.connect(lambda path, pos, anchor, end: collab.send_script_cursor(path, pos, anchor, end))
+            sw.collab_ops_ready.connect(lambda path, ops: collab.send_script_ops(path, ops))
+            collab.set_on_remote_script_ops(lambda pid, data: sw.apply_remote_ops(data.get("path", ""), data.get("ops", [])))
+
+        saved_paths = restore_script_tabs(self)
+        if saved_paths:
+            for path in saved_paths:
+                sw.open_script(path)
+            if sw._tabs.count() > 0:
+                first = sw._tabs.widget(0)
+                if first and not first._file_path:
+                    sw._tabs.removeTab(0)
 
     def _on_script_tab_opened(self, path: str):
         sw = self._script_editor._script_widget
@@ -164,6 +190,46 @@ class EditorMainWindow(QMainWindow):
                     self._scene_tab_bar.setCurrentIndex(i)
                     self._scene_tab_bar.blockSignals(False)
                 return
+
+    def _on_remote_script_open(self, path: str, content: str):
+        if not path:
+            return
+        sw = self._script_editor._script_widget
+        for i in range(sw._tabs.count()):
+            tab = sw._tabs.widget(i)
+            if tab._file_path == path:
+                return
+        sw.open_script(path)
+
+    def _on_remote_script_change(self, path: str, content: str):
+        if not path:
+            return
+        sw = self._script_editor._script_widget
+        for i in range(sw._tabs.count()):
+            tab = sw._tabs.widget(i)
+            if tab._file_path == path:
+                if tab._dirty:
+                    return
+                tab.set_content(content, from_remote=True)
+                return
+        sw.open_script(path)
+
+    def _on_remote_script_cursor(self, peer_id: str, data: dict):
+        path = data.get("path", "")
+        pos = data.get("pos", 0)
+        sel_anchor = data.get("sel_anchor", pos)
+        sel_end = data.get("sel_end", pos)
+        collab = self._engine.collab_manager
+        peer = collab.get_peer(peer_id) if collab else None
+        if peer and path:
+            self._script_editor._script_widget.update_remote_cursor(
+                peer_id, path, pos, sel_anchor, sel_end, peer.color, peer.name
+            )
+            self._script_peer_editors[path] = [
+                p.color for p in collab.peers.values()
+                if p.peer_id in self._script_editor._script_widget._remote_cursors.get(path, {})
+            ]
+            self._scene_tab_manager.update_script_peer_indicators(self._script_peer_editors)
 
     def _on_remote_scene_open(self, data: dict):
         try:
@@ -220,6 +286,7 @@ class EditorMainWindow(QMainWindow):
             if p.current_tab:
                 tab_peers.setdefault(p.current_tab, []).append(p.color)
         self._scene_tab_manager.update_peer_indicators(tab_peers)
+        self._scene_tab_manager.update_script_peer_indicators(self._script_peer_editors)
 
     def _on_scene_tab_switched(self, name: str):
         self._viewport_dock.show()

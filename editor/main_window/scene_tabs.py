@@ -424,24 +424,39 @@ class SceneTabManager(QObject):
             idx = self._scene_tab_idx(tab_name)
             if idx < 0:
                 continue
-            if colors:
-                n = len(colors)
-                pw = DOT_SIZE * n + PAD * (n - 1) + PAD * 2
-                ph = DOT_SIZE + PAD * 2
-                pix = QPixmap(pw, ph)
-                pix.fill(Qt.GlobalColor.transparent)
-                with QPainter(pix) as p:
-                    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                    for i, rgb in enumerate(colors):
-                        r, g, b = (int(c * 255) for c in rgb[:3])
-                        p.setBrush(QBrush(QColor(r, g, b)))
-                        p.setPen(Qt.PenStyle.NoPen)
-                        cx = PAD + i * (DOT_SIZE + PAD) + DOT_SIZE // 2
-                        cy = PAD + DOT_SIZE // 2
-                        p.drawEllipse(cx - DOT_SIZE // 2, cy - DOT_SIZE // 2, DOT_SIZE, DOT_SIZE)
-                self._tab_bar.setTabIcon(idx, QIcon(pix))
-            else:
-                self._tab_bar.setTabIcon(idx, QIcon())
+            self._set_tab_icon(idx, colors)
+
+    def update_script_peer_indicators(self, script_peers: dict[str, list[list[float]]]):
+        DOT_SIZE = 8
+        PAD = 2
+        for i in range(self._tab_bar.count()):
+            if not self.is_script_tab(i):
+                continue
+            path = self.script_path_at(i)
+            colors = script_peers.get(path, [])
+            self._set_tab_icon(i, colors)
+
+    def _set_tab_icon(self, idx: int, colors: list[list[float]]):
+        DOT_SIZE = 8
+        PAD = 2
+        if colors:
+            n = len(colors)
+            pw = DOT_SIZE * n + PAD * (n - 1) + PAD * 2
+            ph = DOT_SIZE + PAD * 2
+            pix = QPixmap(pw, ph)
+            pix.fill(Qt.GlobalColor.transparent)
+            with QPainter(pix) as p:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                for i, rgb in enumerate(colors):
+                    r, g, b = (int(c * 255) for c in rgb[:3])
+                    p.setBrush(QBrush(QColor(r, g, b)))
+                    p.setPen(Qt.PenStyle.NoPen)
+                    cx = PAD + i * (DOT_SIZE + PAD) + DOT_SIZE // 2
+                    cy = PAD + DOT_SIZE // 2
+                    p.drawEllipse(cx - DOT_SIZE // 2, cy - DOT_SIZE // 2, DOT_SIZE, DOT_SIZE)
+            self._tab_bar.setTabIcon(idx, QIcon(pix))
+        else:
+            self._tab_bar.setTabIcon(idx, QIcon())
 
     def update_tab_name(self, old_name: str, new_name: str):
         if old_name not in self._tabs:

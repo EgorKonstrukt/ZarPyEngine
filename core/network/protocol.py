@@ -61,6 +61,10 @@ class MessageType(IntEnum):
     SCENE_OPEN = 47
     SCENE_TAB_SWITCH = 48
     SCENE_TAB_CLOSE = 49
+    SCRIPT_OPEN = 50
+    SCRIPT_CHANGE = 51
+    SCRIPT_CURSOR = 53
+    SCRIPT_OPS = 55
 
 
 def make_msg(msg_type: int, data: dict) -> bytes:

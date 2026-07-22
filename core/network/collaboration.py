@@ -171,6 +171,10 @@ class CollaborationManager:
         self._on_scene_sync: Optional[Callable[[dict], bool]] = None
         self._peer_joined_callback: Optional[Callable] = None
         self._peer_left_callback: Optional[Callable] = None
+        self._on_remote_script_open: Optional[Callable] = None
+        self._on_remote_script_change: Optional[Callable] = None
+        self._on_remote_script_cursor: Optional[Callable] = None
+        self._on_remote_script_ops: Optional[Callable] = None
         self._entity_synced_ids: dict[str, str] = {}
         self._local_entity_ids: dict[str, str] = {}
         self._pending_scene_sync = False
@@ -263,6 +267,36 @@ class CollaborationManager:
 
     def set_on_remote_tab_close(self, cb: Callable):
         self._on_remote_tab_close = cb
+
+    def set_on_remote_script_open(self, cb: Callable):
+        self._on_remote_script_open = cb
+
+    def set_on_remote_script_change(self, cb: Callable):
+        self._on_remote_script_change = cb
+
+    def set_on_remote_script_cursor(self, cb: Callable):
+        self._on_remote_script_cursor = cb
+
+    def set_on_remote_script_ops(self, cb: Callable):
+        self._on_remote_script_ops = cb
+
+    def send_script_open(self, path: str, content: str):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCRIPT_OPEN, {"path": path, "content": content})
+
+    def send_script_change(self, path: str, content: str):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCRIPT_CHANGE, {"path": path, "content": content})
+
+    def send_script_cursor(self, path: str, pos: int, sel_anchor: int, sel_end: int):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCRIPT_CURSOR, {
+                "path": path, "pos": pos, "sel_anchor": sel_anchor, "sel_end": sel_end
+            })
+
+    def send_script_ops(self, path: str, ops: list):
+        if self._client and self._client.connected:
+            self._client.send(MessageType.SCRIPT_OPS, {"path": path, "ops": ops})
 
     def send_scene_open(self, name: str, path: str, data: dict):
         if self._client and self._client.connected:
@@ -507,6 +541,22 @@ class CollaborationManager:
                     self._peers[pid].current_tab = ""
                 if self._on_remote_tab_close:
                     self._on_remote_tab_close(data.get("name", ""))
+        elif msg_type == MessageType.SCRIPT_OPEN:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_script_open:
+                self._on_remote_script_open(data)
+        elif msg_type == MessageType.SCRIPT_CHANGE:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_script_change:
+                self._on_remote_script_change(data)
+        elif msg_type == MessageType.SCRIPT_CURSOR:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_script_cursor:
+                self._on_remote_script_cursor(pid, data)
+        elif msg_type == MessageType.SCRIPT_OPS:
+            pid = data.get("id", "")
+            if pid != self._client.peer_id and self._on_remote_script_ops:
+                self._on_remote_script_ops(pid, data)
         else:
             handler = self._custom_handlers.get(msg_type)
             if handler is not None:

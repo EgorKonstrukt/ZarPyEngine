@@ -22,7 +22,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QSize, QStringListModel, QTimer
 from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QKeyEvent, QWheelEvent,
                          QSyntaxHighlighter, QTextCharFormat, QTextCursor,
                          QAction, QIcon, QKeySequence, QPainter, QPixmap,
-                         QTextBlock, QMouseEvent)
+                         QPen, QTextBlock, QMouseEvent)
 
 if TYPE_CHECKING:
     from core.engine.engine import Engine
@@ -64,6 +64,21 @@ _QTA_COLORS = {
     "zoom_out": "#d4d4d4",
     "run": "#9ccc65",
 }
+
+
+def _ot_transform_pos(pos: int, against_pos: int, against_removed: int, against_added_len: int) -> int:
+    if pos > against_pos:
+        if against_removed > 0 and pos <= against_pos + against_removed:
+            return against_pos
+        pos += against_added_len - against_removed
+    return pos
+
+
+def _ot_transform_op(op: tuple, against: tuple) -> tuple:
+    pos, removed, added = op
+    apos, aremoved, aadded = against
+    new_pos = _ot_transform_pos(pos, apos, aremoved or 0, len(aadded or ""))
+    return (new_pos, removed, added)
 
 
 def _qta_icon(name: str) -> QIcon:
@@ -307,13 +322,20 @@ class _CodeEditor(QPlainTextEdit):
         self._vcs_diff_data: dict[int, str] = {}
         self._vcs_status: str = ""
         self._vcs_branch: str = ""
-        self._vcs_hover_line: int = -1
 
         self._line_number = _LineNumberArea(self)
         self._blame_gutter = _VcsBlameGutter(self)
         self._minimap = _Minimap(self)
         self._minimap_cache = None
         self._minimap_cache_key = (-1, -1, -1, -1)
+
+        self._remote_cursors: dict[str, dict] = {}
+        self._ops_callback = None
+        self._suppress_ops = False
+        self._old_text = ""
+
+        self.document().contentsChange.connect(self._on_contents_change)
+        QTimer.singleShot(0, self._init_old_text)
 
         self._apply_font()
         self.setUndoRedoEnabled(True)
@@ -436,6 +458,8 @@ class _CodeEditor(QPlainTextEdit):
         if self._show_blame and self._vcs_blame_data:
             self._draw_blame_overlay(event)
 
+        self._draw_remote_cursors(event)
+
     def _draw_indent_guides(self, event):
         tab_w = self.tabStopDistance()
         if tab_w <= 0:
@@ -511,6 +535,69 @@ class _CodeEditor(QPlainTextEdit):
 
         painter.end()
 
+    def set_remote_cursors(self, cursors: dict[str, dict]):
+        self._remote_cursors = dict(cursors)
+        self._update_remote_extra_selections()
+        self.viewport().update()
+
+    def _update_remote_extra_selections(self):
+        local = QTextEdit.ExtraSelection()
+        local.format.setBackground(QColor("#282828"))
+        local.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
+        local.cursor = self.textCursor()
+        local.cursor.clearSelection()
+
+        selections = [local]
+
+        for peer_id, info in self._remote_cursors.items():
+            if info["sel_anchor"] != info["sel_end"]:
+                sel = QTextEdit.ExtraSelection()
+                c = QColor(info["color"])
+                c.setAlpha(60)
+                sel.format.setBackground(c)
+                tc = QTextCursor(self.document())
+                tc.setPosition(info["sel_anchor"])
+                tc.setPosition(info["sel_end"], QTextCursor.MoveMode.KeepAnchor)
+                sel.cursor = tc
+                selections.append(sel)
+
+        self.setExtraSelections(selections)
+
+    def _draw_remote_cursors(self, event):
+        if not self._remote_cursors:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        fm = painter.fontMetrics()
+
+        for info in self._remote_cursors.values():
+            color = QColor(info["color"])
+            name = info["name"]
+            pos = info["pos"]
+
+            tc = QTextCursor(self.document())
+            tc.setPosition(pos)
+            rect = self.cursorRect(tc)
+            x = rect.x()
+            y_top = rect.y()
+
+            pen = QPen(color, 2)
+            painter.setPen(pen)
+            painter.drawLine(x, y_top, x, y_top + rect.height())
+
+            label_w = fm.horizontalAdvance(name) + 6
+            label_h = fm.height() + 2
+            label_x = x
+            label_y = y_top - label_h - 2
+
+            bg = QColor(color)
+            bg.setAlpha(200)
+            painter.fillRect(label_x, label_y, label_w, label_h, bg)
+            painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(label_x + 3, label_y + fm.ascent() + 1, name)
+
+        painter.end()
+
     def _draw_blame_overlay(self, event):
         if not self._vcs_blame_data:
             return
@@ -575,6 +662,30 @@ class _CodeEditor(QPlainTextEdit):
         selection.cursor.clearSelection()
         selections.append(selection)
         self.setExtraSelections(selections)
+
+    def _init_old_text(self):
+        self._old_text = self.toPlainText()
+
+    def _on_contents_change(self, position: int, chars_removed: int, chars_added: int):
+        if self._suppress_ops or (chars_removed == 0 and chars_added == 0):
+            return
+        if self._ops_callback is None:
+            return
+        current = self.toPlainText()
+        if chars_removed > 0 and position + chars_removed <= len(self._old_text):
+            removed = self._old_text[position:position + chars_removed]
+        else:
+            removed = ""
+        if chars_added > 0 and position + chars_added <= len(current):
+            added = current[position:position + chars_added]
+        else:
+            added = ""
+        self._old_text = current
+        if removed or added:
+            self._ops_callback(position, chars_removed, added)
+
+    def set_ops_callback(self, cb):
+        self._ops_callback = cb
 
     def line_number_width(self) -> int:
         digits = max(2, len(str(max(1, self.blockCount()))))
@@ -1345,11 +1456,29 @@ class _ScriptTab(QWidget):
             return not self._dirty
         return res == QMessageBox.StandardButton.Discard
 
+    def set_content(self, text: str, from_remote: bool = False):
+        if from_remote:
+            parent_widget = self.parent()
+            while parent_widget is not None and not isinstance(parent_widget, _ScriptEditorWidget):
+                parent_widget = parent_widget.parent()
+            if parent_widget and self._file_path:
+                parent_widget.clear_pending_ops(self._file_path)
+        self._editor.blockSignals(True)
+        self._editor.setPlainText(text)
+        self._editor.blockSignals(False)
+        self._editor._old_text = text
+        self._dirty = False
+        self._editor.document().setModified(False)
+        self._update_title()
+
     def open_file(self, path: str):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
+            self._editor.blockSignals(True)
             self._editor.setPlainText(content)
+            self._editor.blockSignals(False)
+            self._editor._old_text = content
             self._file_path = path
             self._dirty = False
             self._editor.document().setModified(False)
@@ -1385,6 +1514,7 @@ class _ScriptTab(QWidget):
 
     def new(self):
         self._editor.clear()
+        self._editor._old_text = ""
         self._file_path = None
         self._dirty = False
         self._editor.document().setModified(False)
@@ -1400,11 +1530,35 @@ class _ScriptEditorWidget(QWidget):
     tab_opened = pyqtSignal(str)
     tab_closed = pyqtSignal(str)
     tab_switched = pyqtSignal(str)
+    collab_file_opened = pyqtSignal(str, str)
+    collab_file_saved = pyqtSignal(str, str)
+    collab_cursor_changed = pyqtSignal(str, int, int, int)
+    collab_ops_ready = pyqtSignal(str, list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._zoom = _CodeEditor.DEFAULT_FONT
         self._wrap = False
+
+        self._remote_cursors: dict[str, dict[str, dict]] = {}
+        self._ops_buffers: dict[str, list] = {}
+        self._pending_local_ops: dict[str, list] = {}
+
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.timeout.connect(self._do_auto_save)
+
+        self._cursor_sync_timer = QTimer(self)
+        self._cursor_sync_timer.setSingleShot(True)
+        self._cursor_sync_timer.timeout.connect(self._send_cursor_sync)
+
+        self._ops_flush_timer = QTimer(self)
+        self._ops_flush_timer.setSingleShot(True)
+        self._ops_flush_timer.timeout.connect(self._flush_and_send_ops)
+
+        self._full_sync_timer = QTimer(self)
+        self._full_sync_timer.timeout.connect(self._do_full_sync)
+        self._full_sync_timer.start(10000)
 
         self._git = _Git()
         self._git_available = False
@@ -1705,6 +1859,9 @@ class _ScriptEditorWidget(QWidget):
     def _bind_tab_signals(self, tab: _ScriptTab):
         tab._editor.cursorMoved.connect(self._on_cursor)
         tab._editor.modificationChanged.connect(self._on_modified)
+        tab._editor.textChanged.connect(self._on_local_text_changed)
+        tab._editor.cursorPositionChanged.connect(self._on_local_cursor_moved)
+        tab._editor.set_ops_callback(lambda pos, removed, added: self._on_op_captured(tab, pos, removed, added))
 
     def _new_tab(self):
         tab = _ScriptTab(git=self._git)
@@ -1742,6 +1899,7 @@ class _ScriptEditorWidget(QWidget):
         self._update_vcs_statusbar()
         self._on_cursor(1, 1)
         self.tab_opened.emit(path)
+        self.collab_file_opened.emit(path, tab._editor.toPlainText())
 
     def _open_tab(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1757,6 +1915,9 @@ class _ScriptEditorWidget(QWidget):
             tab.save()
             self._update_label()
             self._update_vcs_statusbar()
+            if tab._file_path:
+                content = tab._editor.toPlainText()
+                self.collab_file_saved.emit(tab._file_path, content)
 
     def _save_current_as(self):
         tab = self._current_tab()
@@ -1972,9 +2133,15 @@ class _ScriptEditorWidget(QWidget):
         tab = self._current_tab()
         if tab is not None:
             self.tab_switched.emit(tab._file_path or "")
+            fp = tab._file_path or ""
+            if fp and fp in self._remote_cursors:
+                tab._editor.set_remote_cursors(self._remote_cursors[fp])
+            elif hasattr(tab, '_editor'):
+                tab._editor.set_remote_cursors({})
 
     def _on_tab_closed(self, tab: QWidget):
         path = tab._file_path or ""
+        self._remote_cursors.pop(path, None)
         index = self._tabs.indexOf(tab)
         if index >= 0:
             self._tabs.removeTab(index)
@@ -1989,6 +2156,115 @@ class _ScriptEditorWidget(QWidget):
         tab = self._current_tab()
         if tab is not None:
             self._status_info.setText("Modified" if modified else "")
+
+    def _on_local_text_changed(self):
+        self._auto_save_timer.start(2000)
+
+    def _do_auto_save(self):
+        tab = self._current_tab()
+        if tab is None or not tab._file_path or not tab._dirty:
+            return
+        try:
+            with open(tab._file_path, "w", encoding="utf-8") as f:
+                f.write(tab._editor.toPlainText())
+            tab._dirty = False
+            tab._editor.document().setModified(False)
+            tab._editor.vcs_set_file(tab._file_path)
+            tab._update_title()
+            if tab._file_path:
+                self.collab_file_saved.emit(tab._file_path, tab._editor.toPlainText())
+        except Exception as e:
+            pass
+
+    def _on_op_captured(self, tab, pos: int, removed: int, added: str):
+        path = tab._file_path
+        if not path:
+            return
+        self._pending_local_ops.setdefault(path, []).append((pos, removed, added))
+        self._ops_buffers.setdefault(path, []).append((pos, removed, added))
+        if not self._ops_flush_timer.isActive():
+            self._ops_flush_timer.start(100)
+
+    def _flush_and_send_ops(self):
+        for path, buffer in list(self._ops_buffers.items()):
+            if buffer:
+                batch = list(buffer)
+                buffer.clear()
+                self.collab_ops_ready.emit(path, batch)
+
+    def apply_remote_ops(self, path: str, ops: list):
+        for i in range(self._tabs.count()):
+            tab = self._tabs.widget(i)
+            if isinstance(tab, _ScriptTab) and tab._file_path == path:
+                editor = tab._editor
+                pending = list(self._pending_local_ops.get(path, []))
+                transformed = []
+                for rop in ops:
+                    for lop in pending:
+                        rop = _ot_transform_op(rop, lop)
+                    transformed.append(rop)
+                editor._suppress_ops = True
+                editor.document().blockSignals(True)
+                for pos, removed, added in transformed:
+                    if pos < 0:
+                        continue
+                    text_len = len(editor.toPlainText())
+                    if removed and removed > 0 and pos + removed > text_len:
+                        continue
+                    tc = editor.textCursor()
+                    tc.setPosition(pos)
+                    if removed and removed > 0:
+                        end = min(pos + removed, text_len)
+                        tc.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+                    tc.insertText(added)
+                editor.document().blockSignals(False)
+                editor._old_text = editor.toPlainText()
+                editor._suppress_ops = False
+                new_pending = []
+                for lop in pending:
+                    for rop in transformed:
+                        lop = _ot_transform_op(lop, rop)
+                    new_pending.append(lop)
+                self._pending_local_ops[path] = new_pending
+                return
+
+    def clear_pending_ops(self, path: str):
+        self._pending_local_ops.pop(path, None)
+        self._ops_buffers.pop(path, None)
+
+    def _do_full_sync(self):
+        tab = self._current_tab()
+        if tab and tab._file_path:
+            self.clear_pending_ops(tab._file_path)
+            self.collab_file_saved.emit(tab._file_path, tab._editor.toPlainText())
+
+    def _on_local_cursor_moved(self):
+        self._cursor_sync_timer.start(50)
+
+    def _send_cursor_sync(self):
+        tab = self._current_tab()
+        if tab is None or not tab._file_path:
+            return
+        cursor = tab._editor.textCursor()
+        pos = cursor.position()
+        self.collab_cursor_changed.emit(tab._file_path, pos, cursor.anchor(), pos)
+
+    def update_remote_cursor(self, peer_id: str, path: str, pos: int,
+                              sel_anchor: int, sel_end: int,
+                              color: list[float], name: str):
+        if not path:
+            return
+        cursors_for_path = self._remote_cursors.setdefault(path, {})
+        cursors_for_path[peer_id] = {
+            "pos": pos,
+            "sel_anchor": sel_anchor,
+            "sel_end": sel_end,
+            "color": QColor.fromRgbF(*color[:3]),
+            "name": name,
+        }
+        tab = self._current_tab()
+        if tab and tab._file_path == path:
+            tab._editor.set_remote_cursors(cursors_for_path)
 
     def _update_label(self):
         tab = self._current_tab()

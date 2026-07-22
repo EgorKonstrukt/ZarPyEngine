@@ -20,9 +20,18 @@ def save_state(mw):
     path = _window_state_path()
     try:
         fg = mw.geometry()
+        sw = getattr(mw, '_script_editor', None)
+        script_paths = []
+        if sw:
+            sw = sw._script_widget
+            for i in range(sw._tabs.count()):
+                tab = sw._tabs.widget(i)
+                if tab._file_path:
+                    script_paths.append(tab._file_path)
         data = {
             "geometry": [fg.x(), fg.y(), fg.width(), fg.height()],
             "windowState": base64.b64encode(bytes(mw.saveState())).decode("ascii"),
+            "scriptPaths": script_paths,
         }
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
@@ -32,6 +41,18 @@ def save_state(mw):
     if mw._viewport.camera:
         cam_data = json.dumps(mw._viewport.camera.serialize())
         mw._settings.setValue("sceneCamera", cam_data)
+
+
+def restore_script_tabs(mw) -> list[str]:
+    path = _window_state_path()
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return data.get("scriptPaths", [])
+        except Exception:
+            pass
+    return []
 
 
 def restore_camera(mw):
