@@ -56,8 +56,10 @@ class MeshData:
         self.bone_bind_local: list[np.ndarray] = []
         self.bone_indices: np.ndarray = np.zeros((0, 4), dtype=np.int32)
         self.bone_weights: np.ndarray = np.zeros((0, 4), dtype=np.float32)
+        self.colors: np.ndarray = np.array([], dtype=np.float32)
         self.bone_count: int = 0
         self._bone_vbo: Optional[Any] = None
+        self._color_vbo: Optional[Any] = None
 
     def compute_aabb(self):
         if len(self.vertices) < 3:
@@ -102,6 +104,12 @@ class MeshData:
             else:
                 self._bone_vbo.write(bone_data.tobytes())
             self.bone_count = len(self.bone_offset_matrices)
+        if len(self.colors) == n_verts * 4:
+            color_data = self.colors.astype(np.float32).tobytes()
+            if self._color_vbo is None:
+                self._color_vbo = ctx.buffer(color_data)
+            else:
+                self._color_vbo.write(color_data)
         self._build_vao_for_program(program)
         self._vao = self._vao_cache.get(id(program))
 
@@ -114,6 +122,7 @@ class MeshData:
         has_pos = "in_position" in program
         has_nrm = "in_normal" in program
         has_uv = "in_uv" in program
+        has_col = "in_color" in program
         has_bone_idx = "in_bone_indices" in program
         has_bone_w = "in_bone_weights" in program
         fmt_parts = []
@@ -136,6 +145,8 @@ class MeshData:
         buffers = [(self._vbo, " ".join(fmt_parts), *attrib_names)]
         if self._bone_vbo is not None and has_bone_idx and has_bone_w:
             buffers.append((self._bone_vbo, "4f 4f", "in_bone_indices", "in_bone_weights"))
+        if self._color_vbo is not None and has_col:
+            buffers.append((self._color_vbo, "4f", "in_color"))
         self._vao_cache[key] = self._ctx.vertex_array(
             program,
             buffers,
@@ -192,6 +203,9 @@ class MeshData:
         if self._bone_vbo:
             self._bone_vbo.release()
             self._bone_vbo = None
+        if self._color_vbo:
+            self._color_vbo.release()
+            self._color_vbo = None
         if self._outline_vao:
             self._outline_vao.release()
         if self._outline_vbo:

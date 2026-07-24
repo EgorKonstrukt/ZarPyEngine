@@ -46,6 +46,7 @@ from core.components.rendering.environment.sky import Sky
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.environment.water import Water
 from core.components.rendering.terrain import Terrain
+from core.components.environment.tree import Tree
 from core.components.environment.wind_zone import WindZone
 from core.components.physics.sphere_collider import SphereCollider
 from core.components.physics.box_collider import BoxCollider
@@ -1543,6 +1544,8 @@ out vec4 frag_color;
             prog["u_proj"].write(proj_f32.tobytes())
         if "u_camera_pos" in prog:
             prog["u_camera_pos"].write(np.array(cam_pos.to_array(), dtype=np.float32).tobytes())
+        if "u_time" in prog:
+            prog["u_time"].value = time.time()
         n_lights = min(len(lights), self._max_lights)
         if self._render_mode == RenderMode.FLAT:
             if "u_ambient" in prog:
@@ -1618,6 +1621,40 @@ out vec4 frag_color;
         if not disable_shadows:
             self._shadows.set_uniforms(prog)
 
+        if "_WindDir" in prog or "_WindInfluence" in prog or "_WindStrength" in prog:
+            try:
+                wz = None
+                if self._snap_cache and self._snap_cache.wind_zones:
+                    for w in self._snap_cache.wind_zones:
+                        if w.enabled:
+                            wz = w
+                            break
+                if wz is not None:
+                    s = wz.sample(0.0, 0.0)
+                    d = s["dir"]
+                    vboost = s.get("vertical_boost", 0.2)
+                    if "_WindDir" in prog:
+                        prog["_WindDir"].write(np.array([d[0], vboost * 0.3, d[1]], dtype=np.float32).tobytes())
+                    if "_WindInfluence" in prog:
+                        prog["_WindInfluence"].value = 1.0
+                    if "_WindStrength" in prog:
+                        prog["_WindStrength"].value = min(3.0, s["speed"] * 0.015 + s["gust"] * 0.04)
+                    if "_WindSpeed" in prog:
+                        prog["_WindSpeed"].value = max(0.1, s["speed"] * 0.3)
+                    if "_TurbulenceScale" in prog:
+                        prog["_TurbulenceScale"].value = s.get("turbulence_scale", 1.5)
+                    if "_TurbulenceAmount" in prog:
+                        prog["_TurbulenceAmount"].value = s["turbulence"]
+                    if "_LeafFlutterSpeed" in prog:
+                        prog["_LeafFlutterSpeed"].value = 6.0 + s["speed"] * 0.5
+                    if "_LeafFlutterAmount" in prog:
+                        prog["_LeafFlutterAmount"].value = 0.02 + s.get("micro_turbulence", 0.0) * 0.1
+                else:
+                    if "_WindInfluence" in prog:
+                        prog["_WindInfluence"].value = 0.0
+            except Exception:
+                pass
+
     def _find_object_effect(self, ent) -> list:
         result = []
         for comp in ent.get_all_components():
@@ -1671,6 +1708,7 @@ out vec4 frag_color;
         self._collect_interactors(snap, scene)
         self._sync_probuilder_meshes(scene)
         self._sync_terrain_meshes(scene)
+        self._sync_tree_meshes(scene)
         needs_shadow = any(l.cast_shadows for l, _ in snap.lights)
         if not needs_shadow:
             for ent in scene.get_entities_with_component(Projector):
@@ -3099,6 +3137,49 @@ out vec4 frag_color;
                     tc.set_height_data(terrain._heightfield)
                     tc.resolution = terrain._heightfield.shape[0]
                     tc.size = Vec3(terrain.world_size, terrain.settings.get("heightScale"), terrain.world_size)
+
+    def _sync_tree_meshes(self, scene):
+        mesh_loader = self._mesh_loader
+        if not mesh_loader:
+            return
+        for ent in scene.get_entities_with_component(Tree):
+            if not ent.active:
+                continue
+            tree = ent.get_component(Tree)
+            if not tree or not tree.enabled:
+                continue
+            if tree.auto_regenerate and tree.needs_regenerate():
+                tree.generate()
+            if tree._gpu_dirty and tree._mesh_data is not None:
+                mf = ent.get_component(MeshFilter)
+                if not mf:
+                    mf = MeshFilter()
+                    ent.add_component(mf)
+                mesh_name = f"Tree_{ent.id[:6]}"
+                mf.mesh_name = mesh_name
+                mesh = tree._mesh_data
+                mesh.build_gl(self._ctx, self._default_prog)
+                if self._outline_prog:
+                    mesh.build_outline_vao(self._ctx, self._outline_prog)
+                mr = ent.get_component(MeshRenderer)
+                if not mr:
+                    mr = MeshRenderer()
+                    ent.add_component(mr)
+                bark_path = tree.material_path
+                if not bark_path:
+                    bark_path = "core/shaders/Tree.shader"
+                mr.materials[0]["path"] = bark_path
+                if mesh.sub_mesh_ranges:
+                    leaf_path = tree.leaf_material_path
+                    if not leaf_path:
+                        leaf_path = bark_path
+                    if len(mr.materials) < 2:
+                        mr.materials.append(mr.materials[0].copy() if hasattr(mr.materials[0], 'copy') else dict(mr.materials[0]))
+                    mr.materials[1]["path"] = leaf_path
+                cache_key = f"{mesh_name}|s=1.0|cp=False|fu=False"
+                mesh_loader._meshes[cache_key] = mesh
+                mesh_loader.bump_generation()
+                tree._gpu_dirty = False
 
     def release(self):
         GraphicsEffect.cleanup_registry()

@@ -1,0 +1,113 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Zarrakun
+
+ComputeShader "Zarin/TreeLeafSim"
+{
+    Properties
+    {
+        _WindDir("Wind Direction", Float3) = (1, 0, 0.5)
+        _WindSpeed("Wind Speed", Float) = 2.0
+        _WindStrength("Wind Strength", Float) = 0.3
+        _Damping("Damping", Float) = 0.92
+        _Spring("Spring Stiffness", Float) = 0.5
+        _Turbulence("Turbulence", Float) = 0.2
+    }
+
+    GLSLPROGRAM
+    #version 460 core
+    layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+    struct LeafParticle {
+        vec4 position;
+        vec4 velocity;
+        vec4 rest_pos;
+        vec4 params;
+    };
+
+    layout(std430, binding = 0) buffer LeafBuffer {
+        LeafParticle leaves[];
+    };
+
+    uniform vec3 _WindDir;
+    uniform float _WindSpeed;
+    uniform float _WindStrength;
+    uniform float _Damping;
+    uniform float _Spring;
+    uniform float _Turbulence;
+    uniform float u_time;
+    uniform float u_dt;
+    uniform uint u_num_leaves;
+
+    float hash31(vec3 p) {
+        p = fract(p * 0.3183099 + 0.1);
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+    }
+
+    float value_noise3(vec3 x) {
+        vec3 i = floor(x);
+        vec3 f = fract(x);
+        f = f * f * (3.0 - 2.0 * f);
+        float n000 = hash31(i + vec3(0.0, 0.0, 0.0));
+        float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+        float nx00 = mix(n000, n100, f.x);
+        float nx10 = mix(n010, n110, f.x);
+        float nx01 = mix(n001, n101, f.x);
+        float nx11 = mix(n011, n111, f.x);
+        float nxy0 = mix(nx00, nx10, f.y);
+        float nxy1 = mix(nx01, nx11, f.y);
+        return mix(nxy0, nxy1, f.z);
+    }
+
+    void main() {
+        uint idx = gl_GlobalInvocationID.x;
+        if (idx >= u_num_leaves) return;
+
+        vec3 pos = leaves[idx].position.xyz;
+        vec3 vel = leaves[idx].velocity.xyz;
+        vec3 rest = leaves[idx].rest_pos.xyz;
+
+        float stiffness = leaves[idx].params.x;
+        float phase_off = leaves[idx].params.y;
+        float height_factor = leaves[idx].params.z;
+
+        vec3 wind_dir = normalize(_WindDir + vec3(1e-6));
+        float t = u_time * _WindSpeed;
+
+        float phase = t + phase_off * 6.2831853 + rest.x * 0.3 + rest.z * 0.3;
+        vec3 wind_force = wind_dir * sin(phase) * _WindStrength * height_factor * height_factor;
+
+        float turb = value_noise3(pos * 0.5 + u_time * 0.3) - 0.5;
+        wind_force += wind_dir * turb * _Turbulence * 0.2;
+
+        float flutter_phase = u_time * 8.0 + phase_off * 12.566;
+        float flutter = sin(flutter_phase) * 0.04 * (1.0 - stiffness);
+        vec3 flutter_dir = normalize(vec3(
+            sin(phase_off * 13.37),
+            cos(phase_off * 7.31) * 0.3,
+            cos(phase_off * 11.23)
+        ));
+        wind_force += flutter_dir * flutter;
+
+        vec3 spring_force = (rest - pos) * _Spring * stiffness;
+
+        vec3 accel = wind_force + spring_force;
+        accel.y -= 0.5 * (1.0 - stiffness);
+
+        vel = (vel + accel * u_dt) * _Damping;
+        pos += vel * u_dt;
+
+        leaves[idx].position = vec4(pos, 1.0);
+        leaves[idx].velocity = vec4(vel, 0.0);
+    }
+    ENDGLSL
+}
