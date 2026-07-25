@@ -23,29 +23,8 @@ def create_skinned_mesh_entity(scene, path: str, name: str, mesh_path: str, worl
 
 def create_skinned_mesh_entity_async(scene, path: str, name: str, mesh_path: str,
                                      world_pos=None, callback=None):
-    from core.assets.asset_importer import load_mesh_future
-    from PyQt6.QtCore import QTimer
-
-    fut = load_mesh_future(path)
-
-    def _done(f):
-        try:
-            import_data = f.result()
-        except Exception:
-            import_data = None
-
-        def _apply():
-            if import_data is not None and getattr(import_data, "has_skeleton", False):
-                ent = _build_skinned_entity(scene, path, name, mesh_path, world_pos, import_data)
-                if callback:
-                    callback(ent, True)
-            else:
-                if callback:
-                    callback(None, False)
-
-        QTimer.singleShot(0, _apply)
-
-    fut.add_done_callback(_done)
+    if callback:
+        callback(None, False)
 
 
 def _build_skinned_entity(scene, path, name, mesh_path, world_pos, import_data):
