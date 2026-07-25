@@ -13,6 +13,7 @@ _GEN_PARAMS = frozenset({
     "ratio", "taper", "branches_per_node", "spiral_twist",
     "leaf_size", "leaf_density", "seed", "random_seed",
     "branch_curvature", "leaf_material_path",
+    "gnarliness", "gravity",
 })
 
 
@@ -94,7 +95,7 @@ class _BranchGen:
             ctrl=(0.0, height * 0.5, 0.0),
             end=trunk_top,
             radius_start=trunk_radius,
-            radius_end=trunk_radius * 0.5,
+            radius_end=trunk_radius * 0.25,
             level=0,
             phase_off=self._rng.random()
         )
@@ -159,6 +160,21 @@ class _BranchGen:
                 parent.start[1] + dy * attach_t,
                 parent.start[2] + dz * attach_t
             )
+
+            parent_radius_at_t = _lerp(parent.radius_start, parent.radius_end, attach_t)
+            rad_off = max(0.0, parent_radius_at_t - child_radius * 0.3)
+            horiz_dir = (world_dir[0], 0.0, world_dir[2])
+            hd_len = math.sqrt(horiz_dir[0]**2 + horiz_dir[2]**2)
+            if hd_len > 0.001:
+                horiz_dir = (horiz_dir[0]/hd_len, 0.0, horiz_dir[2]/hd_len)
+            else:
+                horiz_dir = (right[0], 0.0, right[2])
+            attach_point = (
+                attach_point[0] + horiz_dir[0] * rad_off,
+                attach_point[1],
+                attach_point[2] + horiz_dir[2] * rad_off
+            )
+
             child_end = (
                 attach_point[0] + world_dir[0] * child_len,
                 attach_point[1] + world_dir[1] * child_len,
@@ -167,16 +183,17 @@ class _BranchGen:
 
             horiz = math.sqrt(world_dir[0]**2 + world_dir[2]**2)
             upward_bend = horiz * child_len * self.branch_curvature
+            outward_bend = child_len * 0.08
             ctrl_point = (
-                (attach_point[0] + child_end[0]) * 0.5,
+                attach_point[0] + world_dir[0] * child_len * 0.35 + horiz_dir[0] * outward_bend,
                 (attach_point[1] + child_end[1]) * 0.5 + upward_bend,
-                (attach_point[2] + child_end[2]) * 0.5
+                attach_point[2] + world_dir[2] * child_len * 0.35 + horiz_dir[2] * outward_bend
             )
 
             child_phase = self._rng.random()
             child = _BranchNode(
                 start=attach_point, ctrl=ctrl_point, end=child_end,
-                radius_start=child_radius,
+                radius_start=child_radius * 1.15,
                 radius_end=child_radius * (taper * 0.85),
                 level=parent.level + 1, phase_off=child_phase
             )
@@ -245,7 +262,9 @@ class _BranchGen:
             parent.is_terminal = True
 
 
-def _tube_along_curve(node: _BranchNode, segments: int, rings: int) -> tuple:
+def _tube_along_curve(node: _BranchNode, segments: int, rings: int,
+                      gnarliness: float = 0.0, gravity: float = 0.0,
+                      rng: random.Random = None) -> tuple:
     start, ctrl, end = node.start, node.ctrl, node.end
     dx = end[0] - start[0]; dy = end[1] - start[1]; dz = end[2] - start[2]
     length = math.sqrt(dx*dx + dy*dy + dz*dz)
@@ -257,26 +276,80 @@ def _tube_along_curve(node: _BranchNode, segments: int, rings: int) -> tuple:
 
     verts, norms, uvs, colors = [], [], [], []
 
+    init_tangent = _bezier_tangent(start, ctrl, end, 0.0)
+    tl = math.sqrt(init_tangent[0]**2 + init_tangent[1]**2 + init_tangent[2]**2)
+    if tl > 0.001:
+        cur_dir = (init_tangent[0]/tl, init_tangent[1]/tl, init_tangent[2]/tl)
+    else:
+        cur_dir = (0.0, 1.0, 0.0)
+    up_ref = (0.0, 1.0, 0.0)
+    if abs(cur_dir[1]) > 0.999:
+        cur_basis_x = (1.0, 0.0, 0.0)
+    else:
+        cur_basis_x = _normalize(_cross(up_ref, cur_dir))
+    cur_basis_z = _normalize(_cross(cur_dir, cur_basis_x))
+
     for ri in range(rings + 1):
         t = ri / max(1, rings)
         pos = _bezier_eval(start, ctrl, end, t)
-        tangent = _bezier_tangent(start, ctrl, end, t)
-        tan_l = math.sqrt(tangent[0]**2 + tangent[1]**2 + tangent[2]**2)
-        dir_vec = (tangent[0]/tan_l, tangent[1]/tan_l, tangent[2]/tan_l) if tan_l > 0.001 else (0.0, 1.0, 0.0)
-        up_ref = (0.0, 1.0, 0.0)
-        if abs(dir_vec[1]) > 0.999:
-            basis_x = (1.0, 0.0, 0.0)
-        else:
-            basis_x = _normalize(_cross(up_ref, dir_vec))
-        basis_z = _normalize(_cross(dir_vec, basis_x))
 
-        r = _lerp(node.radius_start, node.radius_end, t)
+        r_raw = _lerp(node.radius_start, node.radius_end, t)
+        if ri == rings:
+            r = 0.001
+        elif node.level == 0:
+            flare = 1.0 + 0.15 * max(0.0, 1.0 - t * 4.0)
+            r = r_raw * flare
+        else:
+            r = r_raw
+
+        if ri > 0 and gnarliness > 0.0 and r > 0.001 and rng is not None:
+            gnarl_amount = max(0.5, 1.0 / math.sqrt(max(0.001, r))) * gnarliness
+            pitch = rng.gauss(0, gnarl_amount * 0.25)
+            roll = rng.gauss(0, gnarl_amount * 0.25)
+            if abs(pitch) > 0.0001:
+                c_p = math.cos(pitch); s_p = math.sin(pitch)
+                new_bx = (cur_basis_x[0]*c_p + cur_dir[0]*s_p,
+                          cur_basis_x[1]*c_p + cur_dir[1]*s_p,
+                          cur_basis_x[2]*c_p + cur_dir[2]*s_p)
+                new_dir = (-cur_basis_x[0]*s_p + cur_dir[0]*c_p,
+                           -cur_basis_x[1]*s_p + cur_dir[1]*c_p,
+                           -cur_basis_x[2]*s_p + cur_dir[2]*c_p)
+                cur_basis_x = new_bx
+                cur_dir = new_dir
+            if abs(roll) > 0.0001:
+                c_r = math.cos(roll); s_r = math.sin(roll)
+                new_bz = (cur_basis_z[0]*c_r + cur_dir[0]*s_r,
+                          cur_basis_z[1]*c_r + cur_dir[1]*s_r,
+                          cur_basis_z[2]*c_r + cur_dir[2]*s_r)
+                new_dir = (-cur_basis_z[0]*s_r + cur_dir[0]*c_r,
+                           -cur_basis_z[1]*s_r + cur_dir[1]*c_r,
+                           -cur_basis_z[2]*s_r + cur_dir[2]*c_r)
+                cur_basis_z = new_bz
+                cur_dir = new_dir
+            cur_basis_x = _normalize(cur_basis_x)
+            cur_dir = _normalize(cur_dir)
+            cur_basis_z = _normalize(_cross(cur_dir, cur_basis_x))
+
+        if ri > 0 and gravity > 0.0 and r > 0.001:
+            grav_tilt = gravity * 0.02 / max(0.005, r)
+            grav_tilt = min(grav_tilt, 0.2)
+            c_g = math.cos(grav_tilt); s_g = math.sin(grav_tilt)
+            new_dir = (cur_dir[0]*c_g + cur_basis_z[0]*s_g,
+                       cur_dir[1]*c_g + cur_basis_z[1]*s_g,
+                       cur_dir[2]*c_g + cur_basis_z[2]*s_g)
+            new_bz = (-cur_dir[0]*s_g + cur_basis_z[0]*c_g,
+                      -cur_dir[1]*s_g + cur_basis_z[1]*c_g,
+                      -cur_dir[2]*s_g + cur_basis_z[2]*c_g)
+            cur_dir = _normalize(new_dir)
+            cur_basis_z = _normalize(new_bz)
+            cur_basis_x = _normalize(_cross(cur_basis_z, cur_dir))
+
         for i in range(segments + 1):
             theta = 2.0 * math.pi * i / segments
             c = math.cos(theta); s = math.sin(theta)
-            radial = (basis_x[0]*c + basis_z[0]*s,
-                      basis_x[1]*c + basis_z[1]*s,
-                      basis_x[2]*c + basis_z[2]*s)
+            radial = (cur_basis_x[0]*c + cur_basis_z[0]*s,
+                      cur_basis_x[1]*c + cur_basis_z[1]*s,
+                      cur_basis_x[2]*c + cur_basis_z[2]*s)
             verts.append(pos[0] + radial[0] * r)
             verts.append(pos[1] + radial[1] * r)
             verts.append(pos[2] + radial[2] * r)
@@ -304,38 +377,50 @@ def _make_leaf(position: tuple, size: float, rot_y: float,
                phase_off: float, stiffness: float, branch_lvl: float) -> tuple:
     hw = size * 0.35
     hs = size * 0.5
-    corners = [(-hw, 0.0, -hs), ( hw, 0.0, -hs), ( hw, 0.0,  hs), (-hw, 0.0,  hs)]
 
-    c_rot = math.cos(rot_y); s_rot = math.sin(rot_y)
-    c_tx = math.cos(tilt_x); s_tx = math.sin(tilt_x)
-    c_tz = math.cos(tilt_z); s_tz = math.sin(tilt_z)
+    def _rotate_y(v, a):
+        c = math.cos(a); s = math.sin(a)
+        return (v[0]*c - v[2]*s, v[1], v[0]*s + v[2]*c)
+    def _rotate_x(v, a):
+        c = math.cos(a); s = math.sin(a)
+        return (v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c)
+    def _rotate_z(v, a):
+        c = math.cos(a); s = math.sin(a)
+        return (v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2])
 
-    transforms = [
-        lambda v: (v[0]*c_rot - v[2]*s_rot, v[1], v[0]*s_rot + v[2]*c_rot),
-        lambda v: (v[0], v[1]*c_tx - v[2]*s_tx, v[1]*s_tx + v[2]*c_tx),
-        lambda v: (v[0]*c_tz - v[1]*s_tz, v[0]*s_tz + v[1]*c_tz, v[2]),
-    ]
+    all_verts = []
+    all_norms = []
+    all_uvs = []
+    all_colors = []
+    all_idxs = []
+    base = 0
 
-    transformed = []
-    for c in corners:
-        for tf in transforms:
-            c = tf(c)
-        transformed.append((c[0] + position[0], c[1] + position[1] + size * 0.1, c[2] + position[2]))
+    for cross_angle in [0.0, math.pi * 0.5]:
+        corners = [(-hw, 0.0, -hs), ( hw, 0.0, -hs), ( hw, 0.0,  hs), (-hw, 0.0,  hs)]
+        rotated = []
+        for c in corners:
+            c = _rotate_y(c, cross_angle)
+            c = _rotate_y(c, rot_y)
+            c = _rotate_x(c, tilt_x)
+            c = _rotate_z(c, tilt_z)
+            rotated.append((c[0] + position[0], c[1] + position[1] + size * 0.1, c[2] + position[2]))
 
-    nrm = (0.0, 1.0, 0.0)
-    for tf in transforms:
-        nrm = tf(nrm)
-    nrm = _normalize(nrm)
+        nrm = (0.0, 1.0, 0.0)
+        nrm = _rotate_y(nrm, cross_angle)
+        nrm = _rotate_y(nrm, rot_y)
+        nrm = _rotate_x(nrm, tilt_x)
+        nrm = _rotate_z(nrm, tilt_z)
+        nrm = _normalize(nrm)
 
-    verts = []
-    for c in transformed:
-        verts.extend(c)
-    norms = list(nrm) * 4
-    uvs = [0, 0,  1, 0,  1, 1,  0, 1]
-    colors = [branch_lvl, stiffness, phase_off, 1.0] * 4
-    idxs = [0, 2, 1,  0, 3, 2]
+        for c in rotated:
+            all_verts.extend(c)
+        all_norms.extend(nrm * 4)
+        all_uvs.extend([0, 0,  1, 0,  1, 1,  0, 1])
+        all_colors.extend([branch_lvl, stiffness, phase_off, 1.0] * 4)
+        all_idxs.extend([base, base+2, base+1,  base, base+3, base+2])
+        base += 4
 
-    return verts, norms, uvs, colors, idxs
+    return all_verts, all_norms, all_uvs, all_colors, all_idxs
 
 
 def _leaf_cluster(position: tuple, size: float, count: int,
@@ -365,8 +450,8 @@ def _leaf_cluster(position: tuple, size: float, count: int,
             phase_off, stiffness, branch_lvl
         )
         verts.extend(lv); norms.extend(ln); uvs.extend(lu); colors.extend(lc)
-        idxs.extend(i + base_idx for i in li)
-        base_idx += 4
+        idxs.extend(base_idx + i for i in li)
+        base_idx += 8
 
     return verts, norms, uvs, colors, idxs
 
@@ -374,16 +459,23 @@ def _leaf_cluster(position: tuple, size: float, count: int,
 def _collect_branch_geometry(node: _BranchNode, segments: int,
                              leaf_size: float, leaf_density: int,
                              bark: list, leaves: list,
-                             rng: random.Random) -> None:
-    rings = 2 if node.level == 0 else 3
-    bv, bn, bu, bc, bi = _tube_along_curve(node, segments, rings)
+                             rng: random.Random,
+                             gnarliness: float = 0.0,
+                             gravity: float = 0.0) -> None:
+    rings = 6 if node.level == 0 else 5
+    bv, bn, bu, bc, bi = _tube_along_curve(node, segments, rings,
+                                            gnarliness=gnarliness,
+                                            gravity=gravity, rng=rng)
     if bv:
         base = len(bark[0]) // 3
         bark[0].extend(bv); bark[1].extend(bn); bark[2].extend(bu)
         bark[3].extend(bc); bark[4].extend(i + base for i in bi)
 
     for sub in node.sub_branches:
-        sv, sn, su, sc, si = _tube_along_curve(sub, max(3, segments // 2), 2)
+        sub_gnarl = gnarliness * 1.5
+        sv, sn, su, sc, si = _tube_along_curve(sub, max(3, segments // 2), 4,
+                                                gnarliness=sub_gnarl,
+                                                gravity=gravity, rng=rng)
         if sv:
             base = len(bark[0]) // 3
             bark[0].extend(sv); bark[1].extend(sn); bark[2].extend(su)
@@ -410,7 +502,8 @@ def _collect_branch_geometry(node: _BranchNode, segments: int,
 
     for child in node.children:
         _collect_branch_geometry(child, segments, leaf_size, leaf_density,
-                                 bark, leaves, rng)
+                                 bark, leaves, rng,
+                                 gnarliness=gnarliness, gravity=gravity)
 
 
 def generate_tree_mesh(height: float = 10.0, trunk_radius: float = 0.3,
@@ -419,7 +512,8 @@ def generate_tree_mesh(height: float = 10.0, trunk_radius: float = 0.3,
                        taper: float = 0.8, branches_per_node: int = 3,
                        spiral_twist: float = 1.2, leaf_size: float = 0.35,
                        leaf_density: int = 4, seed: int = 0,
-                       branch_curvature: float = 0.4):
+                       branch_curvature: float = 0.4,
+                       gnarliness: float = 0.0, gravity: float = 0.0):
     from core.renderer.mesh_data import MeshData
     gen = _BranchGen(seed)
     rng = random.Random(seed + 999)
@@ -431,7 +525,8 @@ def generate_tree_mesh(height: float = 10.0, trunk_radius: float = 0.3,
     leaves = [[], [], [], [], []]
 
     _collect_branch_geometry(root, trunk_segments, leaf_size, leaf_density,
-                             bark, leaves, rng)
+                             bark, leaves, rng,
+                             gnarliness=gnarliness, gravity=gravity)
 
     all_verts = bark[0] + leaves[0]
     all_norms = bark[1] + leaves[1]
@@ -482,6 +577,8 @@ class Tree(Component):
             InspectorField("branches_per_node", "Branches Per Node", FieldType.INT, min_val=1, max_val=6, step=1),
             InspectorField("spiral_twist", "Spiral Twist", FieldType.FLOAT, min_val=0.0, max_val=6.0, step=0.1, decimals=2),
             InspectorField("branch_curvature", "Branch Curvature", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=2),
+            InspectorField("gnarliness", "Gnarliness", FieldType.SLIDER, min_val=0.0, max_val=2.0, step=0.05, decimals=2),
+            InspectorField("gravity", "Gravity Droop", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.05, decimals=2),
             InspectorField("leaf_size", "Leaf Size", FieldType.FLOAT, min_val=0.05, max_val=1.5, step=0.05, decimals=3),
             InspectorField("leaf_density", "Leaf Density", FieldType.INT, min_val=0, max_val=20, step=1),
             InspectorField("seed", "Seed", FieldType.INT, min_val=0, max_val=999999, step=1),
@@ -505,6 +602,8 @@ class Tree(Component):
         self.branches_per_node: int = 3
         self.spiral_twist: float = 1.2
         self.branch_curvature: float = 0.4
+        self.gnarliness: float = 0.3
+        self.gravity: float = 0.5
         self.leaf_size: float = 0.35
         self.leaf_density: int = 4
         self.seed: int = 0
@@ -538,6 +637,7 @@ class Tree(Component):
             self.height, self.trunk_radius, self.trunk_segments,
             self.levels, self.branch_angle, self.ratio, self.taper,
             self.branches_per_node, self.spiral_twist, self.branch_curvature,
+            self.gnarliness, self.gravity,
             self.leaf_size, self.leaf_density, self.seed, self.random_seed,
         ))
 
@@ -567,6 +667,7 @@ class Tree(Component):
             spiral_twist=self.spiral_twist,
             leaf_size=self.leaf_size, leaf_density=self.leaf_density,
             seed=actual_seed, branch_curvature=self.branch_curvature,
+            gnarliness=self.gnarliness, gravity=self.gravity,
         )
         self._generated = True
         self._gpu_dirty = True
@@ -590,6 +691,7 @@ class Tree(Component):
             "branch_angle": self.branch_angle, "ratio": self.ratio,
             "taper": self.taper, "branches_per_node": self.branches_per_node,
             "spiral_twist": self.spiral_twist, "branch_curvature": self.branch_curvature,
+            "gnarliness": self.gnarliness, "gravity": self.gravity,
             "leaf_size": self.leaf_size, "leaf_density": self.leaf_density,
             "seed": self.seed, "random_seed": self.random_seed,
             "material_path": self.material_path,
@@ -612,6 +714,8 @@ class Tree(Component):
         t.branches_per_node = data.get("branches_per_node", 3)
         t.spiral_twist = data.get("spiral_twist", 1.2)
         t.branch_curvature = data.get("branch_curvature", 0.4)
+        t.gnarliness = data.get("gnarliness", 0.3)
+        t.gravity = data.get("gravity", 0.5)
         t.leaf_size = data.get("leaf_size", 0.35)
         t.leaf_density = data.get("leaf_density", 4)
         t.seed = data.get("seed", 0)

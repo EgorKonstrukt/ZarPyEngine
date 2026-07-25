@@ -3174,8 +3174,15 @@ out vec4 frag_color;
                     if not leaf_path:
                         leaf_path = bark_path
                     if len(mr.materials) < 2:
-                        mr.materials.append(mr.materials[0].copy() if hasattr(mr.materials[0], 'copy') else dict(mr.materials[0]))
-                    mr.materials[1]["path"] = leaf_path
+                        mr.materials.append({"path": leaf_path})
+                    else:
+                        mr.materials[1]["path"] = leaf_path
+                for mi in mr.materials:
+                    if self._materials and mi.get("path"):
+                        mat = self._materials.load_material(mi["path"])
+                        if mat:
+                            mat.properties["double_sided"] = True
+                            mat.properties["_DoubleSided"] = 1
                 cache_key = f"{mesh_name}|s=1.0|cp=False|fu=False"
                 mesh_loader._meshes[cache_key] = mesh
                 mesh_loader.bump_generation()

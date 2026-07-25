@@ -436,7 +436,9 @@ Shader "Zarin/Tree"
                 }
 
                 vec3 N = normalize(v_normal);
-                if (u_double_sided == 1 && !gl_FrontFacing) N = -N;
+                if (!gl_FrontFacing) {
+                    if (is_leaf > 0.5 || u_double_sided == 1) N = -N;
+                }
                 vec3 V = normalize(u_camera_pos - v_world_pos);
                 vec3 F0 = mix(vec3(0.04), albedo, metallic);
                 roughness = max(roughness, 0.001);

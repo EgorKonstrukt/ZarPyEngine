@@ -179,6 +179,7 @@ class MaterialManager:
         "_Metallic": "u_metallic",
         "_Smoothness": "u_smoothness",
         "_BaseColor": "u_albedo_color",
+        "_DoubleSided": "u_double_sided",
     }
 
     def apply_material(self, mat: Optional[Material], prog: moderngl.Program):

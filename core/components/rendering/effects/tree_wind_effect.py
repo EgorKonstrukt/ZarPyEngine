@@ -35,6 +35,7 @@ class TreeWindEffect(ObjectEffect):
 
     def __init__(self):
         super().__init__()
+        self.double_sided: bool = True
         self.wind_influence: float = 1.0
         self.wind_direction: Vec3 = Vec3(1.0, 0.0, 0.5)
         self.wind_speed: float = 2.0
@@ -72,6 +73,7 @@ class TreeWindEffect(ObjectEffect):
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
+            "double_sided": self.double_sided,
             "wind_influence": self.wind_influence,
             "wind_direction": [self.wind_direction.x, self.wind_direction.y, self.wind_direction.z],
             "wind_speed": self.wind_speed,
@@ -87,6 +89,7 @@ class TreeWindEffect(ObjectEffect):
     def deserialize(cls, data: dict) -> TreeWindEffect:
         fx = cls()
         fx.enabled = data.get("enabled", True)
+        fx.double_sided = data.get("double_sided", True)
         fx.wind_influence = data.get("wind_influence", 1.0)
         fd = data.get("wind_direction", [1.0, 0.0, 0.5])
         fx.wind_direction = Vec3(*fd[:3])
