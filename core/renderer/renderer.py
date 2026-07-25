@@ -23,6 +23,7 @@ from core.foundation.logger import Logger
 from core.components.rendering.renderers.mesh_filter import MeshFilter
 from core.components.rendering.renderers.mesh_renderer import MeshRenderer
 from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+from core.components.rendering.renderers.gaussian_splat_renderer import GaussianSplatRenderer as GaussianSplatComponent
 from core.components.rendering.skeleton.armature import Armature
 from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
 from core.components.rendering.renderers.svg_renderer import SvgRenderer
@@ -58,6 +59,7 @@ from core.renderer.sprites import SpriteRendererGL
 from core.renderer.svgs import SvgRendererGL
 from core.renderer.video import VideoRendererGL
 from core.renderer.icons import IconRenderer
+from core.renderer.gaussian_splat_renderer import GaussianSplatRenderer
 from core.renderer.text import TextRendererGL
 from core.renderer.materials import MaterialManager
 from core.renderer.shaders import ShaderManager
@@ -162,7 +164,7 @@ class _RenderSnapshot:
         'water_components', 'wind_zones', 'renderable', 'shadow_renderables',         'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors', 'skinned_renderables', 'skinned_shadow_renderables',
-        'interactors',
+        'interactors', 'gaussian_splats',
     )
     def __init__(self):
         self.lights: list = []
@@ -184,6 +186,7 @@ class _RenderSnapshot:
         self.force_fields: list = []
         self.projectors: list = []
         self.interactors: list = []
+        self.gaussian_splats: list = []
 
 
 class Renderer:
@@ -298,6 +301,7 @@ class Renderer:
         self._text: Optional[TextRendererGL] = None
         self._svgs: Optional[SvgRendererGL] = None
         self._icons: Optional[IconRenderer] = None
+        self._gaussians: Optional[GaussianSplatRenderer] = None
         self._materials: Optional[MaterialManager] = None
         self._shaders: Optional[ShaderManager] = None
         self._mesh_loader: Optional[MeshLoader] = None
@@ -586,6 +590,7 @@ void main() {
             self._text = TextRendererGL(self._ctx, self._text_prog)
             self._svgs = SvgRendererGL(self._ctx, self._sprite_prog)
             self._icons = IconRenderer(self._ctx, self._icon_prog)
+            self._gaussians = GaussianSplatRenderer(self._ctx)
             self._initialized = True
             Logger.info("Renderer initialized.")
         except Exception as e:
@@ -1850,6 +1855,15 @@ out vec4 frag_color;
             ff = ent.get_component(ParticleForceField)
             if ff and ff.enabled:
                 snap.force_fields.append(ff)
+        for ent in scene.get_entities_with_component(GaussianSplatComponent):
+            if not ent.active:
+                continue
+            gs = ent.get_component(GaussianSplatComponent)
+            if not gs or not gs.enabled:
+                continue
+            if not gs.ply_path:
+                continue
+            snap.gaussian_splats.append((ent, gs))
         self._snap_cache = snap
         self._snap_version = struct_version
         self._snap_struct_version = struct_version
@@ -2716,6 +2730,28 @@ out vec4 frag_color;
             self._particle_count = 0
         if prof:
             prof.stop("render_particles")
+        if self._gaussians and snap.gaussian_splats:
+            for ent, gs in snap.gaussian_splats:
+                tr = ent.transform
+                if tr:
+                    model = tr.world_matrix
+                else:
+                    model = Mat4.identity()
+                try:
+                    ply_path = gs.ply_path
+                    if ply_path and not os.path.isabs(ply_path):
+                        root = eng.project_root if eng and getattr(eng, "project_root", None) else os.getcwd()
+                        abs_ply = os.path.join(root, ply_path)
+                        if not os.path.isfile(abs_ply):
+                            abs_ply = os.path.join(root, "assets", os.path.basename(ply_path))
+                        ply_path = abs_ply
+                    self._gaussians.render(
+                        ply_path, model, view_mat, proj_mat,
+                        cam_pos, viewport_w, viewport_h,
+                        gs.opacity_threshold, gs.sh_degree,
+                    )
+                except Exception as e:
+                    Logger.error(f"Gaussian Splat render error: {e}")
         if outline_queue and self._outline_prog:
             if prof:
                 prof.start("render_outlines")
