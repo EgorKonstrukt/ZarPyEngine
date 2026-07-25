@@ -2542,12 +2542,38 @@ out vec4 frag_color;
             self._draw_calls = len(renderable) + skybox_call
         self._triangles_drawn = 0
         self._vertices_drawn = 0
+        counted_mesh_ids: set[int] = set()
         for entry in renderable:
             mesh = entry[2]
-            if hasattr(mesh, 'indices') and mesh.indices is not None and len(mesh.indices) > 0:
-                self._triangles_drawn += len(mesh.indices) // 3
-            if hasattr(mesh, 'vertices') and mesh.vertices is not None and len(mesh.vertices) > 0:
-                self._vertices_drawn += len(mesh.vertices) // 3
+            sub_idx = entry[5] if len(entry) > 5 else -1
+            ranges = getattr(mesh, 'sub_mesh_ranges', None)
+            if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+                _, count = ranges[sub_idx]
+                self._triangles_drawn += count // 3
+            else:
+                if hasattr(mesh, 'indices') and mesh.indices is not None and len(mesh.indices) > 0:
+                    self._triangles_drawn += len(mesh.indices) // 3
+            mid = id(mesh)
+            if mid not in counted_mesh_ids:
+                counted_mesh_ids.add(mid)
+                if hasattr(mesh, 'vertices') and mesh.vertices is not None and len(mesh.vertices) > 0:
+                    self._vertices_drawn += len(mesh.vertices) // 3
+        if hasattr(snap, 'skinned_renderables'):
+            for entry in snap.skinned_renderables:
+                mesh = entry[2]
+                sub_idx = entry[7] if len(entry) > 7 else -1
+                ranges = getattr(mesh, 'sub_mesh_ranges', None)
+                if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+                    _, count = ranges[sub_idx]
+                    self._triangles_drawn += count // 3
+                else:
+                    if hasattr(mesh, 'indices') and mesh.indices is not None and len(mesh.indices) > 0:
+                        self._triangles_drawn += len(mesh.indices) // 3
+                mid = id(mesh)
+                if mid not in counted_mesh_ids:
+                    counted_mesh_ids.add(mid)
+                    if hasattr(mesh, 'vertices') and mesh.vertices is not None and len(mesh.vertices) > 0:
+                        self._vertices_drawn += len(mesh.vertices) // 3
         if prof:
             prof.stop("render_stats")
         _pv_key = id(fbo) if fbo is not None else 0
