@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 _NUM_WORKERS = min(8, max(2, (os.cpu_count() or 4)))
 
@@ -15,6 +15,7 @@ _plugin_pool: ThreadPoolExecutor | None = None
 _audio_pool: ThreadPoolExecutor | None = None
 _asset_pool: ThreadPoolExecutor | None = None
 _bvh_pool: ThreadPoolExecutor | None = None
+_mesh_import_pool: ProcessPoolExecutor | None = None
 
 
 def _get_or_create(name: str, max_workers: int | None = None) -> ThreadPoolExecutor:
@@ -62,3 +63,12 @@ def asset() -> ThreadPoolExecutor:
 
 def bvh() -> ThreadPoolExecutor:
     return _get_or_create("bvh", max_workers=2)
+
+
+def mesh_import() -> ProcessPoolExecutor:
+    global _mesh_import_pool
+    if _mesh_import_pool is None or getattr(_mesh_import_pool, "_shutdown", False):
+        _mesh_import_pool = ProcessPoolExecutor(
+            max_workers=min(4, (os.cpu_count() or 2))
+        )
+    return _mesh_import_pool

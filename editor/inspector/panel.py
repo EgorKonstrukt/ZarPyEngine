@@ -388,7 +388,7 @@ class InspectorPanel(QDockWidget):
             if data is not None and len(data.vertices) >= 3 and len(data.indices) >= 3:
                 s = settings.get("scale", 1.0)
                 verts = data.vertices.reshape(-1, 3).astype(np.float32) * s
-                QTimer.singleShot(0, lambda: preview.set_mesh(verts, data.indices, normals=data.normals))
+                QTimer.singleShot(0, lambda v=verts, i=data.indices, n=data.normals: preview.set_mesh(v, i, normals=n))
         ext = os.path.splitext(self._asset_path)[1].lower()
         if ext == ".obj":
             load_obj_async(self._asset_path, _on_mesh_loaded)

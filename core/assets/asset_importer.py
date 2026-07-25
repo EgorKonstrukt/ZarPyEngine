@@ -7,12 +7,30 @@
 from __future__ import annotations
 import sys
 import os
+import json
+import struct
 import ctypes
+import threading
 from asyncio import Future
+import time
 
 import numpy as np
 from typing import Optional, Callable
 from core.ecs.pool import asset as _get_asset_pool
+from core.ecs.pool import mesh_import as _get_mesh_import_pool
+
+try:
+    from core._mesh_import import extract_faces as _cy_extract_faces
+    from core._mesh_import import smooth_normals as _cy_smooth_normals
+    from core._mesh_import import apply_zup_to_yup as _cy_apply_zup
+    _HAS_CYTHON = True
+except ImportError:
+    _HAS_CYTHON = False
+
+_inflight_lock = threading.Lock()
+_inflight: dict[str, Future] = {}
+_mem_cache_lock = threading.Lock()
+_mem_cache: dict[str, MeshImportData] = {}
 
 if sys.platform == "win32":
     _ASSIMP_LIB_NAME = "assimp-vc143-mt.dll"
@@ -252,6 +270,106 @@ def _node_world_zup(node_map, name):
     return m
 
 
+def _cache_path_for(mesh_path: str) -> str:
+    return mesh_path + ".ziCache"
+
+
+def _cache_valid(mesh_path: str, cache_path: str) -> bool:
+    try:
+        if not os.path.exists(cache_path):
+            return False
+        src_mtime = os.path.getmtime(mesh_path)
+        cache_mtime = os.path.getmtime(cache_path)
+        return cache_mtime >= src_mtime
+    except Exception:
+        return False
+
+
+def _save_disk_cache(mesh_path: str, data: 'MeshImportData'):
+    try:
+        cp = _cache_path_for(mesh_path)
+        with open(cp, 'wb') as f:
+            header = struct.pack('<4sII', b'ZIC', 1, len(data.vertices))
+            f.write(header)
+            f.write(data.vertices.tobytes())
+            f.write(data.normals.tobytes())
+            f.write(data.uvs.tobytes())
+            f.write(data.indices.tobytes())
+            f.write(struct.pack('<I', len(data.sub_mesh_ranges)))
+            for start, count in data.sub_mesh_ranges:
+                f.write(struct.pack('<ii', start, count))
+            name_bytes = [n.encode('utf-8') for n in data.sub_mesh_names]
+            f.write(struct.pack('<I', len(name_bytes)))
+            for nb in name_bytes:
+                f.write(struct.pack('<I', len(nb)))
+                f.write(nb)
+            f.write(struct.pack('B', 1 if data.has_skeleton else 0))
+            if data.has_skeleton:
+                f.write(struct.pack('<I', len(data.bone_names)))
+                for bn in data.bone_names:
+                    bnb = bn.encode('utf-8')
+                    f.write(struct.pack('<I', len(bnb)))
+                    f.write(bnb)
+                f.write(np.array(data.bone_parents, dtype=np.int32).tobytes())
+                for mat in data.bone_offset_matrices:
+                    f.write(mat.astype(np.float32).tobytes())
+                for mat in data.bone_bind_world:
+                    f.write(mat.astype(np.float32).tobytes())
+                for mat in data.bone_bind_local:
+                    f.write(mat.astype(np.float32).tobytes())
+                f.write(data.bone_indices.astype(np.int32).tobytes())
+                f.write(data.bone_weights.astype(np.float32).tobytes())
+    except Exception:
+        pass
+
+
+def _load_disk_cache(mesh_path: str) -> Optional['MeshImportData']:
+    try:
+        cp = _cache_path_for(mesh_path)
+        if not _cache_valid(mesh_path, cp):
+            return None
+        with open(cp, 'rb') as f:
+            header = f.read(10)
+            magic, version, n_verts = struct.unpack('<4sII', header)
+            if magic != b'ZIC':
+                return None
+            data = MeshImportData()
+            data.name = os.path.splitext(os.path.basename(mesh_path))[0]
+            data.vertices = np.frombuffer(f.read(n_verts * 12), dtype=np.float32).copy()
+            data.normals = np.frombuffer(f.read(n_verts * 12), dtype=np.float32).copy()
+            data.uvs = np.frombuffer(f.read(n_verts * 8), dtype=np.float32).copy()
+            n_idx = struct.unpack('<I', f.read(4))[0]
+            data.indices = np.frombuffer(f.read(n_idx * 4), dtype=np.uint32).copy()
+            n_ranges = struct.unpack('<I', f.read(4))[0]
+            data.sub_mesh_ranges = []
+            for _ in range(n_ranges):
+                s, c = struct.unpack('<ii', f.read(8))
+                data.sub_mesh_ranges.append((s, c))
+            n_names = struct.unpack('<I', f.read(4))[0]
+            data.sub_mesh_names = []
+            for _ in range(n_names):
+                nb_len = struct.unpack('<I', f.read(4))[0]
+                data.sub_mesh_names.append(f.read(nb_len).decode('utf-8'))
+            has_skel = struct.unpack('B', f.read(1))[0]
+            if has_skel:
+                data.has_skeleton = True
+                n_bones = struct.unpack('<I', f.read(4))[0]
+                data.bone_names = []
+                for _ in range(n_bones):
+                    bn_len = struct.unpack('<I', f.read(4))[0]
+                    data.bone_names.append(f.read(bn_len).decode('utf-8'))
+                n_b = len(data.bone_names)
+                data.bone_parents = list(np.frombuffer(f.read(n_b * 4), dtype=np.int32))
+                data.bone_offset_matrices = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
+                data.bone_bind_world = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
+                data.bone_bind_local = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
+                data.bone_indices = np.frombuffer(f.read(n_verts * 16), dtype=np.int32).copy().reshape(-1, 4)
+                data.bone_weights = np.frombuffer(f.read(n_verts * 16), dtype=np.float32).copy().reshape(-1, 4)
+            return data
+    except Exception:
+        return None
+
+
 def _collect_meshes(node_ptr, scene, mesh_parts, skeleton_ctx, node_map, vert_offset_ref):
     if not node_ptr:
         return
@@ -295,15 +413,27 @@ def _collect_meshes(node_ptr, scene, mesh_parts, skeleton_ctx, node_map, vert_of
             uvs = uvs_raw.reshape(-1, 3)[:, :2].copy().flatten()
         else:
             uvs = np.zeros(nv * 2, dtype=np.float32)
-        all_idxs = []
         if mesh.mFaces and nf > 0:
-            faces_arr = ctypes.cast(mesh.mFaces, ctypes.POINTER(aiFace * nf)).contents
-            for j in range(nf):
-                face = faces_arr[j]
-                idx_ptr = ctypes.cast(face.mIndices, ctypes.POINTER(ctypes.c_uint * face.mNumIndices)).contents
-                for k in range(face.mNumIndices):
-                    all_idxs.append(idx_ptr[k])
-        indices = np.array(all_idxs, dtype=np.uint32)
+            faces_ptr = ctypes.addressof(mesh.mFaces.contents) if mesh.mNumFaces > 0 else 0
+            if _HAS_CYTHON and faces_ptr:
+                indices = _cy_extract_faces(faces_ptr, nf)
+            else:
+                faces_arr = ctypes.cast(mesh.mFaces, ctypes.POINTER(aiFace * nf)).contents
+                all_idxs = np.empty(nf * 3, dtype=np.uint32)
+                idx = 0
+                for j in range(nf):
+                    face = faces_arr[j]
+                    n_idx = face.mNumIndices
+                    if n_idx > 0 and face.mIndices:
+                        ptr = ctypes.cast(face.mIndices, ctypes.POINTER(ctypes.c_uint * n_idx)).contents
+                        for k in range(min(3, n_idx)):
+                            all_idxs[idx] = ptr[k]
+                            idx += 1
+                    else:
+                        idx += 3
+                indices = all_idxs[:idx]
+        else:
+            indices = np.array([], dtype=np.uint32)
         vert_offset = vert_offset_ref[0]
         _read_bones(mesh, vert_offset, skeleton_ctx, node_map, node_world_zup)
         mesh_parts.append((verts, norms, uvs, indices, nv, name))
@@ -486,6 +616,8 @@ def _read_mesh_import(path: str) -> dict:
 
 
 def _compute_smooth_normals(verts: np.ndarray, indices: np.ndarray) -> np.ndarray:
+    if _HAS_CYTHON and len(indices) > 0:
+        return _cy_smooth_normals(verts.astype(np.float32), indices.astype(np.uint32))
     n = len(verts)
     normals = np.zeros((n, 3), dtype=np.float32)
     if len(indices) == 0:
@@ -497,9 +629,8 @@ def _compute_smooth_normals(verts: np.ndarray, indices: np.ndarray) -> np.ndarra
     lens = np.linalg.norm(face_n, axis=1, keepdims=True)
     lens[lens == 0] = 1.0
     face_n = face_n / lens
-    for i in range(0, len(indices), 3):
-        for j in range(3):
-            normals[indices[i + j]] += face_n[i // 3]
+    expanded = np.repeat(face_n, 3, axis=0)
+    np.add.at(normals, indices, expanded)
     nl = np.linalg.norm(normals, axis=1, keepdims=True)
     nl[nl == 0] = 1.0
     return (normals / nl).astype(np.float32)
@@ -519,6 +650,17 @@ def _generate_planar_uvs(verts: np.ndarray) -> np.ndarray:
 
 
 def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
+    with _mem_cache_lock:
+        cached = _mem_cache.get(path)
+        if cached is not None:
+            return cached
+
+    disk_cached = _load_disk_cache(path)
+    if disk_cached is not None:
+        with _mem_cache_lock:
+            _mem_cache[path] = disk_cached
+        return disk_cached
+
     eng = None
     try:
         from core.engine.engine import Engine
@@ -570,17 +712,20 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
                     idx_offset += len(offset_idxs)
                     all_idxs.append(offset_idxs)
                 vert_offset += nv
-            verts_out = np.concatenate(all_verts).reshape(-1, 3)
-            norms_out = np.concatenate(all_norms).reshape(-1, 3)
+            verts_out = np.concatenate(all_verts)
+            norms_out = np.concatenate(all_norms)
 
-            z_up_to_y_up = np.array([
-                [1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0],
-                [0.0, -1.0, 0.0]
-            ], dtype=np.float32)
-
-            verts_out = (verts_out @ z_up_to_y_up.T).ravel()
-            norms_out = (norms_out @ z_up_to_y_up.T).ravel()
+            if _HAS_CYTHON:
+                verts_out = _cy_apply_zup(verts_out)
+                norms_out = _cy_apply_zup(norms_out)
+            else:
+                z_up_to_y_up = np.array([
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, -1.0, 0.0]
+                ], dtype=np.float32)
+                verts_out = (verts_out.reshape(-1, 3) @ z_up_to_y_up.T).ravel()
+                norms_out = (norms_out.reshape(-1, 3) @ z_up_to_y_up.T).ravel()
 
             data.vertices = verts_out
             data.normals = norms_out
@@ -602,6 +747,10 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
                 data.bone_indices = skel["bone_indices"]
                 data.bone_weights = skel["bone_weights"]
         if prof: prof.stop("load_mesh")
+        if data is not None and len(data.vertices) > 0:
+            with _mem_cache_lock:
+                _mem_cache[path] = data
+            _save_disk_cache(path, data)
         return data
     except Exception:
         if prof: prof.stop("load_mesh")
@@ -629,6 +778,17 @@ class MeshImportData:
 
 
 def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
+    with _mem_cache_lock:
+        cached = _mem_cache.get(path)
+        if cached is not None:
+            return cached
+
+    disk_cached = _load_disk_cache(path)
+    if disk_cached is not None:
+        with _mem_cache_lock:
+            _mem_cache[path] = disk_cached
+        return disk_cached
+
     eng = None
     try:
         from core.engine.engine import Engine
@@ -719,21 +879,31 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
         if (not has_uv or len(data.uvs) == 0) and _settings.get("gen_uvs", True):
             data.uvs = _generate_planar_uvs(_v).ravel()
     if prof: prof.stop("load_obj")
+    if data is not None and len(data.vertices) > 0:
+        with _mem_cache_lock:
+            _mem_cache[path] = data
+        _save_disk_cache(path, data)
     return data
 
 
 def load_mesh_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
-    def _task():
-        result = load_mesh(path)
-        callback(result)
-    _get_asset_pool().submit(_task)
+    fut = _get_mesh_import_pool().submit(load_mesh, path)
+    def _done(f):
+        try:
+            callback(f.result())
+        except Exception:
+            callback(None)
+    fut.add_done_callback(_done)
 
 
 def load_obj_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
-    def _task():
-        result = load_obj(path)
-        callback(result)
-    _get_asset_pool().submit(_task)
+    fut = _get_mesh_import_pool().submit(load_obj, path)
+    def _done(f):
+        try:
+            callback(f.result())
+        except Exception:
+            callback(None)
+    fut.add_done_callback(_done)
 
 
 def load_gif_frames(path: str) -> list[np.ndarray]:
@@ -785,22 +955,46 @@ def import_gif_to_flipbook(gif_path: str, output_path: str = None, cols: int = N
 
 def import_gif_to_flipbook_async(gif_path: str, callback: Callable[[Optional[tuple[int, int, int]]], None] = None,
                                   output_path: str = None, cols: int = None, rows: int = None) -> Future:
-    def _task():
+    fut = _get_asset_pool().submit(import_gif_to_flipbook, gif_path, output_path, cols, rows)
+    def _done(f):
         try:
-            result = import_gif_to_flipbook(gif_path, output_path, cols, rows)
+            result = f.result()
             if callback:
                 callback(result)
-            return result
-        except Exception as e:
+        except Exception:
             if callback:
                 callback(None)
-            return None
-    return _get_asset_pool().submit(_task)
+    fut.add_done_callback(_done)
+    return fut
 
 
 def load_mesh_future(path: str) -> Future:
-    return _get_asset_pool().submit(load_mesh, path)
+    with _inflight_lock:
+        existing = _inflight.get(path)
+        if existing is not None and not existing.done():
+            return existing
+    fut = _get_mesh_import_pool().submit(load_mesh, path)
+    with _inflight_lock:
+        _inflight[path] = fut
+    def _cleanup(f):
+        with _inflight_lock:
+            if _inflight.get(path) is f:
+                del _inflight[path]
+    fut.add_done_callback(_cleanup)
+    return fut
 
 
 def load_obj_future(path: str) -> Future:
-    return _get_asset_pool().submit(load_obj, path)
+    with _inflight_lock:
+        existing = _inflight.get(path)
+        if existing is not None and not existing.done():
+            return existing
+    fut = _get_mesh_import_pool().submit(load_obj, path)
+    with _inflight_lock:
+        _inflight[path] = fut
+    def _cleanup(f):
+        with _inflight_lock:
+            if _inflight.get(path) is f:
+                del _inflight[path]
+    fut.add_done_callback(_cleanup)
+    return fut

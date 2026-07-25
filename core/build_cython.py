@@ -34,6 +34,7 @@ EXTENSIONS = [
     _ext("core._curve_batch", "_curve_batch.pyx"),
     _ext("core._constraint_update", "_constraint_update.pyx"),
     _ext("core._physics_sync", "_physics_sync.pyx"),
+    _ext("core._mesh_import", "_mesh_import.pyx"),
 ]
 
 def build():

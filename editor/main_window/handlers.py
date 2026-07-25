@@ -441,9 +441,15 @@ def _drop_model_asset(mw, path: str, world_pos):
     except ValueError:
         mesh_path = os.path.abspath(path)
 
-    from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity
-    ent = create_skinned_mesh_entity(mw._engine.scene, path, name, mesh_path, world_pos)
-    if ent is None:
+    from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity_async
+    create_skinned_mesh_entity_async(
+        mw._engine.scene, path, name, mesh_path, world_pos,
+        callback=lambda ent, is_skinned: _on_model_loaded(mw, name, mesh_path, world_pos, ent, is_skinned)
+    )
+
+
+def _on_model_loaded(mw, name, mesh_path, world_pos, ent, is_skinned):
+    if not is_skinned:
         from core.components import Transform, MeshFilter, MeshRenderer
         e = mw._engine.scene.create_entity(name)
         t = Transform()
@@ -456,7 +462,10 @@ def _drop_model_asset(mw, path: str, world_pos):
         e.add_component(mf)
         e.add_component(MeshRenderer())
         ent = e
-    Logger.info(f"Created model entity from {path}")
+    mw._hierarchy.refresh()
+    if ent:
+        on_entity_selected(mw, ent)
+    Logger.info(f"Created model entity from {name}")
 
 
 def _drop_generic_asset(mw, path: str, world_pos):
@@ -821,19 +830,26 @@ def on_import_model(mw, path: str):
     except ValueError:
         mesh_path = os.path.abspath(path)
 
-    from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity
-    ent = create_skinned_mesh_entity(mw._engine.scene, path, name, mesh_path)
-    if ent is None:
+    from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity_async
+    create_skinned_mesh_entity_async(
+        mw._engine.scene, path, name, mesh_path,
+        callback=lambda ent, is_skinned: _on_import_model_loaded(mw, name, mesh_path, ent, is_skinned)
+    )
+
+
+def _on_import_model_loaded(mw, name, mesh_path, ent, is_skinned):
+    if not is_skinned:
         from core.components import Transform, MeshFilter, MeshRenderer
         ent = mw._engine.scene.create_entity(name)
         ent.add_component(Transform())
         mf = MeshFilter()
-        mf.mesh_name = os.path.splitext(os.path.relpath(path, "."))[0].replace("\\", "/")
+        mf.mesh_name = name
         mf.mesh_path = mesh_path
         ent.add_component(mf)
         ent.add_component(MeshRenderer())
     mw._hierarchy.refresh()
-    on_entity_selected(mw, ent)
+    if ent:
+        on_entity_selected(mw, ent)
 
 
 def open_scene_by_path(mw, path: str):

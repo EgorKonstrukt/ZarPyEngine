@@ -15,7 +15,7 @@ from core.renderer.mesh_data import MeshData
 from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh
 from core.ecs.pool import asset as _get_asset_pool
 
-_MAX_PENDING_PER_FRAME = 6
+_MAX_PENDING_PER_FRAME = 16
 
 _ERROR_MESH_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "3d_models", "ERRORText.fbx"))
 
