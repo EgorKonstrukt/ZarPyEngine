@@ -127,9 +127,9 @@ void main() {
 
     mat3 cov2d = transpose(J) * Vrk * J;
 
-    float a = cov2d[0][0] + 0.3;
+    float a = cov2d[0][0] + 0.01;
     float b = cov2d[0][1];
-    float c = cov2d[1][1] + 0.3;
+    float c = cov2d[1][1] + 0.01;
 
     float det = a * c - b * b;
     if (det < 1e-6) {
@@ -162,12 +162,9 @@ void main() {
         r2 *= clamp_scale;
     }
 
-    vec2 v1 = vec2(1.0, 0.0);
-    vec2 v2 = vec2(0.0, 1.0);
-    if (abs(b) > 1e-6) {
-        v1 = normalize(vec2(l1 - c, b));
-        v2 = normalize(vec2(l2 - c, b));
-    }
+    float angle = 0.5 * atan(b, a - l2);
+    vec2 v1 = vec2(cos(angle), sin(angle));
+    vec2 v2 = vec2(-sin(angle), cos(angle));
 
     vec2 off = QUAD_OFFSETS[gl_VertexID];
     v_uv = QUAD_UV[gl_VertexID];
