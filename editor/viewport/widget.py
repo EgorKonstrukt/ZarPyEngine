@@ -158,6 +158,9 @@ class SceneViewport(QOpenGLWidget):
         self._gizmos_api: GizmosManager = GizmosManager()
         set_gizmos(self._gizmos_api)
         self._selected_entities: list = []
+        self._selected_set: frozenset = frozenset()
+        self._selected_set_key = (None, -1)
+        self._gc_frame_counter: int = 0
         self._last_frame_time: float = time.perf_counter()
         self._last_paint_time: float = time.perf_counter()
         self._last_update_gap: float = time.perf_counter()
@@ -235,6 +238,10 @@ class SceneViewport(QOpenGLWidget):
         self._collab_throttle_transform: float = 0.0
         self._collab_throttle_gizmo: float = 0.0
         self._collab_last_gizmo_state: tuple[str, int, bool] = ("none", -1, False)
+        self._collab_timer = QTimer(self)
+        self._collab_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._collab_timer.setInterval(66)
+        self._collab_timer.timeout.connect(self._collab_tick)
         self._pb_scale_gizmo: "PbScaleGizmo | None" = None
         self._in_update: bool = False
         self._last_status_update: float = 0.0
@@ -370,11 +377,18 @@ class SceneViewport(QOpenGLWidget):
         super().showEvent(event)
         if not self._vsync_enabled:
             self._render_timer.start(1)
+        self._collab_timer.start()
         self.update()
 
     def hideEvent(self, event):
         super().hideEvent(event)
         self._render_timer.stop()
+        self._collab_timer.stop()
+
+    def _collab_tick(self):
+        if not self._engine.play_mode:
+            send_collab_camera(self)
+            self._update_status_labels()
 
     def on_dock_top_level_changed(self, floating: bool):
         self._screen_fbo = None
@@ -655,11 +669,8 @@ class SceneViewport(QOpenGLWidget):
                 with eng._scene_lock:
                     self._gizmos_api.update(dt)
                 self._cam.update(dt)
-                send_collab_camera(self)
             else:
                 self._cam.update(dt)
-        if not eng.play_mode:
-            self._update_status_labels()
         prof = eng._profiler if hasattr(eng, '_profiler') else None
         in_frame = prof is not None and len(prof._stack) > 0 and prof._stack[0][0] == "frame"
         try:
@@ -685,7 +696,7 @@ class SceneViewport(QOpenGLWidget):
                 self._renderer.grid_2d_mode = self._cam.is_2d_mode
                 self._renderer.grid_zoom_distance = self._cam._ortho_zoom_distance
                 t0 = time.perf_counter()
-                sel_set = set(self._selected_entities) if not eng.play_mode else None
+                sel_set = self._get_selected_set()
                 self._renderer.render_scene(scene, view, proj, cam_pos, rw, rh, self._screen_fbo,
                                             sel_set, self._cam.near, self._cam.far, self._cam.fov,
                                             display_w=fw, display_h=fh)
@@ -697,44 +708,31 @@ class SceneViewport(QOpenGLWidget):
                 self._renderer._line_width = max(1.0, float(dpr) * 1.0)
                 t1 = time.perf_counter()
                 if in_frame:
-                    prof.start("gizmo_wireframes")
-                if self._gizmo_visible:
-                    with eng._scene_lock:
-                        render_component_gizmos(self, vp_mat)
-                if in_frame:
-                    prof.stop("gizmo_wireframes")
+                    prof.start("gizmos")
                 with eng._scene_lock:
+                    if self._gizmo_visible:
+                        render_component_gizmos(self, vp_mat)
                     render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
-                if not eng.play_mode:
-                    if in_frame:
-                        prof.start("gizmo_icons")
-                    try:
-                        with eng._scene_lock:
+                    if not eng.play_mode:
+                        try:
                             render_component_icons_gl(self)
-                    except Exception:
-                        pass
+                        except Exception:
+                            pass
+                    self._render_api_gizmos()
+                    if not eng.play_mode:
+                        try:
+                            render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
+                        except Exception:
+                            pass
+                if in_frame:
+                    prof.stop("gizmos")
                 if self._debug_lines:
                     self._renderer.render_gizmo_lines(self._debug_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
                     self._debug_lines.clear()
                 if self._show_bvh_debug and not eng.play_mode:
                     self._render_bvh_debug()
-                with eng._scene_lock:
-                    self._render_api_gizmos()
                 if self._pb_scale_gizmo and self._pb_scale_gizmo.active and not eng.play_mode:
                     self._pb_scale_gizmo.render()
-                if not eng.play_mode:
-                    if in_frame:
-                        prof.stop("gizmo_icons")
-                if not eng.play_mode:
-                    if in_frame:
-                        prof.start("gizmo_collab")
-                    try:
-                        with eng._scene_lock:
-                            render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
-                    except Exception:
-                        pass
-                    if in_frame:
-                        prof.stop("gizmo_collab")
                 if self._gizmo_visible:
                     gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
                     if gizmo_result is not None:
@@ -767,6 +765,11 @@ class SceneViewport(QOpenGLWidget):
         _paint_dur = (time.perf_counter() - _p0) * 1000.0
         eng.set_profiler_data("paint_full_ms", _paint_dur)
         eng.set_profiler_data("paint_gap_ms", _paint_gap * 1000.0)
+        self._gc_frame_counter += 1
+        if self._gc_frame_counter >= 5000:
+            self._gc_frame_counter = 0
+            import gc
+            gc.collect(generation=0)
         if self._vsync_enabled:
             self.update()
 
@@ -791,6 +794,14 @@ class SceneViewport(QOpenGLWidget):
                 ps.on_update(dt)
             except Exception:
                 pass
+
+    def _get_selected_set(self):
+        lst = self._selected_entities
+        v = id(lst), len(lst)
+        if v != self._selected_set_key:
+            self._selected_set_key = v
+            self._selected_set = frozenset(lst)
+        return self._selected_set if not self._engine.play_mode else None
 
     def _update_status_labels(self):
         if self._no_qt_overlay:
@@ -869,6 +880,7 @@ class SceneViewport(QOpenGLWidget):
                     self.entities_selected.emit(self._selected_entities)
                 else:
                     self._selected_entities = []
+                    self._selected_set_version += 1
                     self._set_gizmo_entity(None)
                     self.entity_selected.emit(None)
                 from editor.viewport.collaboration import send_collab_selection; send_collab_selection(self)
@@ -1482,10 +1494,6 @@ class SceneViewport(QOpenGLWidget):
                 rgba = qimg.bits().asstring(tex_size * tex_size * 4)
                 tex = self._renderer.create_icon_texture_from_data(rgba, tex_size, tex_size, cache_key)
                 self._renderer._icon_textures[cache_key] = tex
-            if tex:
-                sx, sy = sp[0], sp[1]
-                sz = max(font_size * 2.5, 32) * dpr
-                self._renderer.render_icon(tex, sx, sy, sz, 1.0, fw, fh)
             if tex:
                 sx, sy = sp[0], sp[1]
                 sz = max(font_size * 2.5, 32) * dpr

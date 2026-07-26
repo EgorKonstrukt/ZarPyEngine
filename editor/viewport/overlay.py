@@ -84,46 +84,8 @@ def _fmt_count(n: int) -> str:
 _vram_cache = {'used_mb': 0.0, 'total_mb': 0.0, 'last_query': 0.0}
 
 
-try:
-    import ctypes as _nvml_ctypes
-
-    class _NVMLMem(_nvml_ctypes.Structure):
-        _fields_ = [
-            ('total', _nvml_ctypes.c_ulonglong),
-            ('free', _nvml_ctypes.c_ulonglong),
-            ('used', _nvml_ctypes.c_ulonglong),
-        ]
-
-    _nvml_handle = _nvml_ctypes.WinDLL('nvml.dll')
-    _nvml_handle.nvmlInit()
-    _nvml_dev_handle = _nvml_ctypes.c_void_p()
-    _nvml_handle.nvmlDeviceGetHandleByIndex(0, _nvml_ctypes.byref(_nvml_dev_handle))
-    _nvml_available = True
-except Exception:
-    _nvml_available = False
-    _nvml_dev_handle = None
-    _NVMLMem = None
-
-
 def _get_vram_mb() -> tuple[float, float]:
-    global _vram_cache
-    now = time.time()
-    if now - _vram_cache['last_query'] < 2.0:
-        return _vram_cache['used_mb'], _vram_cache['total_mb']
-
-    used_mb = total_mb = 0.0
-    if _nvml_available and _nvml_dev_handle is not None:
-        try:
-            mem = _NVMLMem()
-            _nvml_handle.nvmlDeviceGetMemoryInfo(
-                _nvml_dev_handle, _nvml_ctypes.byref(mem))
-            total_mb = mem.total / (1024 * 1024)
-            used_mb = mem.used / (1024 * 1024)
-        except Exception:
-            pass
-
-    _vram_cache = {'used_mb': used_mb, 'total_mb': total_mb, 'last_query': now}
-    return used_mb, total_mb
+    return _vram_cache['used_mb'], _vram_cache['total_mb']
 
 
 _SPIKE_LOG: list[tuple[float, dict[str, float]]] = []
@@ -229,7 +191,7 @@ def draw_stats_overlay(vp, painter):
 
     _now = time.time()
     if (not hasattr(vp, '_stats_expensive')
-            or (_now - getattr(vp, '_stats_expensive_t', 0.0)) > 0.25):
+            or (_now - getattr(vp, '_stats_expensive_t', 0.0)) > 5.0):
         _ram_mb = _get_ram_mb()
         _vram_used, _vram_total = _get_vram_mb()
         _gc0, _gc1, _gc2 = _gc.get_count()
