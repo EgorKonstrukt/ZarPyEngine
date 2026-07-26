@@ -42,6 +42,7 @@ SECTION_ICONS = {
     "audio": "fa5s.music",
     "toolbar": "fa5s.wrench",
     "file_assoc": "fa5s.file-code",
+    "mesh_preview": "fa5s.cube",
 }
 
 SECTION_DESCRIPTIONS = {
@@ -64,6 +65,7 @@ SECTION_DESCRIPTIONS = {
     "audio": "Audio volume settings",
     "toolbar": "Toolbar toggle states",
     "file_assoc": "File type associations in Windows",
+    "mesh_preview": "3D model thumbnail preview appearance",
 }
 
 FIELD_TOOLTIPS = {
@@ -74,6 +76,24 @@ FIELD_TOOLTIPS = {
     "editor.language": "Editor UI language (restart required)",
     "editor.auto_save": "Automatically save the current scene",
     "editor.auto_save_interval": "Auto-save interval in seconds",
+    "editor.thumb_cache_mode": "Thumbnail cache key: metadata (fast, uses mtime/size) or content (full file hash, slower but exact)",
+    "editor.thumb_resolution": "Thumbnail render resolution in pixels (higher = sharper but slower)",
+
+    "mesh_preview.camera_rot_x": "Camera X rotation angle in degrees for mesh thumbnails",
+    "mesh_preview.camera_rot_y": "Camera Y rotation angle in degrees for mesh thumbnails",
+    "mesh_preview.bg_r": "Background red channel (0-1, 0 = transparent)",
+    "mesh_preview.bg_g": "Background green channel (0-1)",
+    "mesh_preview.bg_b": "Background blue channel (0-1)",
+    "mesh_preview.bg_a": "Background alpha channel (0 = transparent, 1 = opaque)",
+    "mesh_preview.tri_r": "Triangle fill red channel (0-1)",
+    "mesh_preview.tri_g": "Triangle fill green channel (0-1)",
+    "mesh_preview.tri_b": "Triangle fill blue channel (0-1)",
+    "mesh_preview.tri_a": "Triangle fill alpha channel (0-1)",
+    "mesh_preview.wire_r": "Wireframe red channel (0-1)",
+    "mesh_preview.wire_g": "Wireframe green channel (0-1)",
+    "mesh_preview.wire_b": "Wireframe blue channel (0-1)",
+    "mesh_preview.wire_a": "Wireframe alpha channel (0-1)",
+    "mesh_preview.wire_width": "Wireframe line width in pixels",
 
     "camera.fov": "Camera field of view in degrees",
     "camera.near": "Near clipping plane distance",
@@ -221,6 +241,7 @@ _FIELD_RANGES = {
     "editor.font_size": (8, 72),
     "editor.ui_scale": (50, 200),
     "editor.auto_save_interval": (10, 600),
+    "editor.thumb_resolution": (64, 2048),
     "camera.fov": (1, 179),
     "camera.near": (0.001, 10.0),
     "camera.far": (10.0, 50000.0),
@@ -329,6 +350,21 @@ _FIELD_RANGES = {
     "toolbar.snap_translate": (0.001, 100.0),
     "toolbar.snap_rotate": (0.1, 360.0),
     "toolbar.snap_scale": (0.001, 100.0),
+    "mesh_preview.camera_rot_x": (-180.0, 180.0),
+    "mesh_preview.camera_rot_y": (-180.0, 180.0),
+    "mesh_preview.bg_r": (0.0, 1.0),
+    "mesh_preview.bg_g": (0.0, 1.0),
+    "mesh_preview.bg_b": (0.0, 1.0),
+    "mesh_preview.bg_a": (0.0, 1.0),
+    "mesh_preview.tri_r": (0.0, 1.0),
+    "mesh_preview.tri_g": (0.0, 1.0),
+    "mesh_preview.tri_b": (0.0, 1.0),
+    "mesh_preview.tri_a": (0.0, 1.0),
+    "mesh_preview.wire_r": (0.0, 1.0),
+    "mesh_preview.wire_g": (0.0, 1.0),
+    "mesh_preview.wire_b": (0.0, 1.0),
+    "mesh_preview.wire_a": (0.0, 1.0),
+    "mesh_preview.wire_width": (0.5, 5.0),
 }
 
 
@@ -765,6 +801,12 @@ class SettingsDialog(QDialog):
                 detect_btn.clicked.connect(_detect)
                 hl.addWidget(detect_btn)
             return container
+        if key == "editor.thumb_cache_mode":
+            cb = QComboBox()
+            cb.addItems(["metadata", "content"])
+            cb.setCurrentText(self._config.get(key, "metadata"))
+            cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            return cb
         if isinstance(value, bool):
             cb = QCheckBox()
             cb.setChecked(self._config.get(key, value))

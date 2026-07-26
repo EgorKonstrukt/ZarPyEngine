@@ -112,6 +112,8 @@ def get_global_config() -> Config:
                 "language": "en",
                 "auto_save": True,
                 "auto_save_interval": 300,
+                "thumb_cache_mode": "metadata",
+                "thumb_resolution": 512,
             },
             "camera": {
                 "fov": 70.0,
@@ -240,6 +242,14 @@ def get_global_config() -> Config:
             },
             "file_assoc": {
                 "registered_extensions": ""
+            },
+            "mesh_preview": {
+                "camera_rot_x": 30.0,
+                "camera_rot_y": -45.0,
+                "bg": [0.0, 0.0, 0.0, 0.0],
+                "tri": [0.39, 0.63, 0.86, 0.16],
+                "wire": [0.71, 0.82, 0.94, 0.78],
+                "wire_width": 1.0,
             }
         })
         _global_config._data.pop("physics", None)

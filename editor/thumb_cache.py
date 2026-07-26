@@ -22,15 +22,29 @@ def cache_root_for_project(project_root: str) -> str:
     return os.path.join(os.path.abspath(project_root), "cache", "thumbs")
 
 
-def thumb_disk_key(path: str, size: int, mtime: float, fsize: int) -> str:
+def thumb_disk_key(path: str, size: int, mtime: float, fsize: int,
+                    mode: str = "metadata") -> str:
     h = xxhash.xxh64()
     h.update(os.path.abspath(path).encode("utf-8", "surrogateescape"))
     h.update(b"|")
-    h.update(str(mtime).encode())
-    h.update(b"|")
-    h.update(str(fsize).encode())
-    h.update(b"|")
     h.update(str(size).encode())
+    h.update(b"|")
+    if mode == "content":
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1048576)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+        except OSError:
+            h.update(str(mtime).encode())
+            h.update(b"|")
+            h.update(str(fsize).encode())
+    else:
+        h.update(str(mtime).encode())
+        h.update(b"|")
+        h.update(str(fsize).encode())
     return h.hexdigest()
 
 

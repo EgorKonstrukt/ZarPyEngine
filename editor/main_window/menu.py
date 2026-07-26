@@ -150,6 +150,10 @@ def setup_menu(mw):
     build_act.setShortcut(QKeySequence("Ctrl+Shift+B"))
     build_act.triggered.connect(lambda: show_build_dialog(mw))
     tools_menu.addAction(build_act)
+    tools_menu.addSeparator()
+    refresh_icons_act = QAction(_qta("fa5s.sync-alt"), "Refresh All Icons", mw)
+    refresh_icons_act.triggered.connect(lambda: _refresh_all_icons(mw))
+    tools_menu.addAction(refresh_icons_act)
 
     vcs_menu = mb.addMenu("VCS")
     _setup_vcs_menu(mw, vcs_menu)
@@ -473,6 +477,12 @@ def _show_mesh_editor(mw):
     sel = getattr(mw._viewport, '_selected_entities', None)
     if sel and len(sel) > 0:
         mw._mesh_editor.set_entity(sel[0])
+
+
+def _refresh_all_icons(mw):
+    project_panel = getattr(mw, "_project", None)
+    if project_panel:
+        project_panel._force_refresh_thumbnails()
 
 
 def _show_terrain_editor(mw):

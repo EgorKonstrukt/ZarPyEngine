@@ -47,7 +47,7 @@ def _qta_icon(name: str, color: str | None = None) -> QIcon:
 
 if TYPE_CHECKING:
     from core.engine.engine import Engine
-from editor.resource_picker import _get_thumbnail, _format_size
+from editor.resource_picker import _get_thumbnail, _format_size, _thumb_resolution
 
 from editor.constants import MIN_THUMB, MAX_THUMB, VIEW_ICON, VIEW_LIST, VIEW_DETAILS
 from editor.inspector.helpers import _flash_overlay
@@ -627,7 +627,7 @@ class _FilePane(QWidget):
                         if std_icon:
                             item.setIcon(std_icon)
                         else:
-                            pm = _get_thumbnail(full, self._panel._thumb_size)
+                            pm = _get_thumbnail(full, _thumb_resolution())
                             item.setIcon(QIcon(pm))
                         item.setText(f)
                         item.setData(Qt.ItemDataRole.UserRole, full)
@@ -722,7 +722,7 @@ class _FilePane(QWidget):
                     if std_icon:
                         item.setIcon(std_icon)
                     else:
-                        pm = _get_thumbnail(full, self._panel._thumb_size)
+                        pm = _get_thumbnail(full, _thumb_resolution())
                         item.setIcon(QIcon(pm))
                     item.setText(entry)
                     item.setData(Qt.ItemDataRole.UserRole, full)
@@ -741,7 +741,7 @@ class _FilePane(QWidget):
                     if std_icon:
                         item.setIcon(std_icon)
                     else:
-                        pm = _get_thumbnail(full, self._panel._thumb_size)
+                        pm = _get_thumbnail(full, _thumb_resolution())
                         item.setIcon(QIcon(pm))
                 else:
                     try:
@@ -821,7 +821,7 @@ class _FilePane(QWidget):
                 item.setToolTip(0, f"Folder: {full}")
             else:
                 if use_thumbs:
-                    pm = _get_thumbnail(full, self._panel._thumb_size)
+                    pm = _get_thumbnail(full, _thumb_resolution())
                     if pm and not pm.isNull():
                         item.setIcon(0, QIcon(pm))
                     else:
@@ -1310,6 +1310,9 @@ class ProjectPanel(QDockWidget):
 
         self.setWidget(w)
 
+        from editor.resource_picker import _get_thumb_service
+        from editor.thumb_cache import cache_root_for_project
+        _get_thumb_service().set_cache_dir(cache_root_for_project(self._project_root))
         self._connect_mesh_loader()
         self._pane_a.populate_files(self._project_root)
 
@@ -1764,6 +1767,13 @@ class ProjectPanel(QDockWidget):
         self._pane_a.refresh()
         if self._pane_b:
             self._pane_b.refresh()
+
+    def _force_refresh_thumbnails(self):
+        from editor.resource_picker import _get_thumb_service
+        _get_thumb_service().invalidate_thumbnails()
+        from editor.thumb_cache import cache_root_for_project
+        _get_thumb_service().set_cache_dir(cache_root_for_project(self._project_root))
+        self._refresh()
 
     def _on_folder_selected(self, item, col):
         dirpath = item.data(0, Qt.ItemDataRole.UserRole)

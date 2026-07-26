@@ -84,14 +84,34 @@ def _render_image(path: str, size: int):
 
 
 
-def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int) -> QPixmap:
+def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int,
+                        settings: Optional[dict] = None) -> QPixmap:
     pm = QPixmap(size, size)
     pm.fill(Qt.GlobalColor.transparent)
     if len(verts_flat) < 3 or len(idx) < 3:
         return pm
+    cfg = settings or {}
+    rot_y_deg = cfg.get("camera_rot_y", -45.0)
+    rot_x_deg = cfg.get("camera_rot_x", 30.0)
+    bg_r = cfg.get("bg_r", 0.0)
+    bg_g = cfg.get("bg_g", 0.0)
+    bg_b = cfg.get("bg_b", 0.0)
+    bg_a = cfg.get("bg_a", 0.0)
+    tri_r = cfg.get("tri_r", 0.39)
+    tri_g = cfg.get("tri_g", 0.63)
+    tri_b = cfg.get("tri_b", 0.86)
+    tri_a = cfg.get("tri_a", 0.16)
+    wire_r = cfg.get("wire_r", 0.71)
+    wire_g = cfg.get("wire_g", 0.82)
+    wire_b = cfg.get("wire_b", 0.94)
+    wire_a = cfg.get("wire_a", 0.78)
+    wire_w = cfg.get("wire_width", 1.0)
+    if bg_a > 0:
+        pm.fill(QColor(int(bg_r * 255), int(bg_g * 255),
+                        int(bg_b * 255), int(bg_a * 255)))
     pts = verts_flat.reshape(-1, 3).copy()
-    rot_y = math.radians(-45)
-    rot_x = math.radians(30)
+    rot_y = math.radians(rot_y_deg)
+    rot_x = math.radians(rot_x_deg)
     cos_y, sin_y = math.cos(rot_y), math.sin(rot_y)
     cos_x, sin_x = math.cos(rot_x), math.sin(rot_x)
     for i in range(len(pts)):
@@ -113,8 +133,10 @@ def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int) -> QP
     proj += [size // 2, size // 2]
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    tri_color = QColor(100, 160, 220, 40)
-    wire_color = QColor(180, 210, 240, 200)
+    tri_color = QColor(int(tri_r * 255), int(tri_g * 255),
+                       int(tri_b * 255), int(tri_a * 255))
+    wire_color = QColor(int(wire_r * 255), int(wire_g * 255),
+                        int(wire_b * 255), int(wire_a * 255))
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QBrush(tri_color))
     path = QPainterPath()
@@ -132,7 +154,7 @@ def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int) -> QP
         path.lineTo(x2, y2)
         path.closeSubpath()
     p.drawPath(path)
-    p.setPen(QPen(wire_color, 1))
+    p.setPen(QPen(wire_color, wire_w))
     p.setBrush(Qt.BrushStyle.NoBrush)
     for i in range(0, len(idx), 3):
         if i + 2 >= len(idx):
@@ -150,7 +172,7 @@ def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int) -> QP
     return pm
 
 
-def _render_mesh(path: str, size: int):
+def _render_mesh(path: str, size: int, settings: Optional[dict] = None):
     _ensure_app()
     try:
         data = load_mesh(path)
@@ -158,7 +180,7 @@ def _render_mesh(path: str, size: int):
         return None
     if data is None or len(getattr(data, "vertices", [])) < 3 or len(getattr(data, "indices", [])) < 3:
         return None
-    pm = _render_mesh_ortho(data.vertices, data.indices, size)
+    pm = _render_mesh_ortho(data.vertices, data.indices, size, settings=settings)
     return _pm_to_png(pm)
 
 
@@ -370,12 +392,13 @@ def _render_material(path: str, size: int):
     return _pm_to_png(pm)
 
 
-def render_thumbnail(path: str, size: int, cache_dir: Optional[str] = None):
+def render_thumbnail(path: str, size: int, cache_dir: Optional[str] = None,
+                     mesh_preview: Optional[dict] = None):
     ext = os.path.splitext(path)[1].lower()
     if ext in IMAGE_EXTS:
         return _render_image(path, size)
     if ext in MESH_EXTS:
-        return _render_mesh(path, size)
+        return _render_mesh(path, size, settings=mesh_preview)
     if ext in AUDIO_EXTS:
         return _render_audio(path, size)
     if ext in FONT_EXTS:

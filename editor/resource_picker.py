@@ -176,7 +176,8 @@ class _ThumbnailProcessService(QObject):
         if self._cache_dir:
             try:
                 st = os.stat(path)
-                dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size)
+                dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size,
+                                       mode=_thumb_cache_mode())
                 png = load_thumb_disk(self._cache_dir, dkey)
                 if png:
                     pm = QPixmap()
@@ -201,7 +202,8 @@ class _ThumbnailProcessService(QObject):
         try:
             self._pool.apply_async(
                 _thumb_render_wrap,
-                (path, size, self._cache_dir),
+                (path, size, self._cache_dir, _thumb_cache_mode(),
+                 _mesh_preview_settings()),
                 callback=self._on_pool_result,
                 error_callback=self._on_pool_error,
             )
@@ -254,6 +256,20 @@ class _ThumbnailProcessService(QObject):
         self._inflight.clear()
         self._lock.unlock()
 
+    def invalidate_thumbnails(self):
+        _thumbnail_mutex.lock()
+        _thumbnail_cache.clear()
+        _thumbnail_mutex.unlock()
+        _icon_mutex.lock()
+        _icon_cache.clear()
+        _icon_mutex.unlock()
+        if self._cache_dir:
+            import shutil
+            try:
+                shutil.rmtree(self._cache_dir, ignore_errors=True)
+            except Exception:
+                pass
+
 
 def _thumb_worker_init():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -262,13 +278,16 @@ def _thumb_worker_init():
 _thumb_service: Optional[_ThumbnailProcessService] = None
 
 
-def _thumb_render_wrap(path: str, size: int, cache_dir: Optional[str]):
+def _thumb_render_wrap(path: str, size: int, cache_dir: Optional[str],
+                        mode: str = "metadata",
+                        mesh_preview: Optional[dict] = None):
     from editor.thumb_worker import render_thumbnail
-    png = render_thumbnail(path, size, cache_dir)
+    png = render_thumbnail(path, size, cache_dir, mesh_preview=mesh_preview)
     if png and cache_dir:
         try:
             st = os.stat(path)
-            dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size)
+            dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size,
+                                   mode=mode)
             save_thumb_disk(cache_dir, dkey, png)
         except OSError:
             pass
@@ -286,6 +305,30 @@ def _get_mesh_loader() -> _ThumbnailProcessService:
     return _get_thumb_service()
 
 
+def _thumb_cache_mode() -> str:
+    try:
+        from core.config.config import get_global_config
+        return get_global_config().get("editor.thumb_cache_mode", "metadata")
+    except Exception:
+        return "metadata"
+
+
+def _thumb_resolution() -> int:
+    try:
+        from core.config.config import get_global_config
+        return get_global_config().get("editor.thumb_resolution", 512)
+    except Exception:
+        return 512
+
+
+def _mesh_preview_settings() -> dict:
+    try:
+        from core.config.config import get_global_config
+        return get_global_config().get("mesh_preview", {})
+    except Exception:
+        return {}
+
+
 def _get_thumbnail(path: str, size: int) -> QPixmap:
     cache_key = f"thumb:{path}:{size}"
     _thumbnail_mutex.lock()
@@ -294,6 +337,22 @@ def _get_thumbnail(path: str, size: int) -> QPixmap:
         _thumbnail_mutex.unlock()
         return cached
     _thumbnail_mutex.unlock()
+    svc = _get_thumb_service()
+    if svc._cache_dir:
+        try:
+            st = os.stat(path)
+            dkey = thumb_disk_key(path, size, st.st_mtime, st.st_size,
+                                   mode=_thumb_cache_mode())
+            png = load_thumb_disk(svc._cache_dir, dkey)
+            if png:
+                pm = QPixmap()
+                if pm.loadFromData(png, "PNG") and not pm.isNull():
+                    _thumbnail_mutex.lock()
+                    _thumbnail_cache[cache_key] = pm
+                    _thumbnail_mutex.unlock()
+                    return pm
+        except OSError:
+            pass
     pm = _get_thumbnail_raw(path, size)
     if pm:
         _thumbnail_mutex.lock()
@@ -923,7 +982,7 @@ class ResourcePickerDialog(QDialog):
             path = self._item_paths.get(idx)
             if not path:
                 continue
-            cache_key = f"thumb:{path}:{THUMB_SIZE}"
+            cache_key = f"thumb:{path}:{_thumb_resolution()}"
             _thumbnail_mutex.lock()
             cached = cache_key in _thumbnail_cache
             _thumbnail_mutex.unlock()
@@ -961,7 +1020,7 @@ class ResourcePickerDialog(QDialog):
             return
         if not _is_process_thumb(path):
             return
-        cache_key = f"thumb:{path}:{THUMB_SIZE}"
+        cache_key = f"thumb:{path}:{_thumb_resolution()}"
         _thumbnail_mutex.lock()
         cached = cache_key in _thumbnail_cache
         _thumbnail_mutex.unlock()
@@ -974,10 +1033,10 @@ class ResourcePickerDialog(QDialog):
             return
         self._mesh_loaded.add(idx)
         self._mesh_pending += 1
-        _get_thumb_service().enqueue(path, THUMB_SIZE)
+        _get_thumb_service().enqueue(path, _thumb_resolution())
 
     def _on_thumb_ready(self, path: str, size: int, pixmap):
-        if size != THUMB_SIZE:
+        if size != _thumb_resolution():
             return
         self._mesh_pending = max(0, self._mesh_pending - 1)
         if pixmap is None or pixmap.isNull():
@@ -1021,7 +1080,7 @@ class ResourcePickerDialog(QDialog):
                 # Prefer a real (process-generated) thumbnail; fall back to the
                 # vector placeholder. Placeholders live in a separate cache so a
                 # placeholder can never be mistaken for a finished thumbnail.
-                cache_key = f"thumb:{path}:{THUMB_SIZE}"
+                cache_key = f"thumb:{path}:{_thumb_resolution()}"
                 _thumbnail_mutex.lock()
                 pm = _thumbnail_cache.get(cache_key)
                 if pm is None:
