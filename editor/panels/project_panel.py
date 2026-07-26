@@ -1004,7 +1004,7 @@ class _FileListDelegate(QStyledItemDelegate):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             rect = option.rect
-            painter.setPen(line_pen)
+            painter.setPen(QPen(QColor(80, 80, 80), 1))
             painter.drawLine(rect.x(), rect.y(), rect.x() + rect.width(), rect.y())
             painter.drawLine(rect.x(), rect.y() + rect.height() - 1, rect.x() + rect.width(), rect.y() + rect.height() - 1)
             font = painter.font()

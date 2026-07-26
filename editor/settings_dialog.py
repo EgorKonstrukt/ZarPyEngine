@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 from typing import Optional, Any
+
+from PyQt5.QtGui import QIcon
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget,
                              QWidget, QFormLayout, QLineEdit, QDoubleSpinBox,
                              QSpinBox, QCheckBox, QPushButton, QListWidgetItem,
@@ -405,6 +407,21 @@ class SliderSpinBox(QWidget):
         self._updating = False
         self.valueChanged.emit(val)
 
+    def setValue(self, value):
+        if self._updating:
+            return
+        self._updating = True
+        if self._is_float:
+            v = float(value)
+            self._spin.setValue(v)
+            self._slider.setValue(int(v * 1000))
+        else:
+            v = int(value)
+            self._spin.setValue(v)
+            self._slider.setValue(v)
+        self._updating = False
+        self.valueChanged.emit(self._spin.value())
+
 
 class SettingsDialog(QDialog):
     config_changed = pyqtSignal(str, object)
@@ -415,6 +432,8 @@ class SettingsDialog(QDialog):
         self.setWindowTitle(title)
         self.setMinimumSize(800, 520)
         self.resize(900, 580)
+        self._field_resets: dict[str, tuple[QPushButton, Any]] = {}
+        self._field_widgets: dict[str, QWidget] = {}
         self._config.on_changed(self._on_config_changed)
         self._setup_ui()
         if self._list_widget.count() > 0:
@@ -452,6 +471,7 @@ class SettingsDialog(QDialog):
         self._list_widget.setFixedWidth(scale(180))
         self._list_widget.setFrameShape(QFrame.Shape.StyledPanel)
         self._list_widget.currentRowChanged.connect(self._on_list_row_changed)
+        self._list_widget.installEventFilter(self)
 
         sections = [(k, v) for k, v in self._config.to_dict().items() if isinstance(v, dict)]
         sections.sort(key=lambda x: x[0])
@@ -488,6 +508,18 @@ class SettingsDialog(QDialog):
         bar_layout.addStretch()
         bar_layout.addWidget(close_btn)
         main_layout.addWidget(bottom_bar)
+
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if obj is self._list_widget and event.type() == QEvent.Type.Wheel:
+            delta = event.angleDelta().y()
+            row = self._list_widget.currentRow()
+            if delta > 0 and row > 0:
+                self._list_widget.setCurrentRow(row - 1)
+            elif delta < 0 and row < self._list_widget.count() - 1:
+                self._list_widget.setCurrentRow(row + 1)
+            return True
+        return super().eventFilter(obj, event)
 
     def _on_list_row_changed(self, row: int):
         if 0 <= row < len(self._sections):
@@ -557,7 +589,26 @@ class SettingsDialog(QDialog):
                 if tooltip:
                     label.setToolTip(tooltip)
                     widget.setToolTip(tooltip)
-                form.addRow(label, widget)
+                default_val = self._config._defaults.get(prefix, {}).get(key)
+                self._field_widgets[full_key] = widget
+                if default_val is not None and not isinstance(default_val, dict):
+                    row_widget = QWidget()
+                    row_layout = QHBoxLayout(row_widget)
+                    row_layout.setContentsMargins(0, 0, 0, 0)
+                    row_layout.setSpacing(4)
+                    row_layout.addWidget(widget, 1)
+                    reset_btn = QPushButton()
+                    reset_btn.setIcon(qta.icon("fa5s.undo", color="#888") if qta else QIcon())
+                    reset_btn.setFixedSize(scale(20), scale(20))
+                    reset_btn.setToolTip("Reset to default")
+                    reset_btn.setStyleSheet("QPushButton { border: none; } QPushButton:hover { background: rgba(255,255,255,0.1); border-radius: 3px; }")
+                    reset_btn.clicked.connect(lambda _, k=full_key: self._reset_field(k))
+                    row_layout.addWidget(reset_btn)
+                    self._field_resets[full_key] = (reset_btn, default_val)
+                    self._update_reset_btn(full_key)
+                    form.addRow(label, row_widget)
+                else:
+                    form.addRow(label, widget)
 
         outer_layout.addWidget(form_container)
 
@@ -748,7 +799,7 @@ class SettingsDialog(QDialog):
             if devices:
                 detect_btn = QPushButton("Detect")
                 detect_btn.setFixedWidth(scale(56))
-                def _detect(btn=detect_btn, edit=le, k=key):
+                def _detect(_checked=False, _btn=detect_btn, edit=le, k=key):
                     from core.audio.audio_system import AudioSystem
                     devs = AudioSystem.get_available_devices()
                     if devs:
@@ -758,7 +809,7 @@ class SettingsDialog(QDialog):
                         else:
                             idx = 0
                         from PyQt6.QtWidgets import QInputDialog
-                        item, ok = QInputDialog.getItem(btn, "Audio Devices", "Select device:", devs, idx, False)
+                        item, ok = QInputDialog.getItem(_btn, "Audio Devices", "Select device:", devs, idx, False)
                         if ok:
                             edit.setText(item)
                             self._on_value_changed(k, item)
@@ -839,12 +890,46 @@ class SettingsDialog(QDialog):
     def _on_value_changed(self, key: str, value):
         self._config.set(key, value, notify=True)
         self._config.save()
+        self._update_reset_btn(key)
+
+    def _update_reset_btn(self, key: str):
+        if key not in self._field_resets:
+            return
+        btn, default_val = self._field_resets[key]
+        current = self._config.get(key)
+        btn.setVisible(current != default_val)
+
+    def _reset_field(self, key: str):
+        if key not in self._field_resets:
+            return
+        _, default_val = self._field_resets[key]
+        self._config.reset(key)
+        self._config.save()
+        self._config._notify(key, default_val)
+        self._update_reset_btn(key)
+        widget = self._field_widgets.get(key)
+        if widget is None:
+            return
+        if hasattr(widget, 'setValue'):
+            widget.setValue(default_val if isinstance(default_val, (int, float)) else 0)
+        elif hasattr(widget, 'setCurrentText'):
+            widget.setCurrentText(str(default_val))
+        elif hasattr(widget, 'setChecked'):
+            widget.setChecked(bool(default_val))
+        elif hasattr(widget, 'setText'):
+            widget.setText(str(default_val))
+        elif hasattr(widget, 'set_color'):
+            widget.set_color(default_val)
 
     def _on_restore(self):
         row = self._list_widget.currentRow()
         if row < 0 or row >= len(self._sections):
             return
         section = self._sections[row]
+        prefix = section + "."
+        for k in [k for k in self._field_resets if k.startswith(prefix)]:
+            self._field_resets.pop(k, None)
+            self._field_widgets.pop(k, None)
         self._config.reset(section)
         self._config.save()
         old = self._pages[section]
