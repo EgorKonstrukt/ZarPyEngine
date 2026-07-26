@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 import os
 import json
-import struct
+
 import ctypes
 import threading
 from asyncio import Future
@@ -268,106 +268,6 @@ def _node_world_zup(node_map, name):
     for part in chain:
         m = m @ part
     return m
-
-
-def _cache_path_for(mesh_path: str) -> str:
-    return mesh_path + ".ziCache"
-
-
-def _cache_valid(mesh_path: str, cache_path: str) -> bool:
-    try:
-        if not os.path.exists(cache_path):
-            return False
-        src_mtime = os.path.getmtime(mesh_path)
-        cache_mtime = os.path.getmtime(cache_path)
-        return cache_mtime >= src_mtime
-    except Exception:
-        return False
-
-
-def _save_disk_cache(mesh_path: str, data: 'MeshImportData'):
-    try:
-        cp = _cache_path_for(mesh_path)
-        with open(cp, 'wb') as f:
-            header = struct.pack('<4sII', b'ZIC', 1, len(data.vertices))
-            f.write(header)
-            f.write(data.vertices.tobytes())
-            f.write(data.normals.tobytes())
-            f.write(data.uvs.tobytes())
-            f.write(data.indices.tobytes())
-            f.write(struct.pack('<I', len(data.sub_mesh_ranges)))
-            for start, count in data.sub_mesh_ranges:
-                f.write(struct.pack('<ii', start, count))
-            name_bytes = [n.encode('utf-8') for n in data.sub_mesh_names]
-            f.write(struct.pack('<I', len(name_bytes)))
-            for nb in name_bytes:
-                f.write(struct.pack('<I', len(nb)))
-                f.write(nb)
-            f.write(struct.pack('B', 1 if data.has_skeleton else 0))
-            if data.has_skeleton:
-                f.write(struct.pack('<I', len(data.bone_names)))
-                for bn in data.bone_names:
-                    bnb = bn.encode('utf-8')
-                    f.write(struct.pack('<I', len(bnb)))
-                    f.write(bnb)
-                f.write(np.array(data.bone_parents, dtype=np.int32).tobytes())
-                for mat in data.bone_offset_matrices:
-                    f.write(mat.astype(np.float32).tobytes())
-                for mat in data.bone_bind_world:
-                    f.write(mat.astype(np.float32).tobytes())
-                for mat in data.bone_bind_local:
-                    f.write(mat.astype(np.float32).tobytes())
-                f.write(data.bone_indices.astype(np.int32).tobytes())
-                f.write(data.bone_weights.astype(np.float32).tobytes())
-    except Exception:
-        pass
-
-
-def _load_disk_cache(mesh_path: str) -> Optional['MeshImportData']:
-    try:
-        cp = _cache_path_for(mesh_path)
-        if not _cache_valid(mesh_path, cp):
-            return None
-        with open(cp, 'rb') as f:
-            header = f.read(10)
-            magic, version, n_verts = struct.unpack('<4sII', header)
-            if magic != b'ZIC':
-                return None
-            data = MeshImportData()
-            data.name = os.path.splitext(os.path.basename(mesh_path))[0]
-            data.vertices = np.frombuffer(f.read(n_verts * 12), dtype=np.float32).copy()
-            data.normals = np.frombuffer(f.read(n_verts * 12), dtype=np.float32).copy()
-            data.uvs = np.frombuffer(f.read(n_verts * 8), dtype=np.float32).copy()
-            n_idx = struct.unpack('<I', f.read(4))[0]
-            data.indices = np.frombuffer(f.read(n_idx * 4), dtype=np.uint32).copy()
-            n_ranges = struct.unpack('<I', f.read(4))[0]
-            data.sub_mesh_ranges = []
-            for _ in range(n_ranges):
-                s, c = struct.unpack('<ii', f.read(8))
-                data.sub_mesh_ranges.append((s, c))
-            n_names = struct.unpack('<I', f.read(4))[0]
-            data.sub_mesh_names = []
-            for _ in range(n_names):
-                nb_len = struct.unpack('<I', f.read(4))[0]
-                data.sub_mesh_names.append(f.read(nb_len).decode('utf-8'))
-            has_skel = struct.unpack('B', f.read(1))[0]
-            if has_skel:
-                data.has_skeleton = True
-                n_bones = struct.unpack('<I', f.read(4))[0]
-                data.bone_names = []
-                for _ in range(n_bones):
-                    bn_len = struct.unpack('<I', f.read(4))[0]
-                    data.bone_names.append(f.read(bn_len).decode('utf-8'))
-                n_b = len(data.bone_names)
-                data.bone_parents = list(np.frombuffer(f.read(n_b * 4), dtype=np.int32))
-                data.bone_offset_matrices = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
-                data.bone_bind_world = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
-                data.bone_bind_local = [np.frombuffer(f.read(64), dtype=np.float32).copy().reshape(4, 4) for _ in range(n_b)]
-                data.bone_indices = np.frombuffer(f.read(n_verts * 16), dtype=np.int32).copy().reshape(-1, 4)
-                data.bone_weights = np.frombuffer(f.read(n_verts * 16), dtype=np.float32).copy().reshape(-1, 4)
-            return data
-    except Exception:
-        return None
 
 
 def _collect_meshes(node_ptr, scene, mesh_parts, skeleton_ctx, node_map, vert_offset_ref):
@@ -655,12 +555,6 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
         if cached is not None:
             return cached
 
-    disk_cached = _load_disk_cache(path)
-    if disk_cached is not None:
-        with _mem_cache_lock:
-            _mem_cache[path] = disk_cached
-        return disk_cached
-
     eng = None
     try:
         from core.engine.engine import Engine
@@ -750,7 +644,6 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
         if data is not None and len(data.vertices) > 0:
             with _mem_cache_lock:
                 _mem_cache[path] = data
-            _save_disk_cache(path, data)
         return data
     except Exception:
         if prof: prof.stop("load_mesh")
@@ -782,12 +675,6 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
         cached = _mem_cache.get(path)
         if cached is not None:
             return cached
-
-    disk_cached = _load_disk_cache(path)
-    if disk_cached is not None:
-        with _mem_cache_lock:
-            _mem_cache[path] = disk_cached
-        return disk_cached
 
     eng = None
     try:
@@ -882,7 +769,6 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
     if data is not None and len(data.vertices) > 0:
         with _mem_cache_lock:
             _mem_cache[path] = data
-        _save_disk_cache(path, data)
     return data
 
 
