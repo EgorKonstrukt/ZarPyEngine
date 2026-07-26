@@ -10,6 +10,35 @@ import os
 from PyQt6.QtWidgets import QDockWidget
 from PyQt6.QtCore import Qt
 
+try:
+    import qtawesome as qta
+except ImportError:
+    qta = None
+
+DOCK_ICONS = {
+    "ViewportDock": "fa5s.eye",
+    "HierarchyDock": "fa5s.sitemap",
+    "InspectorDock": "fa5s.search",
+    "ConsoleDock": "fa5s.terminal",
+    "ProfilerDock": "fa5s.chart-bar",
+    "PluginManagerDock": "fa5s.puzzle-piece",
+    "ProjectDock": "fa5s.folder-open",
+    "PlayDock": "fa5s.play",
+    "TerminalDock": "fa5s.window-maximize",
+    "UndoHistoryDock": "fa5s.undo",
+    "CollaborationDock": "fa5s.users",
+    "MeshEditorDock": "fa5s.draw-polygon",
+    "TerrainEditorDock": "fa5s.mountain",
+    "AnimationDock": "fa5s.film",
+    "AnimatorDock": "fa5s.running",
+    "ShadersDock": "fa5s.code",
+    "ScriptEditorDock": "fa5s.file-code",
+    "TracemallocDebugDock": "fa5s.bug",
+    "TimeTravelDock": "fa5s.clock",
+    "VersionControlDock": "fa5s.code-branch",
+    "GuiEditorDock": "fa5s.object-group",
+}
+
 from editor.scene_viewport import SceneViewport
 from editor.panels.hierarchy_panel import HierarchyPanel
 from editor.inspector import InspectorPanel
@@ -39,6 +68,16 @@ _AREA_MAP = {
     "top": Qt.DockWidgetArea.TopDockWidgetArea,
     "bottom": Qt.DockWidgetArea.BottomDockWidgetArea,
 }
+
+
+def _apply_dock_icons(mw):
+    if qta is None:
+        return
+    for dock in mw._docks:
+        obj = dock.objectName()
+        icon_name = DOCK_ICONS.get(obj)
+        if icon_name:
+            dock.setWindowIcon(qta.icon(icon_name, color="#d4d4d4"))
 
 
 def _make_dock(mw, title: str, widget, obj_name: str = "") -> QDockWidget:
@@ -251,6 +290,7 @@ def register_default_docks(mw):
         QDockWidget.DockWidgetFeature.DockWidgetFloatable |
         QDockWidget.DockWidgetFeature.DockWidgetClosable)
     register_dock(mw, mw._vcs, Qt.DockWidgetArea.LeftDockWidgetArea)
+    _apply_dock_icons(mw)
 
 
 def register_plugin_docks(mw):
