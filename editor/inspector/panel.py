@@ -366,6 +366,10 @@ class InspectorPanel(QDockWidget):
         gen_uv.setChecked(settings.get("gen_uvs", True))
         gen_uv.toggled.connect(lambda v: self._save_import_setting("gen_uvs", v))
         self._build_labeled_field("Generate UVs", gen_uv)
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        self._add_asset_widget(sep2)
+        self._build_material_wizard_section(settings)
         self._reload_mesh_preview()
 
     def _reload_mesh_preview(self):
@@ -389,11 +393,163 @@ class InspectorPanel(QDockWidget):
                 s = settings.get("scale", 1.0)
                 verts = data.vertices.reshape(-1, 3).astype(np.float32) * s
                 QTimer.singleShot(0, lambda v=verts, i=data.indices, n=data.normals: preview.set_mesh(v, i, normals=n))
+                sub_names = getattr(data, "sub_mesh_names", [])
+                old_names = settings.get("sub_mesh_names", [])
+                if sub_names and sub_names != old_names:
+                    self._save_submesh_names(sub_names)
+                    QTimer.singleShot(0, self._rebuild)
         ext = os.path.splitext(self._asset_path)[1].lower()
         if ext == ".obj":
             load_obj_async(self._asset_path, _on_mesh_loaded)
         else:
             load_mesh_async(self._asset_path, _on_mesh_loaded)
+
+    def _save_submesh_names(self, names: list[str]):
+        cache_path = self._asset_path + ".import"
+        settings = {}
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path) as _f:
+                    settings = json.load(_f)
+            except Exception:
+                pass
+        settings["sub_mesh_names"] = names
+        existing = settings.get("materials", [])
+        if len(existing) < len(names):
+            while len(existing) < len(names):
+                existing.append("")
+            settings["materials"] = existing
+        try:
+            with open(cache_path, "w") as _f:
+                json.dump(settings, _f, indent=2)
+        except Exception:
+            pass
+
+    def _get_submesh_names(self) -> list[str]:
+        cache_path = self._asset_path + ".import"
+        if not os.path.exists(cache_path):
+            return []
+        try:
+            with open(cache_path) as _f:
+                settings = json.load(_f)
+            return settings.get("sub_mesh_names", [])
+        except Exception:
+            return []
+
+    def _build_material_wizard_section(self, import_settings: dict):
+        from editor.material_wizard import MaterialWizardDialog
+        mat_group = QLabel("<b>Materials</b>")
+        self._add_asset_widget(mat_group)
+        assigned = import_settings.get("materials", [])
+        sub_names = import_settings.get("sub_mesh_names", [])
+        if not sub_names:
+            sub_names = [f"SubMesh {i}" for i in range(len(assigned))] if assigned else []
+        if assigned:
+            for i, mp in enumerate(assigned):
+                row = QWidget()
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(0, 2, 0, 2)
+                rl.setSpacing(4)
+                slot_name = sub_names[i] if i < len(sub_names) else f"Slot {i}"
+                lbl = QLabel(slot_name)
+                lbl.setMinimumWidth(90)
+                lbl.setMaximumWidth(130)
+                lbl.setStyleSheet("font-size: 11px;")
+                lbl.setToolTip(f"Submesh: {slot_name}")
+                rl.addWidget(lbl)
+                from editor.inspector.helpers import make_resource_picker
+                def _on_mat_pick(p, idx=i):
+                    self._save_import_material(idx, p)
+                picker = make_resource_picker(mp, "Material (*.mat)", _on_mat_pick)
+                rl.addWidget(picker, 1)
+                self._add_asset_widget(row)
+        elif not sub_names:
+            info = QLabel("Load a mesh to auto-detect submesh material slots.")
+            info.setStyleSheet("color: #888; font-size: 11px;")
+            self._add_asset_widget(info)
+        wizard_btn = QPushButton(qta.icon("fa5s.magic", color="#5a9cf5"), " Material Wizard...")
+        wizard_btn.setToolTip("Open Material Wizard to auto-create materials from textures")
+        wizard_btn.clicked.connect(self._open_material_wizard)
+        self._add_asset_widget(wizard_btn)
+
+    def _open_material_wizard(self):
+        from editor.material_wizard import MaterialWizardDialog
+        project_root = self._engine.project_root if self._engine else os.getcwd()
+        sub_names = self._get_submesh_names()
+        dlg = MaterialWizardDialog(project_root, self, submesh_names=sub_names)
+        dlg.materials_created.connect(self._on_materials_created)
+        dlg.exec()
+
+    def _on_materials_created(self, paths: list[str]):
+        cache_path = self._asset_path + ".import"
+        settings = {}
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path) as f:
+                    settings = json.load(f)
+            except Exception:
+                pass
+        sub_names = settings.get("sub_mesh_names", [])
+        mats = settings.get("materials", [])
+        if sub_names:
+            while len(mats) < len(sub_names):
+                mats.append("")
+            for p in paths:
+                basename = os.path.splitext(os.path.basename(p))[0]
+                try:
+                    rel = os.path.relpath(p, self._engine.project_root if self._engine else os.getcwd())
+                except ValueError:
+                    rel = p
+                rel = rel.replace("\\", "/")
+                matched = False
+                for i, sn in enumerate(sub_names):
+                    if sn and sn.lower() == basename.lower():
+                        mats[i] = rel
+                        matched = True
+                        break
+                if not matched:
+                    for i in range(len(mats)):
+                        if not mats[i]:
+                            mats[i] = rel
+                            break
+                    else:
+                        mats.append(rel)
+        else:
+            existing = mats
+            for p in paths:
+                try:
+                    rel = os.path.relpath(p, self._engine.project_root if self._engine else os.getcwd())
+                except ValueError:
+                    rel = p
+                existing.append(rel.replace("\\", "/"))
+            mats = existing
+        settings["materials"] = mats
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(settings, f, indent=2)
+        except Exception:
+            pass
+        self._rebuild()
+
+    def _save_import_material(self, index: int, path: str):
+        cache_path = self._asset_path + ".import"
+        settings = {}
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path) as f:
+                    settings = json.load(f)
+            except Exception:
+                pass
+        mats = settings.get("materials", [])
+        while len(mats) <= index:
+            mats.append("")
+        mats[index] = path
+        settings["materials"] = mats
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(settings, f, indent=2)
+        except Exception:
+            pass
 
     def _build_texture_import_settings(self):
         from core.assets.texture_import_settings import DEFAULT_SETTINGS
@@ -656,7 +812,11 @@ class InspectorPanel(QDockWidget):
             sb = QDoubleSpinBox()
             sb.setRange(sp.range_min, sp.range_max)
             sb.setSingleStep((sp.range_max - sp.range_min) / 100.0)
-            sb.setValue(props.get(key, 0.0))
+            raw = props.get(key, 0.0)
+            try:
+                sb.setValue(float(raw))
+            except (ValueError, TypeError):
+                sb.setValue(sp.default_value if isinstance(sp.default_value, (int, float)) else 0.0)
             def _on_change(v, _key=key):
                 props[_key] = v
                 _save()
@@ -682,7 +842,11 @@ class InspectorPanel(QDockWidget):
                 sb = QDoubleSpinBox()
                 sb.setRange(-999999.0, 999999.0)
                 sb.setSingleStep(0.1)
-            sb.setValue(props.get(key, 0))
+            raw_val = props.get(key, 0)
+            try:
+                sb.setValue(int(raw_val) if prop_type == "Int" else float(raw_val))
+            except (ValueError, TypeError):
+                sb.setValue(0 if prop_type == "Int" else 0.0)
             def _on_change(v, _key=key):
                 props[_key] = v
                 _save()
@@ -768,7 +932,11 @@ class InspectorPanel(QDockWidget):
             sb = QDoubleSpinBox()
             sb.setRange(cfg.get("min", 0.0), cfg.get("max", 1.0))
             sb.setSingleStep(cfg.get("step", 0.01))
-            sb.setValue(props.get(key, 0.0))
+            raw = props.get(key, 0.0)
+            try:
+                sb.setValue(float(raw))
+            except (ValueError, TypeError):
+                sb.setValue(cfg.get("min", 0.0))
             def _on_change(v, _key=key):
                 props[_key] = v
                 _save()

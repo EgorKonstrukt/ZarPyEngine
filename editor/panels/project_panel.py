@@ -1367,6 +1367,8 @@ class ProjectPanel(QDockWidget):
             return -1, "", str(e)
 
     def _git_add_file(self, path: str):
+        if not isinstance(path, str) or not path:
+            return
         try:
             rel = os.path.relpath(path, self._project_root)
         except ValueError:
@@ -1379,6 +1381,8 @@ class ProjectPanel(QDockWidget):
             QMessageBox.warning(self, "Git Add Failed", err[:200])
 
     def _git_unstage_file(self, path: str):
+        if not isinstance(path, str) or not path:
+            return
         try:
             rel = os.path.relpath(path, self._project_root)
         except ValueError:
@@ -1391,6 +1395,8 @@ class ProjectPanel(QDockWidget):
             QMessageBox.warning(self, "Git Unstage Failed", err[:200])
 
     def _git_ignore_file(self, path: str):
+        if not isinstance(path, str) or not path:
+            return
         try:
             rel = os.path.relpath(path, self._project_root)
         except ValueError:
