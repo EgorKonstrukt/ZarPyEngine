@@ -132,6 +132,7 @@ def register_default_docks(mw):
     mw._viewport_dock.setStyleSheet(
         "QDockWidget { border: none; } QDockWidget::title { padding: 2px 6px; font-size: 11px; }")
     mw._viewport_dock.setMinimumSize(40, 40)
+    mw._viewport_dock.topLevelChanged.connect(mw._viewport.on_dock_top_level_changed)
     register_dock(mw, mw._viewport_dock, Qt.DockWidgetArea.LeftDockWidgetArea)
     mw._hierarchy = HierarchyPanel(mw._engine, mw)
     mw._hierarchy.load_config(get_global_config())

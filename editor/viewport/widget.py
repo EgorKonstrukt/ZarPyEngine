@@ -376,6 +376,19 @@ class SceneViewport(QOpenGLWidget):
         super().hideEvent(event)
         self._render_timer.stop()
 
+    def on_dock_top_level_changed(self, floating: bool):
+        self._screen_fbo = None
+        self._last_fbo_id = None
+        self.update()
+        if floating:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self._retry_float_fbo)
+
+    def _retry_float_fbo(self):
+        self._screen_fbo = None
+        self._last_fbo_id = None
+        self.update()
+
     def load_config(self, config) -> None:
         clear = config.get("viewport.clear", self._clear_color)
         self._clear_color = [clear[0], clear[1], clear[2]]
@@ -457,7 +470,11 @@ class SceneViewport(QOpenGLWidget):
     def _bind_screen_fbo(self):
         fbo_id = self.defaultFramebufferObject()
         if self._screen_fbo is None or not hasattr(self, '_last_fbo_id') or self._last_fbo_id != fbo_id:
-            self._screen_fbo = self._ctx.detect_framebuffer(fbo_id)
+            try:
+                self._screen_fbo = self._ctx.detect_framebuffer(fbo_id)
+            except Exception:
+                self._screen_fbo = None
+                return
             self._last_fbo_id = fbo_id
         self._screen_fbo.use()
 
@@ -572,7 +589,8 @@ class SceneViewport(QOpenGLWidget):
                 self._toolbar.setGeometry(0, 0, w, self._toolbar.height())
             self._overlay_widget.resize(w, h)
         if self._ctx:
-            self._bind_screen_fbo()
+            self._screen_fbo = None
+            self._last_fbo_id = None
             self._ctx.viewport = (0, 0, pw, ph)
 
     def paintGL(self):
@@ -648,6 +666,9 @@ class SceneViewport(QOpenGLWidget):
             if in_frame:
                 prof.start("gl_setup")
             self._bind_screen_fbo()
+            if self._screen_fbo is None:
+                self.update()
+                return
             scene = eng.scene
             cam_cc = self._clear_color + [1.0] if scene else self._no_scene_color + [1.0]
             self._screen_fbo.clear(*cam_cc[:3], 1.0)
