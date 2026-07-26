@@ -284,12 +284,8 @@ def render_selection_bounds(vp, vp_mat: Mat4, time_s: float, dt: float = 0.0):
         old_min = getattr(vp, '_sel_bounds_min', None)
         old_max = getattr(vp, '_sel_bounds_max', None)
         vp._sel_bounds_state = [old_min, old_max]
-    color = [
-        cfg.get("gizmo.selection_bounds_color_r", 0.25),
-        cfg.get("gizmo.selection_bounds_color_g", 0.55),
-        cfg.get("gizmo.selection_bounds_color_b", 1.0),
-        1.0,
-    ]
+    c = cfg.get("gizmo.selection_bounds_color", [0.25, 0.55, 1.0])
+    color = [c[0], c[1], c[2], 1.0]
     selected = getattr(vp, '_selected_entities', None) or []
     _render_entity_bounds(vp, vp_mat, time_s, dt, selected, color, vp._sel_bounds_state)
     collab = vp._engine.collab_manager if hasattr(vp._engine, 'collab_manager') else None

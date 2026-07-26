@@ -93,19 +93,13 @@ def _render_mesh_ortho(verts_flat: np.ndarray, idx: np.ndarray, size: int,
     cfg = settings or {}
     rot_y_deg = cfg.get("camera_rot_y", -45.0)
     rot_x_deg = cfg.get("camera_rot_x", 30.0)
-    bg_r = cfg.get("bg_r", 0.0)
-    bg_g = cfg.get("bg_g", 0.0)
-    bg_b = cfg.get("bg_b", 0.0)
-    bg_a = cfg.get("bg_a", 0.0)
-    tri_r = cfg.get("tri_r", 0.39)
-    tri_g = cfg.get("tri_g", 0.63)
-    tri_b = cfg.get("tri_b", 0.86)
-    tri_a = cfg.get("tri_a", 0.16)
-    wire_r = cfg.get("wire_r", 0.71)
-    wire_g = cfg.get("wire_g", 0.82)
-    wire_b = cfg.get("wire_b", 0.94)
-    wire_a = cfg.get("wire_a", 0.78)
+    bg = cfg.get("bg", [0.0, 0.0, 0.0, 0.0])
+    tri = cfg.get("tri", [0.39, 0.63, 0.86, 0.16])
+    wire = cfg.get("wire", [0.71, 0.82, 0.94, 0.78])
     wire_w = cfg.get("wire_width", 1.0)
+    bg_r, bg_g, bg_b, bg_a = (bg + [0.0, 0.0, 0.0, 0.0])[:4]
+    tri_r, tri_g, tri_b, tri_a = (tri + [0.0, 0.0, 0.0, 0.0])[:4]
+    wire_r, wire_g, wire_b, wire_a = (wire + [0.0, 0.0, 0.0, 0.0])[:4]
     if bg_a > 0:
         pm.fill(QColor(int(bg_r * 255), int(bg_g * 255),
                         int(bg_b * 255), int(bg_a * 255)))

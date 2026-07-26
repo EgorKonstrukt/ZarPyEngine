@@ -377,16 +377,10 @@ class SceneViewport(QOpenGLWidget):
         self._render_timer.stop()
 
     def load_config(self, config) -> None:
-        self._clear_color = [
-            config.get("viewport.clear_r", self._clear_color[0]),
-            config.get("viewport.clear_g", self._clear_color[1]),
-            config.get("viewport.clear_b", self._clear_color[2]),
-        ]
-        self._no_scene_color = [
-            config.get("viewport.no_scene_r", self._no_scene_color[0]),
-            config.get("viewport.no_scene_g", self._no_scene_color[1]),
-            config.get("viewport.no_scene_b", self._no_scene_color[2]),
-        ]
+        clear = config.get("viewport.clear", self._clear_color)
+        self._clear_color = [clear[0], clear[1], clear[2]]
+        no_scene = config.get("viewport.no_scene", self._no_scene_color)
+        self._no_scene_color = [no_scene[0], no_scene[1], no_scene[2]]
         self._vsync_enabled = config.get("rendering.vsync", self._vsync_enabled)
         self._target_fps = config.get("rendering.target_fps", self._target_fps)
         self._update_interval = config.get("viewport.update_interval", self._update_interval)

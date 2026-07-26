@@ -96,8 +96,44 @@ class Config:
                 with open(self._path) as f:
                     loaded = json.load(f)
                     self._deep_update(self._data, loaded)
+                    self._cleanup_old_keys()
         except Exception as e:
             Logger.warning(f"Failed to load config from {self._path}: {e}")
+    _DEPRECATED_KEYS: set = {
+        "ambient_r", "ambient_g", "ambient_b",
+        "selection_outline_r", "selection_outline_g", "selection_outline_b", "selection_outline_a",
+        "selection_bounds_color_r", "selection_bounds_color_g", "selection_bounds_color_b",
+        "clear_r", "clear_g", "clear_b",
+        "no_scene_r", "no_scene_g", "no_scene_b",
+        "bg_r", "bg_g", "bg_b", "bg_a",
+        "tri_r", "tri_g", "tri_b", "tri_a",
+        "wire_r", "wire_g", "wire_b", "wire_a",
+        "sky_top_r", "sky_top_g", "sky_top_b",
+        "sky_bottom_r", "sky_bottom_g", "sky_bottom_b",
+        "sky_horizon_r", "sky_horizon_g", "sky_horizon_b", "sky_horizon_power",
+        "editor.selection_bounds", "editor.selection_bounds_speed",
+    }
+    def _cleanup_old_keys(self):
+        simple = set()
+        dotted = {}
+        for k in self._DEPRECATED_KEYS:
+            if "." in k:
+                prefix, leaf = k.split(".", 1)
+                dotted.setdefault(prefix, set()).add(leaf)
+            else:
+                simple.add(k)
+        def _clean(d):
+            to_del = [k for k in d if k in simple]
+            for k in to_del:
+                del d[k]
+            for prefix, leaves in dotted.items():
+                if prefix in d and isinstance(d[prefix], dict):
+                    for leaf in leaves:
+                        d[prefix].pop(leaf, None)
+            for v in d.values():
+                if isinstance(v, dict):
+                    _clean(v)
+        _clean(self._data)
 _global_config: Optional[Config] = None
 _project_config: Optional[Config] = None
 def get_global_config() -> Config:
@@ -149,14 +185,11 @@ def get_global_config() -> Config:
                 "grid_world_size": 2000.0,
                 "grid_2d_mode": False,
                 "grid_zoom_distance": 5.0,
-                "ambient_r": 0.26,
-                "ambient_g": 0.28,
-                "ambient_b": 0.34,
-                "selection_outline_r": 0.8,
-                "selection_outline_g": 0.5,
-                "selection_outline_b": 0.1,
-                "selection_outline_a": 1.0,
+                "ambient": [0.26, 0.28, 0.34],
+                "selection_outline": [0.8, 0.5, 0.1, 1.0],
                 "selection_outline_thickness": 0.03,
+                "tick_rate": 120.0,
+                "fixed_tick_rate": 60.0,
                 "max_lights": 8
             },
             "gizmo": {
@@ -175,9 +208,7 @@ def get_global_config() -> Config:
                 "icon_scale": 5.0,
                 "selection_bounds": True,
                 "selection_bounds_speed": 13.0,
-                "selection_bounds_color_r": 0.25,
-                "selection_bounds_color_g": 0.55,
-                "selection_bounds_color_b": 1.0
+                "selection_bounds_color": [0.25, 0.55, 1.0]
             },
             "console": {
                 "font_size": 10,
@@ -190,12 +221,8 @@ def get_global_config() -> Config:
                 "font_family": "Segoe UI"
             },
             "viewport": {
-                "clear_r": 0.18,
-                "clear_g": 0.18,
-                "clear_b": 0.18,
-                "no_scene_r": 0.12,
-                "no_scene_g": 0.12,
-                "no_scene_b": 0.12,
+                "clear": [0.18, 0.18, 0.18],
+                "no_scene": [0.12, 0.12, 0.12],
                 "update_interval": 16,
                 "grid_step": 10.0,
                 "overlay_fps": 60

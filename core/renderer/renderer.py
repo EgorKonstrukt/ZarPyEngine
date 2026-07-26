@@ -338,17 +338,10 @@ class Renderer:
         self._vox_compute: Optional[moderngl.ComputeShader] = None
 
     def load_config(self, config) -> None:
-        self._ambient = [
-            config.get("rendering.ambient_r", self._ambient[0]),
-            config.get("rendering.ambient_g", self._ambient[1]),
-            config.get("rendering.ambient_b", self._ambient[2]),
-        ]
-        self._selection_outline_color = [
-            config.get("rendering.selection_outline_r", self._selection_outline_color[0]),
-            config.get("rendering.selection_outline_g", self._selection_outline_color[1]),
-            config.get("rendering.selection_outline_b", self._selection_outline_color[2]),
-            config.get("rendering.selection_outline_a", self._selection_outline_color[3]),
-        ]
+        ambient = config.get("rendering.ambient", self._ambient)
+        self._ambient = [ambient[0], ambient[1], ambient[2]]
+        sel = config.get("rendering.selection_outline", self._selection_outline_color)
+        self._selection_outline_color = [sel[0], sel[1], sel[2], sel[3]]
         self._selection_outline_thickness = config.get("rendering.selection_outline_thickness", self._selection_outline_thickness)
         self._max_lights = config.get("rendering.max_lights", self._max_lights)
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
