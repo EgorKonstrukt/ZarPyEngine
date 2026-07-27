@@ -1101,15 +1101,16 @@ class ResourcePickerDialog(QDialog):
         while self._thumb_queue and count < 60:
             idx, path = self._thumb_queue.pop(0)
             if idx < self._list.count():
-                # Prefer a real (process-generated) thumbnail; fall back to the
-                # vector placeholder. Placeholders live in a separate cache so a
-                # placeholder can never be mistaken for a finished thumbnail.
+                pm = None
                 cache_key = f"thumb:{path}:{_thumb_resolution()}"
                 _thumbnail_mutex.lock()
                 pm = _thumbnail_cache.get(cache_key)
-                if pm is None:
-                    pm = _placeholder_cache.get(cache_key)
                 _thumbnail_mutex.unlock()
+                if pm is None:
+                    ph_key = f"thumb:{path}:{THUMB_SIZE}"
+                    _thumbnail_mutex.lock()
+                    pm = _placeholder_cache.get(ph_key)
+                    _thumbnail_mutex.unlock()
                 item = self._list.item(idx)
                 if item and pm is not None and not pm.isNull():
                     item.setIcon(QIcon(pm))
