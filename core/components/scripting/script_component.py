@@ -17,10 +17,10 @@ import importlib.util
 import os
 
 RESOURCE_TYPE_FILTERS = {
-    "mesh": "Models (*.obj *.fbx *.stl *.gltf *.glb *.usdz)",
+    "mesh": "Models (*.obj *.fbx *.stl *.gltf *.glb *.usdz *.dae *.3ds *.blend)",
     "material": "Materials (*.zpem *.mat)",
-    "texture": "Images (*.png *.jpg *.jpeg)",
-    "audio": "Audio (*.wav *.mp3 *.ogg)",
+    "texture": "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)",
+    "audio": "Audio (*.wav *.mp3 *.ogg *.flac *.aiff *.m4a)",
     "script": "Python Scripts (*.py)",
     "prefab": "Prefabs (*.zpep)",
     "scene": "Scenes (*.zpes)",

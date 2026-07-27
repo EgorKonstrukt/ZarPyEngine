@@ -342,7 +342,7 @@ class MaterialWizardDialog(QDialog):
     def _on_add_textures(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Textures", "",
-            "Images (*.png *.jpg *.jpeg *.tga *.bmp *.dds *.hdr *.exr);;All Files (*)"
+            "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg);;All Files (*)"
         )
         if files:
             self._add_texture_files(files)

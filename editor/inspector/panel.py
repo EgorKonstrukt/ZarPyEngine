@@ -460,7 +460,7 @@ class InspectorPanel(QDockWidget):
                 from editor.inspector.helpers import make_resource_picker
                 def _on_mat_pick(p, idx=i):
                     self._save_import_material(idx, p)
-                picker = make_resource_picker(mp, "Material (*.mat)", _on_mat_pick)
+                picker = make_resource_picker(mp, "Materials (*.mat *.zpem)", _on_mat_pick)
                 rl.addWidget(picker, 1)
                 self._add_asset_widget(row)
         elif not sub_names:
@@ -720,7 +720,7 @@ class InspectorPanel(QDockWidget):
                 props[sp.name] = sp.default_value
             _save()
             self._rebuild()
-        shader_picker = make_resource_picker(mat.shader_path, "Shaders (*.shader *.vert *.frag)", _on_shader_pick)
+        shader_picker = make_resource_picker(mat.shader_path, "Shaders (*.shader *.vert *.frag *.glsl *.hlsl *.compute)", _on_shader_pick)
         shader_rl.addWidget(shader_picker, 1)
         self._add_asset_widget(shader_row)
         if shader_props:
@@ -775,7 +775,7 @@ class InspectorPanel(QDockWidget):
                 props[key] = p
                 _save()
                 _update_preview()
-            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg)", _on_pick)
+            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
             rl.addWidget(picker, 1)
             self._add_asset_widget(row)
         elif prop_type == "Color":
@@ -895,7 +895,7 @@ class InspectorPanel(QDockWidget):
                 props[_key] = p
                 _save()
                 _update_preview()
-            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg)", _on_pick)
+            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
             rl.addWidget(picker, 1)
             self._add_asset_widget(row)
         elif widget_type == "color":

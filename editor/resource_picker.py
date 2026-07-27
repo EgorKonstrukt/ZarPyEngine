@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import json
 import math
+import re
 import wave
 import struct
 import threading
@@ -57,17 +58,6 @@ def _get_placeholder_icon() -> QIcon:
         _placeholder_icon = QIcon(_draw_file_icon(THUMB_SIZE))
     return _placeholder_icon
 
-
-EXTENSION_FILTERS = {
-    "Models (*.obj *.fbx *.stl *.gltf *.glb *.usdz)": (".obj", ".fbx", ".stl", ".gltf", ".glb", ".usdz"),
-    "Audio (*.wav *.mp3 *.ogg)": (".wav", ".mp3", ".ogg"),
-    "Shaders (*.shader *.vert *.frag *.compute)": (".shader", ".vert", ".frag", ".compute"),
-    "Python Scripts (*.py)": (".py",),
-    "Fonts (*.ttf *.otf)": (".ttf", ".otf"),
-    "Animation Clips (*.animclip)": (".animclip",),
-    "Animator Controllers (*.animcontroller)": (".animcontroller",),
-    "All Files (*)": (),
-}
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -814,10 +804,15 @@ class ResourcePickerDialog(QDialog):
         self._start_populate("")
 
     def _parse_extensions(self, filter_str: str) -> tuple:
-        for key, exts in EXTENSION_FILTERS.items():
-            if filter_str.lower() in key.lower():
-                return exts
-        return EXTENSION_FILTERS.get(filter_str, ())
+        m = re.search(r'\(([^)]+)\)', filter_str)
+        if not m:
+            return ()
+        raw = m.group(1).strip()
+        if raw == "*" or not raw:
+            return ()
+        parts = raw.split()
+        exts = tuple(p if p.startswith(".") else p[1:] for p in parts if p != "*")
+        return exts
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
