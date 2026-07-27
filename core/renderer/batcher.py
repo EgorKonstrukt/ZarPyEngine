@@ -145,7 +145,7 @@ class RenderBatcher:
             shader_path = mat.shader_path if mat else ""
             prog = shaders.get_or_compile(shader_path) or self._default_prog
             mat_key = id(mat) if mat else id(self._MAT_NONE)
-            key = (id(prog), mat_key, id(mesh), mr.receive_shadows, sub_idx)
+            key = (id(prog), mat_key, id(mesh), mr.receive_shadows, sub_idx, getattr(mr, 'dynamic_reflections', False))
             groups[key].append((ent, tr, mesh, mr, mat, prog, wm, sub_idx))
         return groups
 
@@ -218,20 +218,33 @@ class RenderBatcher:
                       disable_shadows: bool, set_scene_uniforms_fn,
                       apply_material_fn, normal_cache: dict,
                       selected_entities: set, outline_queue: list,
-                      gpu_storage=None):
+                      gpu_storage=None, dynamic_cubemaps=None):
         self.reset_stats()
         scene_done = set()
         frustum_planes = self._get_frustum_planes(view_f32, proj_f32)
-        for (prog_id, mat_path, mesh_id, receive_shadows, sub_idx), group in groups.items():
+        for key, group in groups.items():
             _, _, mesh, _, mat, prog, _, _ = group[0]
+            dyn_ref = key[5] if len(key) > 5 else False
             self._stats_batches += 1
             n = len(group)
-            group_disable_shadows = disable_shadows or not receive_shadows
+            group_disable_shadows = disable_shadows or not key[3]
             scene_key = (id(prog), group_disable_shadows)
             if scene_key not in scene_done:
                 set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
                                       disable_shadows=group_disable_shadows)
                 scene_done.add(scene_key)
+            if dyn_ref and dynamic_cubemaps is not None:
+                dynamic_cubemaps.bind_ibl(prog)
+            elif not dyn_ref:
+                try:
+                    if "u_irradiance_map_Active" in prog:
+                        prog["u_irradiance_map_Active"].value = 0
+                    if "u_prefilter_map_Active" in prog:
+                        prog["u_prefilter_map_Active"].value = 0
+                    if "u_brdf_lut_Active" in prog:
+                        prog["u_brdf_lut_Active"].value = 0
+                except Exception:
+                    pass
             if n == 1:
                 self._render_single(group[0], prog, mesh, mat,
                                     view_f32, proj_f32, cam_pos, lights,

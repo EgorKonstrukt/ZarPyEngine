@@ -22,6 +22,7 @@ class MeshRenderer(Component):
             ]),
             InspectorField("cast_shadows", "Cast Shadows", FieldType.BOOL),
             InspectorField("receive_shadows", "Receive Shadows", FieldType.BOOL),
+            InspectorField("dynamic_reflections", "Dynamic Reflections", FieldType.BOOL),
         ]
 
     def __init__(self):
@@ -29,6 +30,7 @@ class MeshRenderer(Component):
         self.materials: list[dict] = [{"path": ""}]
         self.cast_shadows: bool = True
         self.receive_shadows: bool = True
+        self.dynamic_reflections: bool = False
 
     def get_material_path(self, sub_mesh_index: int = 0) -> str:
         if sub_mesh_index < len(self.materials):
@@ -39,7 +41,7 @@ class MeshRenderer(Component):
 
     def serialize(self) -> dict:
         d = super().serialize()
-        d.update({"materials": self.materials, "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows})
+        d.update({"materials": self.materials, "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows, "dynamic_reflections": self.dynamic_reflections})
         return d
 
     @classmethod
@@ -55,4 +57,5 @@ class MeshRenderer(Component):
             mr.materials = [{"path": ""}]
         mr.cast_shadows = data.get("cast_shadows", True)
         mr.receive_shadows = data.get("receive_shadows", True)
+        mr.dynamic_reflections = data.get("dynamic_reflections", False)
         return mr

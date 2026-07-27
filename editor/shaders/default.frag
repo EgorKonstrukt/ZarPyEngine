@@ -75,6 +75,13 @@ uniform float u_area_light_fov_scale;
 uniform vec2 u_area_light_near_far;
 uniform int u_area_shadow_light_index;
 uniform float u_area_shadow_bias;
+uniform samplerCube u_irradiance_map;
+uniform int u_irradiance_map_Active;
+uniform samplerCube u_prefilter_map;
+uniform int u_prefilter_map_Active;
+uniform sampler2D u_brdf_lut;
+uniform int u_brdf_lut_Active;
+uniform float u_env_map_rotation;
 float hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
@@ -156,6 +163,29 @@ float compute_spot_shadow() {
     return sample_shadow(u_spot_shadow_map, proj_coords);
 }
 // @SHADOW_INCLUDE
+vec3 ibl_contribution(vec3 N, vec3 V, vec3 albedo, float roughness, float metallic) {
+    vec3 irradiance = u_ambient * albedo;
+    vec3 specular_ibl = vec3(0.0);
+    if (u_irradiance_map_Active == 1) {
+        irradiance = texture(u_irradiance_map, N).rgb;
+    }
+    vec3 kS;
+    if (u_prefilter_map_Active == 1 && u_brdf_lut_Active == 1) {
+        vec3 R = reflect(-V, N);
+        float NdotV = max(dot(N, V), 0.0);
+        float prefilter_lod = roughness * 4.0;
+        vec3 prefiltered = textureLod(u_prefilter_map, R, prefilter_lod).rgb;
+        vec2 env_brdf = texture(u_brdf_lut, vec2(NdotV, roughness)).rg;
+        float fresnel = pow(1.0 - NdotV, 5.0);
+        kS = mix(vec3(0.04), albedo, metallic) * fresnel + vec3(1.0 - fresnel) * (1.0 - metallic);
+        specular_ibl = prefiltered * (kS * env_brdf.x + env_brdf.y);
+    } else {
+        kS = vec3(0.0);
+    }
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+    vec3 diffuse_ibl = kD * irradiance * albedo;
+    return diffuse_ibl + specular_ibl;
+}
 vec3 calc_area_light(Light light, vec3 normal, vec3 view_dir, vec3 albedo) {
     vec3 right = light.right;
     vec3 up = light.up;
@@ -273,6 +303,7 @@ void main() {
             result += calc_light(u_lights[i], normal, view_dir, albedo, sf);
         }
     }
+    result += ibl_contribution(normal, view_dir, albedo, 1.0 - roughness, u_metallic);
     result += u_emission;
     frag_color = vec4(result, u_albedo_color.a);
 }

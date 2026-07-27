@@ -46,6 +46,7 @@ from core.renderer.shadows import ShadowRenderer
 from core.components.rendering.environment.sky import Sky
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.environment.water import Water
+from core.components.rendering.environment.dynamic_cubemap import DynamicCubemaps
 from core.components.rendering.terrain import Terrain
 from core.components.environment.tree import Tree
 from core.components.environment.wind_zone import WindZone
@@ -164,7 +165,8 @@ class _RenderSnapshot:
         'water_components', 'wind_zones', 'renderable', 'shadow_renderables',         'sprite_items', 'video_items',
         'svg_items', 'text_items', 'particle_systems', 'force_fields',
         'projectors', 'skinned_renderables', 'skinned_shadow_renderables',
-        'interactors', 'gaussian_splats',
+        'interactors', 'gaussian_splats', 'dynamic_cubemaps',
+        'dynamic_cubemaps_pos', 'dynamic_cubemaps_entity',
     )
     def __init__(self):
         self.lights: list = []
@@ -187,6 +189,9 @@ class _RenderSnapshot:
         self.projectors: list = []
         self.interactors: list = []
         self.gaussian_splats: list = []
+        self.dynamic_cubemaps = None
+        self.dynamic_cubemaps_pos = None
+        self.dynamic_cubemaps_entity = None
 
 
 class Renderer:
@@ -266,6 +271,7 @@ class Renderer:
         self._snap_mesh_gen: int = -1
         self._snap_scene: object = None
         self._normal_cache: dict[int, np.ndarray] = {}
+        self._rendering_cubemap_face: bool = False
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
         self._pp_fbo_b: Optional[moderngl.Framebuffer] = None
@@ -1534,6 +1540,65 @@ out vec4 frag_color;
         if last_prog is not None and "u_use_skinning" in last_prog:
             last_prog["u_use_skinning"].value = 0
 
+    def render_cubemap_face(self, snap, face_fbo, res, view_f32, proj_f32, cam_pos, lights, skip_entity=None):
+        try:
+            face_fbo.use()
+            face_fbo.viewport = (0, 0, res, res)
+            self._ctx.viewport = (0, 0, res, res)
+            self._ctx.clear(0.0, 0.0, 0.0, 1.0, 1.0)
+            self._ctx.enable(moderngl.DEPTH_TEST)
+            self._ctx.enable(moderngl.CULL_FACE)
+            self._ctx.cull_face = 'back'
+            self._ctx.disable(moderngl.BLEND)
+            renderable = snap.renderable
+            if skip_entity is not None and renderable:
+                renderable = [e for e in renderable if e[0] is not skip_entity]
+            if renderable:
+                if self._batcher:
+                    groups = self._batcher.collect_groups(renderable, self._materials, self._shaders)
+                    self._batcher.render_groups(
+                        groups, view_f32, proj_f32, cam_pos, lights, True,
+                        self._set_scene_uniforms, self._materials.apply_material,
+                        self._normal_cache, set(), [],
+                        gpu_storage=self._gpu_storage)
+                else:
+                    prog = self._default_prog
+                    for entry in renderable:
+                        ent, tr, mesh, mr = entry[:4]
+                        wm = entry[4]
+                        try:
+                            mat = self._materials.load_material(mr.get_material_path(0))
+                            shader_path = mat.shader_path if mat else ""
+                            p = self._shaders.get_or_compile(shader_path if shader_path else "") or prog
+                            self._set_scene_uniforms(p, view_f32, proj_f32, cam_pos, lights, disable_shadows=True)
+                            model_f32 = wm.to_f32()
+                            if "u_model" in p:
+                                p["u_model"].write(model_f32.tobytes())
+                            nm = np.eye(3, dtype=np.float32).T
+                            if "u_normal_matrix" in p:
+                                p["u_normal_matrix"].write(nm.tobytes())
+                            self._materials.apply_material(mat, p)
+                            ds = self._mat_double_sided(mat)
+                            self._render_mesh_double_sided(p, mesh, ds)
+                        except Exception:
+                            pass
+            if snap.skinned_renderables:
+                if skip_entity is not None:
+                    original_skinned = snap.skinned_renderables
+                    filtered_skinned = [e for e in original_skinned if e[0] is not skip_entity]
+                    if len(filtered_skinned) != len(original_skinned):
+                        snap.skinned_renderables = filtered_skinned
+                        try:
+                            self._render_skinned_meshes(snap, view_f32, proj_f32, cam_pos, lights)
+                        finally:
+                            snap.skinned_renderables = original_skinned
+                    else:
+                        self._render_skinned_meshes(snap, view_f32, proj_f32, cam_pos, lights)
+                else:
+                    self._render_skinned_meshes(snap, view_f32, proj_f32, cam_pos, lights)
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     def _set_scene_uniforms(self, prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=False):
         if "u_view" in prog:
@@ -1698,6 +1763,19 @@ out vec4 frag_color;
                 water = ent.get_component(Water)
                 if water and water.enabled:
                     snap.water_components.append(water)
+        best_dist_sq = None
+        for ent in scene.get_entities_with_component(DynamicCubemaps):
+            if ent.active:
+                dc = ent.get_component(DynamicCubemaps)
+                if dc and dc.enabled:
+                    probe_pos = ent.transform.position
+                    d = probe_pos - cam_pos
+                    dist_sq = d.x * d.x + d.y * d.y + d.z * d.z
+                    if best_dist_sq is None or dist_sq < best_dist_sq:
+                        best_dist_sq = dist_sq
+                        snap.dynamic_cubemaps = dc
+                        snap.dynamic_cubemaps_pos = probe_pos
+                        snap.dynamic_cubemaps_entity = ent
         for ent in scene.get_entities_with_component(WindZone):
             if ent.active:
                 wz = ent.get_component(WindZone)
@@ -2060,6 +2138,7 @@ out vec4 frag_color;
         sky_entity = snap.sky_entity
         cloud_components = snap.cloud_components
         water_components = snap.water_components
+        dynamic_cubemaps = snap.dynamic_cubemaps
         renderable = snap.renderable
         if prof:
             prof.start("gl_state_setup")
@@ -2132,6 +2211,15 @@ out vec4 frag_color;
             sky_component.render_sky(self._ctx, self._shaders, view_mat, proj_mat, dir_light, self._skybox_cube)
             if prof:
                 prof.stop("render_skybox")
+        if dynamic_cubemaps is not None and not self._rendering_cubemap_face:
+            if prof:
+                prof.start("update_dynamic_cubemaps")
+            probe_pos = snap.dynamic_cubemaps_pos if snap.dynamic_cubemaps_pos is not None else cam_pos
+            dynamic_cubemaps.update(self._ctx, view_mat, proj_mat, probe_pos, scene, self,
+                                    main_snap=snap, skip_entity=snap.dynamic_cubemaps_entity)
+            self._scene_fbo.use()
+            if prof:
+                prof.stop("update_dynamic_cubemaps")
         self._ctx.viewport = (0, 0, rw, rh)
         if use_polygon_mode:
             self._ctx.wireframe = True
@@ -2173,7 +2261,8 @@ out vec4 frag_color;
                 self._set_scene_uniforms, self._materials.apply_material,
                 self._normal_cache,
                 selected_entities or set(), outline_queue,
-                gpu_storage=self._gpu_storage)
+                gpu_storage=self._gpu_storage,
+                dynamic_cubemaps=dynamic_cubemaps)
         else:
             for entry in renderable:
                 ent, tr, mesh, mr = entry[:4]
@@ -2183,6 +2272,18 @@ out vec4 frag_color;
                     shader_path = mat.shader_path if mat else ""
                     prog = self._shaders.get_or_compile(shader_path if shader_path else "") or self._default_prog
                     self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=not mr.receive_shadows)
+                    if getattr(mr, 'dynamic_reflections', False) and dynamic_cubemaps is not None:
+                        dynamic_cubemaps.bind_ibl(prog)
+                    elif not getattr(mr, 'dynamic_reflections', False):
+                        try:
+                            if "u_irradiance_map_Active" in prog:
+                                prog["u_irradiance_map_Active"].value = 0
+                            if "u_prefilter_map_Active" in prog:
+                                prog["u_prefilter_map_Active"].value = 0
+                            if "u_brdf_lut_Active" in prog:
+                                prog["u_brdf_lut_Active"].value = 0
+                        except Exception:
+                            pass
                     model = wm
                     model_f32 = model.to_f32()
                     if "u_model" in prog:

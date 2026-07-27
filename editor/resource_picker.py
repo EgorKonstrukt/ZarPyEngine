@@ -39,6 +39,18 @@ _placeholder_icon: Optional[QIcon] = None
 _MAX_PROCESS_INFLIGHT = 12
 
 
+def _find_engine_root() -> Optional[str]:
+    cur = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.basename(cur) == "editor":
+            return os.path.dirname(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return None
+
+
 def _get_placeholder_icon() -> QIcon:
     global _placeholder_icon
     if _placeholder_icon is None:
@@ -49,6 +61,7 @@ def _get_placeholder_icon() -> QIcon:
 EXTENSION_FILTERS = {
     "Models (*.obj *.fbx *.stl *.gltf *.glb *.usdz)": (".obj", ".fbx", ".stl", ".gltf", ".glb", ".usdz"),
     "Audio (*.wav *.mp3 *.ogg)": (".wav", ".mp3", ".ogg"),
+    "Shaders (*.shader *.vert *.frag *.compute)": (".shader", ".vert", ".frag", ".compute"),
     "Python Scripts (*.py)": (".py",),
     "Fonts (*.ttf *.otf)": (".ttf", ".otf"),
     "Animation Clips (*.animclip)": (".animclip",),
@@ -588,7 +601,7 @@ def _get_thumbnail_raw(path: str, size: int, enqueue_mesh: bool = True) -> QPixm
                 return cached
             _get_thumb_service().enqueue(path, size)
         return _draw_material_icon(size)
-    if ext in (".vert", ".frag"):
+    if ext in (".shader", ".vert", ".frag", ".compute"):
         return _draw_shader_icon(size)
     if ext in (".animclip", ".animcontroller"):
         return _draw_file_icon(size)
@@ -653,33 +666,49 @@ class _PopulateWorker(QThread):
         assets_dir = os.path.join(self._project_root, "assets")
         if os.path.isdir(assets_dir):
             search_root = assets_dir
+        engine_root = _find_engine_root()
+        extra_dirs: list[str] = []
+        for sub in ("core/shaders", "editor/shaders"):
+            for base in (self._project_root, engine_root):
+                if not base:
+                    continue
+                d = os.path.normpath(os.path.join(base, sub))
+                if os.path.isdir(d) and not d.startswith(os.path.normpath(search_root)):
+                    if d not in extra_dirs:
+                        extra_dirs.append(d)
+        search_dirs = [search_root] + extra_dirs
         batch: list = []
-        for root, dirs, files in os.walk(search_root):
-            if self._cancelled:
-                return
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _skip_dirs]
-            for f in files:
+        seen_paths: set[str] = set()
+        for search_dir in search_dirs:
+            for root, dirs, files in os.walk(search_dir):
                 if self._cancelled:
                     return
-                if f.startswith("."):
-                    continue
-                if f.endswith(".import"):
-                    continue
-                ext = os.path.splitext(f)[1].lower()
-                if self._extensions and ext not in self._extensions:
-                    continue
-                if self._filter_text and self._filter_text.lower() not in f.lower():
-                    continue
-                full_path = os.path.join(root, f)
-                rel_path = os.path.relpath(full_path, self._project_root)
-                try:
-                    file_size = os.path.getsize(full_path)
-                except OSError:
-                    file_size = 0
-                batch.append((full_path, f, rel_path, file_size))
-                if len(batch) >= 100:
-                    self.batch_ready.emit(batch)
-                    batch = []
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _skip_dirs]
+                for f in files:
+                    if self._cancelled:
+                        return
+                    if f.startswith("."):
+                        continue
+                    if f.endswith(".import"):
+                        continue
+                    ext = os.path.splitext(f)[1].lower()
+                    if self._extensions and ext not in self._extensions:
+                        continue
+                    if self._filter_text and self._filter_text.lower() not in f.lower():
+                        continue
+                    full_path = os.path.normpath(os.path.join(root, f))
+                    if full_path in seen_paths:
+                        continue
+                    seen_paths.add(full_path)
+                    rel_path = os.path.relpath(full_path, self._project_root)
+                    try:
+                        file_size = os.path.getsize(full_path)
+                    except OSError:
+                        file_size = 0
+                    batch.append((full_path, f, rel_path, file_size))
+                    if len(batch) >= 100:
+                        self.batch_ready.emit(batch)
+                        batch = []
         if batch:
             self.batch_ready.emit(batch)
 
@@ -703,7 +732,7 @@ def _draw_vector_placeholder(path: str, size: int) -> Optional[QPixmap]:
         return _draw_prefab_icon(size)
     if ext in (".mat", ".zpem"):
         return _draw_material_icon(size)
-    if ext in (".vert", ".frag"):
+    if ext in (".shader", ".vert", ".frag", ".compute"):
         return _draw_shader_icon(size)
     if ext in (".animclip", ".animcontroller"):
         return _draw_file_icon(size)
@@ -1137,6 +1166,7 @@ class ResourcePickerDialog(QDialog):
             ".png": "Image", ".jpg": "Image", ".jpeg": "Image",
             ".zpes": "Scene", ".zpep": "Prefab", ".mat": "Material",
             ".vert": "Vertex Shader", ".frag": "Fragment Shader",
+            ".shader": "Shader", ".compute": "Compute Shader",
             ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
         }
         type_name = type_map.get(ext, "File")
