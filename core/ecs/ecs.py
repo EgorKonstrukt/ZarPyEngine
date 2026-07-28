@@ -1068,7 +1068,7 @@ class Scene:
         for eid, e in entities.items():
             pid = parent_map.get(eid)
             if pid and pid in entities:
-                e.set_parent(entities[pid])
+                e.set_parent(entities[pid], preserve_world=False)
             s._entities[e.id] = e
             e._scene = s
         s._batch_sync_entities(entities)
