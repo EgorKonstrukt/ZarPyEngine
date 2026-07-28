@@ -639,12 +639,20 @@ class InspectorPanel(QDockWidget):
                 QTimer.singleShot(0, self._reload_mesh_preview)
 
     def _build_material_editor(self):
-        from core.assets.material import Material
+        from core.assets.material import Material, MaterialLibrary
         from editor.material_preview import MaterialPreviewWidget
-        try:
-            mat = Material.load(self._asset_path, self._engine.project_root if self._engine else "")
-        except Exception:
-            mat = None
+        eng = self._engine
+        root = eng.project_root if eng else ""
+        if root and not os.path.isabs(self._asset_path):
+            abs_path = os.path.normpath(os.path.join(root, self._asset_path))
+        else:
+            abs_path = os.path.normpath(self._asset_path)
+        mat = MaterialLibrary._materials.get(abs_path)
+        if mat is None:
+            try:
+                mat = Material.load(self._asset_path, root)
+            except Exception:
+                mat = None
         if mat is None:
             lbl = QLabel("Failed to load material.")
             lbl.setStyleSheet(f"color: {_FUSION_ACCENT_RED};")

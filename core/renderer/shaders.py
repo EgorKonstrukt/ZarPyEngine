@@ -105,6 +105,8 @@ class ShaderManager:
     def _inject_instancing_vertex(src: str) -> str:
         if "in_model0" in src:
             return src
+        if "u_model" not in src and "u_normal_matrix" not in src:
+            return src
         src = src.replace("uniform mat4 u_model;", "")
         src = src.replace("uniform mat3 u_normal_matrix;", "")
         src = re.sub(r'\bu_model\b', '_resolve_model()', src)
@@ -129,6 +131,10 @@ mat3 _resolve_normal_matrix() {
 }
 
 """
+        ver_match = re.search(r'^[ \t]*#[ \t]*version[ \t]+\d+\w*[^\n]*\n', src, re.MULTILINE)
+        if ver_match:
+            pos = ver_match.end()
+            return src[:pos] + injection + src[pos:]
         idx = src.find("\n")
         if idx >= 0:
             return src[:idx+1] + injection + src[idx+1:]

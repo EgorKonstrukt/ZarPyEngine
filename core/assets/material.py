@@ -247,6 +247,8 @@ class Material:
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         MaterialLibrary._materials[abs_path] = self
+        if os.path.normpath(path) != abs_path:
+            MaterialLibrary._materials[os.path.normpath(path)] = self
 
     @classmethod
     def load(cls, path: str, project_root: str = "") -> Optional[Material]:
@@ -295,6 +297,8 @@ class Material:
             for old_key, new_key in _PROP_MIGRATION.items():
                 if old_key in m.properties and new_key not in m.properties:
                     m.properties[new_key] = m.properties[old_key]
+            for old_key in _PROP_MIGRATION:
+                m.properties.pop(old_key, None)
 
             m.load_shader_properties(m.shader_path, project_root)
 
@@ -307,6 +311,9 @@ class Material:
                         m.properties[k] = resolved
 
             MaterialLibrary._materials[os.path.normpath(path)] = m
+            if not os.path.isabs(path) and project_root:
+                abs_key = os.path.normpath(os.path.join(project_root, path))
+                MaterialLibrary._materials[abs_key] = m
             return m
         except Exception as e:
             Logger.error(f"Failed to load .mat file '{path}': {e}", e)
@@ -330,6 +337,8 @@ class Material:
             for old_key, new_key in _PROP_MIGRATION.items():
                 if old_key in m.properties and new_key not in m.properties:
                     m.properties[new_key] = m.properties[old_key]
+            for old_key in _PROP_MIGRATION:
+                m.properties.pop(old_key, None)
 
             root = project_root or os.getcwd()
             mat_dir = os.path.dirname(path)
@@ -340,6 +349,9 @@ class Material:
                         m.properties[k] = resolved
             m.load_shader_properties(m.shader_path, project_root)
             MaterialLibrary._materials[os.path.normpath(path)] = m
+            if not os.path.isabs(path) and project_root:
+                abs_key = os.path.normpath(os.path.join(project_root, path))
+                MaterialLibrary._materials[abs_key] = m
             return m
         except Exception as e:
             Logger.error(f"Failed to load material '{path}': {e}", e)

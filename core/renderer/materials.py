@@ -42,9 +42,6 @@ class MaterialManager:
     def load_material(self, path: str) -> Optional[Material]:
         if not path:
             return None
-        cached = self._material_cache.get(path)
-        if cached is not None:
-            return cached
         eng = Engine.instance()
         root = eng.project_root if eng and eng.project_root else os.getcwd()
         abs_path = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
@@ -53,6 +50,9 @@ class MaterialManager:
             self._material_cache[path] = lib_mat
             self._material_cache[abs_path] = lib_mat
             return lib_mat
+        cached = self._material_cache.get(path)
+        if cached is not None:
+            return cached
         m = Material.load(abs_path, root)
         if m:
             self._material_cache[path] = m
