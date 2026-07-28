@@ -396,7 +396,24 @@ class GradientLineEdit(QWidget):
         self._edit_btn.clicked.connect(self._open_editor)
 
     def _open_editor(self):
-        dlg = GradientEditorDialog(self._stops, "Edit Gradient", self)
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QCursor
+        dlg = GradientEditorDialog(self._stops, "Edit Gradient", None)
+        dlg.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        dw, dh = dlg.width(), dlg.height()
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - dw // 2
+        y = cursor_pos.y() + 4
+        if y + dh > screen.bottom():
+            y = cursor_pos.y() - dh - 4
+        if y < screen.top():
+            y = screen.top()
+        if x + dw > screen.right():
+            x = screen.right() - dw
+        if x < screen.left():
+            x = screen.left()
+        dlg.move(x, y)
         if dlg.exec():
             self._stops = [list(s) for s in dlg.get_stops()]
             self._preview.set_stops(self._stops)

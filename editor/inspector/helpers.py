@@ -329,7 +329,24 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     btn.setToolTip("Pick Entity")
     _style_picker_btn(btn)
     def _pick():
-        dlg = EntityPickerDialog(scene, w)
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QCursor
+        dlg = EntityPickerDialog(scene, None)
+        dlg.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        dw, dh = dlg.width(), dlg.height()
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - dw // 2
+        y = cursor_pos.y() + 4
+        if y + dh > screen.bottom():
+            y = cursor_pos.y() - dh - 4
+        if y < screen.top():
+            y = screen.top()
+        if x + dw > screen.right():
+            x = screen.right() - dw
+        if x < screen.left():
+            x = screen.left()
+        dlg.move(x, y)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             picked_id = dlg.selected_id()
             if picked_id is not None:

@@ -1292,16 +1292,16 @@ class InspectorPanel(QDockWidget):
     def _show_add_component_menu(self):
         if not self._entity: return
         from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtGui import QCursor
         dlg = ComponentPickerDialog(self._entity, None)
         dlg.adjustSize()
         screen = QApplication.primaryScreen().availableGeometry()
         dw, dh = dlg.width(), dlg.height()
-        btn = self._add_comp_btn
-        pos = btn.mapToGlobal(btn.rect().bottomLeft())
-        x = pos.x()
-        y = pos.y() + 4
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - dw // 2
+        y = cursor_pos.y() + 4
         if y + dh > screen.bottom():
-            y = pos.y() - dlg.height() - btn.height() - 4
+            y = cursor_pos.y() - dh - 4
         if y < screen.top():
             y = screen.top()
         if x + dw > screen.right():

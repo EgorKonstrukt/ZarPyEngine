@@ -535,9 +535,25 @@ class ColorDialog(QDialog):
 
     @staticmethod
     def getColor(initial: QColor = None, parent=None, title="") -> QColor:
-        dlg = ColorDialog(initial, parent)
+        from PyQt6.QtGui import QCursor
+        dlg = ColorDialog(initial, None)
         if title:
             dlg.setWindowTitle(title)
+        dlg.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        dw, dh = dlg.width(), dlg.height()
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - dw // 2
+        y = cursor_pos.y() + 4
+        if y + dh > screen.bottom():
+            y = cursor_pos.y() - dh - 4
+        if y < screen.top():
+            y = screen.top()
+        if x + dw > screen.right():
+            x = screen.right() - dw
+        if x < screen.left():
+            x = screen.left()
+        dlg.move(x, y)
         result = dlg.exec()
         c = dlg.get_color()
         if result == QDialog.DialogCode.Accepted:
@@ -587,7 +603,23 @@ class ColorLineEdit(QWidget):
         )
 
     def _open_dialog(self):
-        dlg = ColorDialog(self._color, self)
+        from PyQt6.QtGui import QCursor
+        dlg = ColorDialog(self._color, None)
+        dlg.adjustSize()
+        screen = QApplication.primaryScreen().availableGeometry()
+        dw, dh = dlg.width(), dlg.height()
+        cursor_pos = QCursor.pos()
+        x = cursor_pos.x() - dw // 2
+        y = cursor_pos.y() + 4
+        if y + dh > screen.bottom():
+            y = cursor_pos.y() - dh - 4
+        if y < screen.top():
+            y = screen.top()
+        if x + dw > screen.right():
+            x = screen.right() - dw
+        if x < screen.left():
+            x = screen.left()
+        dlg.move(x, y)
 
         def _on_dialog_color(c):
             self._color = c.toRgb()

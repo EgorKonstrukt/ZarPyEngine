@@ -1216,7 +1216,24 @@ def pick_resource(parent, title: str, filter_str: str, current_path: str = "",
             project_root = eng.project_root
         else:
             project_root = os.getcwd()
-    dlg = ResourcePickerDialog(title, filter_str, project_root, parent)
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtGui import QCursor
+    dlg = ResourcePickerDialog(title, filter_str, project_root, None)
+    dlg.adjustSize()
+    screen = QApplication.primaryScreen().availableGeometry()
+    dw, dh = dlg.width(), dlg.height()
+    cursor_pos = QCursor.pos()
+    x = cursor_pos.x() - dw // 2
+    y = cursor_pos.y() + 4
+    if y + dh > screen.bottom():
+        y = cursor_pos.y() - dh - 4
+    if y < screen.top():
+        y = screen.top()
+    if x + dw > screen.right():
+        x = screen.right() - dw
+    if x < screen.left():
+        x = screen.left()
+    dlg.move(x, y)
     if dlg.exec() == QDialog.DialogCode.Accepted:
         return dlg.selected_path()
     return None
