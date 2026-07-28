@@ -313,6 +313,14 @@ def _collect_meshes(node_ptr, scene, mesh_parts, skeleton_ctx, node_map, vert_of
             uvs = uvs_raw.reshape(-1, 3)[:, :2].copy().flatten()
         else:
             uvs = np.zeros(nv * 2, dtype=np.float32)
+        if not np.allclose(node_world_zup, np.eye(4)) and (mesh.mNumBones == 0 or not mesh.mBones):
+            v3 = verts.reshape(-1, 3)
+            v4 = np.concatenate([v3, np.ones((v3.shape[0], 1), dtype=np.float32)], axis=1)
+            verts = (v4 @ node_world_zup)[:, :3].astype(np.float32).ravel()
+            n3 = norms.reshape(-1, 3) @ node_world_zup[:3, :3]
+            n_len = np.linalg.norm(n3, axis=1, keepdims=True)
+            n_len[n_len == 0] = 1.0
+            norms = (n3 / n_len).astype(np.float32).ravel()
         if mesh.mFaces and nf > 0:
             faces_ptr = ctypes.addressof(mesh.mFaces.contents) if mesh.mNumFaces > 0 else 0
             if _HAS_CYTHON and faces_ptr:
