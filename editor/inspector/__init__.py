@@ -17,7 +17,7 @@ from editor.inspector.helpers import (
     get_component_source_path, get_property_line_number, collapse_value,
 )
 from editor.inspector.component_widget import ComponentWidget
-from editor.inspector.component_picker import _CategoryIconWidget, ComponentPickerDialog
+from editor.inspector.component_picker import ComponentPickerDialog
 from editor.inspector.panel import InspectorPanel
 from editor.inspector.constants import _COMPONENT_MIME
 
@@ -32,7 +32,7 @@ __all__ = [
     "make_vec2_slider_row", "make_vec3_slider_row",
     "get_component_source_path", "get_property_line_number", "collapse_value",
     "ComponentWidget",
-    "_CategoryIconWidget", "ComponentPickerDialog",
+    "ComponentPickerDialog",
     "InspectorPanel",
     "_COMPONENT_MIME",
 ]
