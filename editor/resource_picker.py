@@ -968,7 +968,6 @@ class ResourcePickerDialog(QDialog):
             self._loader = _ThumbnailLoader(THUMB_SIZE)
             self._loader.thumbnail_loaded.connect(self._on_thumbnail_loaded)
             self._loader.start()
-        self._loaded_thumbs = set()
         self._schedule_thumbnails(force=True)
 
     def _visible_item_range(self) -> tuple[int, int]:
@@ -990,19 +989,12 @@ class ResourcePickerDialog(QDialog):
         if not hasattr(self, '_loader'):
             self._start_thumbnail_loader()
             return
-        if not force and not self._loader.isRunning():
-            return
-        if not hasattr(self, '_loaded_thumbs'):
-            self._loaded_thumbs = set()
         first, last = self._visible_item_range()
         if last < first:
             return
-        # strictly visible items (no buffer) get expensive mesh previews
         vis_first, vis_last = self._visible_item_range_strict()
         to_load: list[tuple[int, str]] = []
         for idx in range(first, last + 1):
-            if idx in self._loaded_thumbs:
-                continue
             path = self._item_paths.get(idx)
             if not path:
                 continue
@@ -1010,17 +1002,32 @@ class ResourcePickerDialog(QDialog):
             _thumbnail_mutex.lock()
             cached = cache_key in _thumbnail_cache
             _thumbnail_mutex.unlock()
-            self._loaded_thumbs.add(idx)
             if cached:
-                self._thumb_queue.append((idx, path))
+                cache_key_icon = f"icon:{path}:{_thumb_resolution()}"
+                _icon_mutex.lock()
+                icon_cached = cache_key_icon in _icon_cache
+                _icon_mutex.unlock()
+                if not icon_cached:
+                    pm = _thumbnail_cache.get(cache_key)
+                    if pm and not pm.isNull():
+                        icon = QIcon(pm)
+                        _icon_mutex.lock()
+                        _icon_cache[cache_key_icon] = icon
+                        _icon_mutex.unlock()
+                        item = self._list.item(idx)
+                        if item:
+                            item.setIcon(icon)
             else:
                 to_load.append((idx, path))
-            # Enqueue expensive (process) thumbnails for the whole visible
-            # window plus buffer, not just strictly-visible items, so items
-            # that become visible on scroll already have real thumbnails.
             self._maybe_enqueue_process_thumb(idx, path)
         if to_load:
-            self._loader.enqueue(to_load)
+            if self._loader.isRunning():
+                self._loader.enqueue(to_load)
+            else:
+                self._loader = _ThumbnailLoader(THUMB_SIZE)
+                self._loader.thumbnail_loaded.connect(self._on_thumbnail_loaded)
+                self._loader.enqueue(to_load)
+                self._loader.start()
         if self._thumb_queue and not self._processing_thumbs:
             self._processing_thumbs = True
             QTimer.singleShot(0, self._process_thumb_batch)
