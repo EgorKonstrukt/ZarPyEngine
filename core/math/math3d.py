@@ -367,14 +367,14 @@ class Mat4:
     def get_translation(self): return Vec3(float(self._d[3,0]), float(self._d[3,1]), float(self._d[3,2]))
     def decompose(self) -> tuple[Vec3, Quat, Vec3]:
         pos = Vec3(float(self._d[3,0]), float(self._d[3,1]), float(self._d[3,2]))
-        sx = float(np.linalg.norm(self._d[:3,0]))
-        sy = float(np.linalg.norm(self._d[:3,1]))
-        sz = float(np.linalg.norm(self._d[:3,2]))
+        sx = float(np.linalg.norm(self._d[0,:3]))
+        sy = float(np.linalg.norm(self._d[1,:3]))
+        sz = float(np.linalg.norm(self._d[2,:3]))
         scale = Vec3(sx, sy, sz)
         rm = np.array(self._d[:3,:3], dtype=FLOAT_TYPE)
-        if sx > 1e-10: rm[:,0] /= sx
-        if sy > 1e-10: rm[:,1] /= sy
-        if sz > 1e-10: rm[:,2] /= sz
+        if sx > 1e-10: rm[0,:] /= sx
+        if sy > 1e-10: rm[1,:] /= sy
+        if sz > 1e-10: rm[2,:] /= sz
         rot = Quat._from_rotation_matrix3(rm.T)
         return pos, rot, scale
 

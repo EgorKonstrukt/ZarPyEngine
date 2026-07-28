@@ -23,6 +23,7 @@ try:
     from core._mesh_import import extract_faces as _cy_extract_faces
     from core._mesh_import import smooth_normals as _cy_smooth_normals
     from core._mesh_import import apply_zup_to_yup as _cy_apply_zup
+
     _HAS_CYTHON = True
 except ImportError:
     _HAS_CYTHON = False
@@ -263,7 +264,6 @@ def _node_world_zup(node_map, name):
         local, parent = node_map[cur]
         chain.append(local)
         cur = parent
-    chain.reverse()
     m = np.eye(4, dtype=np.float32)
     for part in chain:
         m = m @ part
@@ -376,11 +376,7 @@ def _read_bones(mesh, vert_offset, skeleton_ctx, node_map, mesh_node_world_zup):
             gidx = len(skeleton_ctx.bone_names)
             skeleton_ctx.bone_index[bname] = gidx
             skeleton_ctx.bone_names.append(bname)
-            nw = _node_world_zup(node_map, bname)
-            if nw is None or np.allclose(nw, np.eye(4)):
-                off = _ai_matrix_to_np_full(bone.mOffsetMatrix)
-            else:
-                off = np.linalg.inv(nw)
+            off = _ai_matrix_to_np_full(bone.mOffsetMatrix)
             skeleton_ctx.bone_offsets_zup.append(off)
             skeleton_ctx.has_skeleton = True
         gidx = skeleton_ctx.bone_index[bname]
@@ -559,10 +555,11 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
     try:
         from core.engine.engine import Engine
         eng = Engine.instance()
-    except Exception: pass
+    except Exception:
+        pass
     prof = eng._profiler if eng and hasattr(eng, '_profiler') else None
     if prof: prof.start("load_mesh")
-    
+
     dll = _get_dll()
     try:
         c_path = ctypes.c_char_p(path.encode('utf-8'))
@@ -680,17 +677,19 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
     try:
         from core.engine.engine import Engine
         eng = Engine.instance()
-    except Exception: pass
+    except Exception:
+        pass
     prof = eng._profiler if eng and hasattr(eng, '_profiler') else None
     if prof: prof.start("load_obj")
-    
+
     positions, texcoords, normals = [], [], []
     face_pos, face_tex, face_nrm = [], [], []
     try:
         with open(path, "r") as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith("#") or line.startswith("o ") or line.startswith("s ") or line.startswith("g "):
+                if not line or line.startswith("#") or line.startswith("o ") or line.startswith(
+                        "s ") or line.startswith("g "):
                     continue
                 if line.startswith("usemtl ") or line.startswith("mtllib "):
                     continue
@@ -774,21 +773,25 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
 
 def load_mesh_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
     fut = _get_mesh_import_pool().submit(load_mesh, path)
+
     def _done(f):
         try:
             callback(f.result())
         except Exception:
             callback(None)
+
     fut.add_done_callback(_done)
 
 
 def load_obj_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
     fut = _get_mesh_import_pool().submit(load_obj, path)
+
     def _done(f):
         try:
             callback(f.result())
         except Exception:
             callback(None)
+
     fut.add_done_callback(_done)
 
 
@@ -828,7 +831,8 @@ def gif_frames_to_flipbook(frames: list[np.ndarray], cols: int = None, rows: int
     return sheet, cols, rows
 
 
-def import_gif_to_flipbook(gif_path: str, output_path: str = None, cols: int = None, rows: int = None) -> tuple[int, int, int]:
+def import_gif_to_flipbook(gif_path: str, output_path: str = None, cols: int = None, rows: int = None) -> tuple[
+    int, int, int]:
     frames = load_gif_frames(gif_path)
     sheet, cols_out, rows_out = gif_frames_to_flipbook(frames, cols, rows)
     if output_path is None:
@@ -840,8 +844,9 @@ def import_gif_to_flipbook(gif_path: str, output_path: str = None, cols: int = N
 
 
 def import_gif_to_flipbook_async(gif_path: str, callback: Callable[[Optional[tuple[int, int, int]]], None] = None,
-                                  output_path: str = None, cols: int = None, rows: int = None) -> Future:
+                                 output_path: str = None, cols: int = None, rows: int = None) -> Future:
     fut = _get_asset_pool().submit(import_gif_to_flipbook, gif_path, output_path, cols, rows)
+
     def _done(f):
         try:
             result = f.result()
@@ -850,6 +855,7 @@ def import_gif_to_flipbook_async(gif_path: str, callback: Callable[[Optional[tup
         except Exception:
             if callback:
                 callback(None)
+
     fut.add_done_callback(_done)
     return fut
 
@@ -862,10 +868,12 @@ def load_mesh_future(path: str) -> Future:
     fut = _get_mesh_import_pool().submit(load_mesh, path)
     with _inflight_lock:
         _inflight[path] = fut
+
     def _cleanup(f):
         with _inflight_lock:
             if _inflight.get(path) is f:
                 del _inflight[path]
+
     fut.add_done_callback(_cleanup)
     return fut
 
@@ -878,9 +886,11 @@ def load_obj_future(path: str) -> Future:
     fut = _get_mesh_import_pool().submit(load_obj, path)
     with _inflight_lock:
         _inflight[path] = fut
+
     def _cleanup(f):
         with _inflight_lock:
             if _inflight.get(path) is f:
                 del _inflight[path]
+
     fut.add_done_callback(_cleanup)
     return fut

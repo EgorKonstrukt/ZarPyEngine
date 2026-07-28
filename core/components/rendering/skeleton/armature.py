@@ -124,21 +124,17 @@ class Armature(Component):
 
     def _bone_world_positions(self) -> list:
         n = len(self.bone_names)
-        off = self.bone_offset_matrices
-        base_np = np.eye(4, dtype=np.float32)
-        tr = self.transform
-        if tr is not None:
-            base_np = tr.world_matrix._d
+        scene = self._entity._scene if self._entity else None
         positions = []
         for i in range(n):
-            if i >= len(off) or off[i] is None:
-                positions.append((0.0, 0.0, 0.0))
-                continue
-            bw = np.linalg.inv(np.array(off[i], dtype=np.float32))
-            lp = bw[3, 0:3]
-            v4 = np.array([lp[0], lp[1], lp[2], 1.0], dtype=np.float32)
-            world = v4 @ base_np
-            positions.append((float(world[0]), float(world[1]), float(world[2])))
+            ent = None
+            if scene is not None and i < len(self.bone_entity_ids) and self.bone_entity_ids[i]:
+                ent = scene.get_entity(self.bone_entity_ids[i])
+            if ent is not None and ent.transform is not None:
+                wm = ent.transform.world_matrix._d
+                positions.append((float(wm[3, 0]), float(wm[3, 1]), float(wm[3, 2])))
+            else:
+                positions.append(None)
         return positions
 
     def _append_joint_cross(self, s_list, e_list, c_list, p, size, color):
@@ -210,7 +206,7 @@ class Armature(Component):
                 skin = (off @ rel).astype(np.float32)
             else:
                 skin = np.eye(4, dtype=np.float32)
-            flat[i] = skin.T.flatten()
+            flat[i] = skin.flatten()
         return flat, n
 
     @property
