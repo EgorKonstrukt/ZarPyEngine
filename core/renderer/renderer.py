@@ -271,7 +271,14 @@ class Renderer:
         self._snap_mesh_gen: int = -1
         self._snap_scene: object = None
         self._normal_cache: dict[int, np.ndarray] = {}
+        self._skinning_cache: dict[tuple, tuple] = {}
+        self._skinning_frame: int = -1
         self._rendering_cubemap_face: bool = False
+        self._vec3_buf_a = np.zeros(3, dtype=np.float32)
+        self._vec3_buf_b = np.zeros(3, dtype=np.float32)
+        self._vec3_buf_c = np.zeros(3, dtype=np.float32)
+        self._ambient_buf = np.zeros(3, dtype=np.float32)
+        self._white3 = np.ones(3, dtype=np.float32)
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
         self._pp_fbo_b: Optional[moderngl.Framebuffer] = None
@@ -1493,16 +1500,26 @@ out vec4 frag_color;
         self._skinned_bone_ssbo.bind_to_storage_buffer(6)
 
     def _render_skinned_meshes(self, snap, view_f32, proj_f32, cam_pos, lights):
+        from core.math_helpers import mat4_normal_matrix
         eng = Engine.instance()
         scene = eng.scene if eng and hasattr(eng, 'scene') else None
         if scene is None:
             return
         last_prog = None
+        skinning_set = False
+        skinning_cache = self._skinning_cache
         for entry in snap.skinned_renderables:
             ent, tr, mesh, smr, wm, armature, sub_idx = entry[:7]
             if armature is None or len(armature.bone_offset_matrices) == 0:
                 continue
-            flat, n_bones = armature.compute_skinning_buffer(scene, wm)
+            cache_key = ent._id
+            cached = skinning_cache.get(cache_key)
+            if cached is not None:
+                flat, n_bones = cached
+            else:
+                flat, n_bones = armature.compute_skinning_buffer(scene, wm)
+                if n_bones > 0:
+                    skinning_cache[cache_key] = (flat, n_bones)
             if n_bones == 0:
                 continue
             mat = self._materials.load_material(smr.get_material_path(sub_idx if sub_idx >= 0 else 0))
@@ -1514,18 +1531,23 @@ out vec4 frag_color;
                 self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights,
                                           disable_shadows=not smr.receive_shadows)
                 last_prog = prog
+                skinning_set = False
             model_f32 = wm.to_f32()
             if "u_model" in prog:
                 prog["u_model"].write(model_f32.tobytes())
-            try:
-                from core.math_helpers import mat4_normal_matrix
-                nm = mat4_normal_matrix(wm._d)
-            except Exception:
-                nm = np.eye(3, dtype=np.float32).T
+            nm = self._normal_cache.get(ent._id)
+            if nm is None:
+                try:
+                    nm = mat4_normal_matrix(wm._d)
+                except Exception:
+                    nm = np.eye(3, dtype=np.float32).T
+                self._normal_cache[ent._id] = nm
             if "u_normal_matrix" in prog:
                 prog["u_normal_matrix"].write(nm.tobytes())
-            if "u_use_skinning" in prog:
-                prog["u_use_skinning"].value = 1
+            if not skinning_set:
+                if "u_use_skinning" in prog:
+                    prog["u_use_skinning"].value = 1
+                skinning_set = True
             if "u_bone_count" in prog:
                 prog["u_bone_count"].value = int(n_bones)
             self._bind_bone_ssbo(flat)
@@ -1606,19 +1628,26 @@ out vec4 frag_color;
         if "u_proj" in prog:
             prog["u_proj"].write(proj_f32.tobytes())
         if "u_camera_pos" in prog:
-            prog["u_camera_pos"].write(np.array(cam_pos.to_array(), dtype=np.float32).tobytes())
+            buf = self._vec3_buf_a
+            ca = cam_pos.to_array()
+            buf[0] = ca[0]; buf[1] = ca[1]; buf[2] = ca[2]
+            prog["u_camera_pos"].write(buf.tobytes())
         if "u_time" in prog:
             prog["u_time"].value = time.time()
         n_lights = min(len(lights), self._max_lights)
+        abuf = self._ambient_buf
         if self._render_mode == RenderMode.FLAT:
             if "u_ambient" in prog:
-                prog["u_ambient"].write(np.array([1.0, 1.0, 1.0], dtype=np.float32).tobytes())
+                abuf[0] = 1.0; abuf[1] = 1.0; abuf[2] = 1.0
+                prog["u_ambient"].write(abuf.tobytes())
             if "u_light_count" in prog:
                 prog["u_light_count"].value = 0
             n_lights = 0
         else:
             if "u_ambient" in prog:
-                prog["u_ambient"].write(np.array(self._ambient, dtype=np.float32).tobytes())
+                amb = self._ambient
+                abuf[0] = amb[0]; abuf[1] = amb[1]; abuf[2] = amb[2]
+                prog["u_ambient"].write(abuf.tobytes())
             if "u_light_count" in prog:
                 prog["u_light_count"].value = n_lights
         if disable_shadows:
@@ -1647,16 +1676,23 @@ out vec4 frag_color;
             pos = lt.position
             fwd = lt.forward
             if unames["position"] in prog:
-                prog[unames["position"]].write(np.array([pos.x, pos.y, pos.z], dtype=np.float32).tobytes())
+                buf = self._vec3_buf_a
+                buf[0] = pos.x; buf[1] = pos.y; buf[2] = pos.z
+                prog[unames["position"]].write(buf.tobytes())
             if unames["direction"] in prog:
-                prog[unames["direction"]].write(np.array([fwd.x, fwd.y, fwd.z], dtype=np.float32).tobytes())
+                buf = self._vec3_buf_b
+                buf[0] = fwd.x; buf[1] = fwd.y; buf[2] = fwd.z
+                prog[unames["direction"]].write(buf.tobytes())
             if l.procedural_sky_lighting and l.light_type == LightType.DIRECTIONAL:
                 effective_color, effective_intensity = Light.compute_sun_light(-fwd)
             else:
                 effective_color = l.color
                 effective_intensity = l.intensity
             if unames["color"] in prog:
-                prog[unames["color"]].write(np.array(effective_color, dtype=np.float32).tobytes())
+                buf = self._vec3_buf_c
+                ec = effective_color
+                buf[0] = ec[0]; buf[1] = ec[1]; buf[2] = ec[2]
+                prog[unames["color"]].write(buf.tobytes())
             if unames["intensity"] in prog:
                 prog[unames["intensity"]].value = float(effective_intensity)
             if unames["range"] in prog:
@@ -1667,10 +1703,14 @@ out vec4 frag_color;
                 prog[unames["spot_inner_angle"]].value = float(l.spot_inner_angle)
             if unames["right"] in prog:
                 rv = lt.right
-                prog[unames["right"]].write(np.array([rv.x, rv.y, rv.z], dtype=np.float32).tobytes())
+                buf = self._vec3_buf_a
+                buf[0] = rv.x; buf[1] = rv.y; buf[2] = rv.z
+                prog[unames["right"]].write(buf.tobytes())
             if unames["up"] in prog:
                 uv = lt.up
-                prog[unames["up"]].write(np.array([uv.x, uv.y, uv.z], dtype=np.float32).tobytes())
+                buf = self._vec3_buf_b
+                buf[0] = uv.x; buf[1] = uv.y; buf[2] = uv.z
+                prog[unames["up"]].write(buf.tobytes())
             if unames["area_width"] in prog:
                 prog[unames["area_width"]].value = float(l.area_width)
             if unames["area_height"] in prog:
@@ -1697,7 +1737,9 @@ out vec4 frag_color;
                     d = s["dir"]
                     vboost = s.get("vertical_boost", 0.2)
                     if "_WindDir" in prog:
-                        prog["_WindDir"].write(np.array([d[0], vboost * 0.3, d[1]], dtype=np.float32).tobytes())
+                        buf = self._vec3_buf_a
+                        buf[0] = d[0]; buf[1] = vboost * 0.3; buf[2] = d[1]
+                        prog["_WindDir"].write(buf.tobytes())
                     if "_WindInfluence" in prog:
                         prog["_WindInfluence"].value = 1.0
                     if "_WindStrength" in prog:
@@ -2191,11 +2233,12 @@ out vec4 frag_color;
         self._mesh_loader.process_pending()
         if prof:
             prof.stop("mesh_async_load")
+        self._skinning_cache.clear()
         if prof:
             prof.start("render_shadow_pass")
         shadow_groups = {}
         try:
-            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene)
+            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene, skinning_cache=self._skinning_cache)
             if snap.projectors:
                 self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
         except Exception as _sh_err:

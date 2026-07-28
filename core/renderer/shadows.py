@@ -102,7 +102,14 @@ class ShadowRenderer:
         self._skinned_bone_ssbo_cap: int = 0
         self._pending_skinned: list = []
         self._pending_scene: Any = None
+        self._skinning_cache: dict = None
         self._shadow_groups_cache: Optional[dict] = None
+        self._cascade_matrices_buf = np.zeros((3, 4, 4), dtype=np.float32)
+        self._cascade_splits_buf = np.zeros(3, dtype=np.float32)
+        self._point_vps_buf = np.zeros((6, 4, 4), dtype=np.float32)
+        self._point_pos_buf = np.zeros(3, dtype=np.float32)
+        self._area_nearfar_buf = np.zeros(2, dtype=np.float32)
+        self._vp_f32_buf = np.zeros((4, 4), dtype=np.float32)
         self._shadow_groups_key: int = 0
         self._shadow_groups_ref: Any = None
         self._create_csm_resources()
@@ -252,8 +259,7 @@ class ShadowRenderer:
         self._ctx.depth_mask = True
         self._ctx.disable(moderngl.CULL_FACE)
         prog = self._prog
-        vp_bytes = vp.astype(np.float32).tobytes()
-        prog["u_light_vp"].write(vp_bytes)
+        prog["u_light_vp"].write(vp.tobytes())
         supports_instancing = _shadow_supports_instancing(prog)
         for mesh_id, group in groups.items():
             mesh, _ = group[0]
@@ -315,16 +321,24 @@ class ShadowRenderer:
         self._ctx.enable(moderngl.DEPTH_TEST)
         self._ctx.depth_mask = True
         self._ctx.disable(moderngl.CULL_FACE)
-        prog["u_light_vp"].write(vp.astype(np.float32).tobytes())
+        prog["u_light_vp"].write(vp.tobytes())
         if "u_use_instancing" in prog:
             prog["u_use_instancing"].value = 0
         if "u_use_skinning" in prog:
             prog["u_use_skinning"].value = 1
+        skinning_cache = self._skinning_cache
         for entry in self._pending_skinned:
             mesh, ent, armature, wm = entry[0], entry[1], entry[2], entry[3]
             if armature is None or len(armature.bone_offset_matrices) == 0:
                 continue
-            flat, n_bones = armature.compute_skinning_buffer(self._pending_scene, wm)
+            cache_key = ent._id
+            cached = skinning_cache.get(cache_key) if skinning_cache is not None else None
+            if cached is not None:
+                flat, n_bones = cached
+            else:
+                flat, n_bones = armature.compute_skinning_buffer(self._pending_scene, wm)
+                if n_bones > 0 and skinning_cache is not None:
+                    skinning_cache[cache_key] = (flat, n_bones)
             if n_bones == 0:
                 continue
             self._bind_bone_ssbo(flat)
@@ -339,11 +353,13 @@ class ShadowRenderer:
 
     def render_shadow_pass(self, renderable_shadow, lights, cam_near: float, cam_far: float, cam_fov: float,
                            aspect: float, view_mat: Mat4, meshes: object = None,
-                           skinned_entries: list = None, scene: object = None) -> dict:
+                           skinned_entries: list = None, scene: object = None,
+                           skinning_cache: dict = None) -> dict:
         if not self._prog:
             return {}
         self._pending_skinned = skinned_entries or []
         self._pending_scene = scene
+        self._skinning_cache = skinning_cache
         if not renderable_shadow:
             self._cascade_splits = [0.0] * 3
             self._has_point_shadow = False
@@ -411,9 +427,11 @@ class ShadowRenderer:
         for cascade_idx, split_far in enumerate(splits):
             corners = self._get_frustum_corners(near_z, split_far, cam_fov, aspect, inv_view)
             vp = self._build_directional_cascade(light_dir, corners, split_far - near_z)
-            self._light_space_matrices[cascade_idx] = vp
-            self._render_geometry_with_groups(vp, self._shadow_fbos[cascade_idx], shadow_groups, resolution=self._shadow_resolution)
-            self._maybe_render_skinned(vp, self._shadow_fbos[cascade_idx], self._shadow_resolution)
+            vp32 = self._vp_f32_buf
+            np.copyto(vp32, vp)
+            self._light_space_matrices[cascade_idx] = vp32.copy()
+            self._render_geometry_with_groups(vp32, self._shadow_fbos[cascade_idx], shadow_groups, resolution=self._shadow_resolution)
+            self._maybe_render_skinned(vp32, self._shadow_fbos[cascade_idx], self._shadow_resolution)
             near_z = split_far
 
     def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray], depth_span: float) -> np.ndarray:
@@ -565,10 +583,14 @@ class ShadowRenderer:
         if has_csm and "u_cascade_count" in prog:
             prog["u_cascade_count"].value = 3
             if "u_light_space_matrices" in prog:
-                all_mats = np.array([self._light_space_matrices[ci].astype(np.float32) for ci in range(3)])
-                prog["u_light_space_matrices"].write(all_mats.tobytes())
+                cm = self._cascade_matrices_buf
+                for ci in range(3):
+                    np.copyto(cm[ci], self._light_space_matrices[ci])
+                prog["u_light_space_matrices"].write(cm.tobytes())
             if "u_cascade_splits" in prog:
-                prog["u_cascade_splits"].write(np.array(self._cascade_splits, dtype=np.float32).tobytes())
+                cs = self._cascade_splits_buf
+                cs[0] = self._cascade_splits[0]; cs[1] = self._cascade_splits[1]; cs[2] = self._cascade_splits[2]
+                prog["u_cascade_splits"].write(cs.tobytes())
             for ci in range(3):
                 tex_unit = 3 + ci
                 self._shadow_maps[ci].use(tex_unit)
@@ -583,8 +605,10 @@ class ShadowRenderer:
         if self._has_point_shadow and "u_point_shadow_count" in prog:
             prog["u_point_shadow_count"].value = 1
             if "u_point_light_vps" in prog:
-                all_vps = np.array([self._point_light_vps[fi].astype(np.float32) for fi in range(6)])
-                prog["u_point_light_vps"].write(all_vps.tobytes())
+                pv = self._point_vps_buf
+                for fi in range(6):
+                    np.copyto(pv[fi], self._point_light_vps[fi])
+                prog["u_point_light_vps"].write(pv.tobytes())
             for fi in range(6):
                 tex_unit = 6 + fi
                 self._point_shadow_maps[fi].use(tex_unit)
@@ -592,9 +616,10 @@ class ShadowRenderer:
                 if si in prog:
                     prog[si].value = tex_unit
             if "u_point_light_pos" in prog:
-                prog["u_point_light_pos"].write(
-                    np.array(self._point_light_world_pos.to_array(), dtype=np.float32).tobytes()
-                )
+                pp = self._point_pos_buf
+                pa = self._point_light_world_pos.to_array()
+                pp[0] = pa[0]; pp[1] = pa[1]; pp[2] = pa[2]
+                prog["u_point_light_pos"].write(pp.tobytes())
             if "u_point_light_range" in prog:
                 prog["u_point_light_range"].value = float(self._point_light_range)
             if "u_point_shadow_light_index" in prog:
@@ -627,9 +652,9 @@ class ShadowRenderer:
             if "u_area_light_fov_scale" in prog:
                 prog["u_area_light_fov_scale"].value = float(self._area_light_fov_scale)
             if "u_area_light_near_far" in prog:
-                prog["u_area_light_near_far"].write(
-                    np.array([self._area_light_near, self._area_light_far], dtype=np.float32).tobytes()
-                )
+                af = self._area_nearfar_buf
+                af[0] = self._area_light_near; af[1] = self._area_light_far
+                prog["u_area_light_near_far"].write(af.tobytes())
             if "u_area_shadow_light_index" in prog:
                 prog["u_area_shadow_light_index"].value = self._area_light_idx if self._area_light_idx >= 0 else -1
             if "u_area_shadow_bias" in prog:

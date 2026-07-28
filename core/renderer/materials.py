@@ -27,6 +27,9 @@ class MaterialManager:
         "_OcclusionMap": "_OcclusionMap",
     }
 
+    _WHITE4 = np.array([1, 1, 1, 1], dtype=np.float32).tobytes()
+    _ZERO3 = np.zeros(3, dtype=np.float32).tobytes()
+
     def __init__(self, ctx: moderngl.Context):
         self._ctx = ctx
         self._material_cache: dict[str, Material] = {}
@@ -42,21 +45,19 @@ class MaterialManager:
     def load_material(self, path: str) -> Optional[Material]:
         if not path:
             return None
+        cached = self._material_cache.get(path)
+        if cached is not None:
+            return cached
         eng = Engine.instance()
         root = eng.project_root if eng and eng.project_root else os.getcwd()
         abs_path = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
         lib_mat = MaterialLibrary._materials.get(abs_path)
         if lib_mat is not None:
             self._material_cache[path] = lib_mat
-            self._material_cache[abs_path] = lib_mat
             return lib_mat
-        cached = self._material_cache.get(path)
-        if cached is not None:
-            return cached
         m = Material.load(abs_path, root)
         if m:
             self._material_cache[path] = m
-            self._material_cache[abs_path] = m
         return m
 
     def load_texture(self, path: str) -> Optional[Any]:
@@ -191,16 +192,18 @@ class MaterialManager:
                 names = frozenset()
             self._prog_uniform_names[id(prog)] = names
         self._default_white.use(0)
+        white4 = self._WHITE4
+        zero3 = self._ZERO3
         if "u_albedo_tex" in names:
             prog["u_albedo_tex"].value = 0
         if "u_albedo_color" in names:
-            prog["u_albedo_color"].write(np.array([1, 1, 1, 1], dtype=np.float32).tobytes())
+            prog["u_albedo_color"].write(white4)
         if "u_metallic" in names:
             prog["u_metallic"].value = 0.0
         if "u_smoothness" in names:
             prog["u_smoothness"].value = 0.5
         if "u_emission" in names:
-            prog["u_emission"].write(np.zeros(3, dtype=np.float32).tobytes())
+            prog["u_emission"].write(zero3)
         if "u_normal_tex" in names:
             prog["u_normal_tex"].value = 0
         if "u_roughness_tex" in names:
@@ -211,13 +214,13 @@ class MaterialManager:
         if "_BaseMap" in names:
             prog["_BaseMap"].value = 0
         if "_BaseColor" in names:
-            prog["_BaseColor"].write(np.array([1, 1, 1, 1], dtype=np.float32).tobytes())
+            prog["_BaseColor"].write(white4)
         if "_Metallic" in names:
             prog["_Metallic"].value = 0.0
         if "_Smoothness" in names:
             prog["_Smoothness"].value = 0.5
         if "_EmissionColor" in names:
-            prog["_EmissionColor"].write(np.zeros(3, dtype=np.float32).tobytes())
+            prog["_EmissionColor"].write(zero3)
         if "_EmissionIntensity" in names:
             prog["_EmissionIntensity"].value = 0.0
         if "_NormalMap" in names:

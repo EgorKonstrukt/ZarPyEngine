@@ -71,6 +71,11 @@ class Armature(Component):
         self.bone_bind_local: list[np.ndarray] = []
         self.bone_entity_ids: list[str] = []
         self.root_bone_name: str = ""
+        self._skin_flat: Optional[np.ndarray] = None
+        self._skin_flat_size: int = 0
+        self._skin_mat: Optional[np.ndarray] = None
+        self._inv_cache: Optional[np.ndarray] = None
+        self._inv_cache_key: int = 0
 
     def setup(self, skeleton) -> None:
         if isinstance(skeleton, dict):
@@ -208,19 +213,35 @@ class Armature(Component):
 
     def compute_skinning_buffer(self, scene, renderer_world: Mat4) -> tuple[np.ndarray, int]:
         n = len(self.bone_offset_matrices)
-        flat = np.zeros((n, 16), dtype=np.float32)
-        inv = renderer_world.inverted()
+        if n == 0:
+            return np.empty((0, 16), dtype=np.float32), 0
+        if self._skin_flat is None or self._skin_flat_size < n:
+            self._skin_flat = np.zeros((n, 16), dtype=np.float32)
+            self._skin_flat_size = n
+            self._skin_mat = np.empty((4, 4), dtype=np.float32)
+        flat = self._skin_flat
+        wm_id = id(renderer_world._d.ctypes.data)
+        if wm_id != self._inv_cache_key:
+            self._inv_cache = renderer_world.inverted()._d
+            self._inv_cache_key = wm_id
+        inv_d = self._inv_cache
+        skin_mat = self._skin_mat
+        bone_offsets = self.bone_offset_matrices
+        bone_ids = self.bone_entity_ids
         for i in range(n):
             ent = None
-            if scene is not None and i < len(self.bone_entity_ids) and self.bone_entity_ids[i]:
-                ent = scene.get_entity(self.bone_entity_ids[i])
+            if scene is not None and i < len(bone_ids) and bone_ids[i]:
+                ent = scene.get_entity(bone_ids[i])
             if ent is not None and ent.transform is not None:
-                rel = (ent.transform.world_matrix * inv)._d
-                off = self.bone_offset_matrices[i]
-                skin = (off @ rel).astype(np.float32)
+                rel = ent.transform.world_matrix._d @ inv_d
+                np.matmul(bone_offsets[i], rel, out=skin_mat)
+                flat[i] = skin_mat.ravel()
             else:
-                skin = np.eye(4, dtype=np.float32)
-            flat[i] = skin.flatten()
+                flat[i] = 0.0
+                flat[i, 0] = 1.0
+                flat[i, 5] = 1.0
+                flat[i, 10] = 1.0
+                flat[i, 15] = 1.0
         return flat, n
 
     @property
