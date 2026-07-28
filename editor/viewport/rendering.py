@@ -105,6 +105,9 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
     for entity in entities:
         if entity is None:
             continue
+        from core.components.rendering.skeleton.armature import Bone
+        if entity.get_component(Bone):
+            continue
         t = entity.transform
         if not t:
             continue
@@ -134,6 +137,28 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
                 np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
                 np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
                 expanded = True
+        if not expanded:
+            from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+            smr = entity.get_component(SkinnedMeshRenderer)
+            if smr and smr.enabled:
+                mesh_name = smr.mesh_name or "cube"
+                mesh = _get_mesh_for(entity, mesh_name, smr.mesh_path)
+                if mesh is not None:
+                    wm = t.world_matrix._d
+                    ax, ay, az = mesh.aabb_min
+                    bx2, by2, bz2 = mesh.aabb_max
+                    _corner_buf[0] = [ax, ay, az, 1]
+                    _corner_buf[1] = [bx2, ay, az, 1]
+                    _corner_buf[2] = [bx2, by2, az, 1]
+                    _corner_buf[3] = [ax, by2, az, 1]
+                    _corner_buf[4] = [ax, ay, bz2, 1]
+                    _corner_buf[5] = [bx2, ay, bz2, 1]
+                    _corner_buf[6] = [bx2, by2, bz2, 1]
+                    _corner_buf[7] = [ax, by2, bz2, 1]
+                    pts = _corner_buf @ wm
+                    np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
+                    np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
+                    expanded = True
         if not expanded:
             sr = entity.get_component(SpriteRenderer)
             if sr and sr.enabled:

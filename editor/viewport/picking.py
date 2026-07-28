@@ -64,6 +64,9 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
     from core.components.rendering.renderers.text_renderer import TextRenderer
     from core.components.physics.box_collider import BoxCollider
     from core.components.physics.sphere_collider import SphereCollider
+    from core.components.rendering.skeleton.armature import Bone
+    if entity.get_component(Bone):
+        return None
     t = entity.transform
     if not t:
         return None
@@ -76,6 +79,23 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
     if mf and mr and mr.enabled:
         mesh_name = mf.mesh_name or "cube"
         mesh = _get_mesh_for(entity, mesh_name, mf.mesh_path)
+        if mesh is not None:
+            wm = t.world_matrix._d
+            ax, ay, az = mesh.aabb_min
+            bx, by, bz = mesh.aabb_max
+            corners = np.array([
+                [ax, ay, az, 1], [bx, ay, az, 1], [bx, by, az, 1], [ax, by, az, 1],
+                [ax, ay, bz, 1], [bx, ay, bz, 1], [bx, by, bz, 1], [ax, by, bz, 1],
+            ], dtype=np.float32)
+            pts = corners @ wm
+            np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
+            np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
+            expanded = True
+    from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+    smr = entity.get_component(SkinnedMeshRenderer)
+    if smr and smr.enabled:
+        mesh_name = smr.mesh_name or "cube"
+        mesh = _get_mesh_for(entity, mesh_name, smr.mesh_path)
         if mesh is not None:
             wm = t.world_matrix._d
             ax, ay, az = mesh.aabb_min
@@ -272,6 +292,15 @@ def _test_entity_pick(entity, ro, rd, ray_origin, ray_dir):
         wm = t.world_matrix._d
         d = _test_mesh_hit(wm, ro, rd, mesh)
         return d if d > 0 else -1.0
+    from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+    smr = entity.get_component(SkinnedMeshRenderer)
+    if smr and smr.enabled:
+        mesh_name = smr.mesh_name or "cube"
+        mesh = _get_mesh_for(entity, mesh_name, smr.mesh_path)
+        if mesh is not None:
+            wm = t.world_matrix._d
+            d = _test_mesh_hit(wm, ro, rd, mesh)
+            return d if d > 0 else -1.0
     mc = entity.get_component(MeshCollider)
     if mc:
         mf2 = entity.get_component(MeshFilter)

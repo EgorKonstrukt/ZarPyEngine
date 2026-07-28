@@ -148,6 +148,20 @@ class Armature(Component):
     def gizmo(self):
         if not get_global_config().get("gizmo.show_armature_bones", True):
             return []
+        from core.engine.engine import Engine
+        engine = Engine.instance()
+        if engine:
+            vp = getattr(engine, 'viewport', None)
+            if vp is not None:
+                selected = getattr(vp, '_selected_entities', None)
+                if selected is not None:
+                    selected_ids = {e.id for e in selected}
+                    armature_id = self._entity.id if self._entity else None
+                    bone_ids = set(self.bone_entity_ids)
+                    if armature_id is not None and armature_id not in selected_ids and not bone_ids.intersection(selected_ids):
+                        return []
+                else:
+                    return []
         n = len(self.bone_names)
         if n == 0:
             return []
