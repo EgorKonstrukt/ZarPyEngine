@@ -1532,8 +1532,8 @@ out vec4 frag_color;
                                           disable_shadows=not smr.receive_shadows)
                 last_prog = prog
                 skinning_set = False
-            model_f32 = wm.to_f32()
             if "u_model" in prog:
+                model_f32 = wm.to_f32()
                 prog["u_model"].write(model_f32.tobytes())
             nm = self._normal_cache.get(ent._id)
             if nm is None:

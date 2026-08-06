@@ -12,6 +12,12 @@ from core.math.math3d import Mat4, Vec3, Quat
 from core.config.config import get_global_config
 from core.components.inspector_meta import FieldType, InspectorField
 
+try:
+    from core._skinning import compute_skinning_buffer_cy
+    _HAS_SKINNING_CY = True
+except ImportError:
+    _HAS_SKINNING_CY = False
+
 
 @ComponentRegistry.register
 class Bone(Component):
@@ -215,6 +221,13 @@ class Armature(Component):
         n = len(self.bone_offset_matrices)
         if n == 0:
             return np.empty((0, 16), dtype=np.float32), 0
+        if _HAS_SKINNING_CY:
+            flat, n_bones, new_inv_cache, new_inv_key = compute_skinning_buffer_cy(
+                self.bone_offset_matrices, self.bone_entity_ids,
+                scene, renderer_world, self._inv_cache, self._inv_cache_key)
+            self._inv_cache = new_inv_cache
+            self._inv_cache_key = new_inv_key
+            return flat, n_bones
         if self._skin_flat is None or self._skin_flat_size < n:
             self._skin_flat = np.zeros((n, 16), dtype=np.float32)
             self._skin_flat_size = n
