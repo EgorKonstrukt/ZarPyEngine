@@ -422,11 +422,9 @@ _PROP_MIGRATION = {
     "smoothness": "_Smoothness",
     "emission_color": "_EmissionColor",
     "emission_intensity": "_EmissionIntensity",
-    "albedo_texture": "_BaseMap",
-    "normal_texture": "_NormalMap",
-    "roughness_texture": "_RoughnessMap",
-    "occlusion_texture": "_OcclusionMap",
-    "emission_texture": "_EmissionMap",
+    "_MainTex": "albedo_texture",
+    "diffuseMap": "albedo_texture",
+    "_BaseTex": "albedo_texture",
 }
 
 

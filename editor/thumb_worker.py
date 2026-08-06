@@ -359,7 +359,7 @@ def _render_material(path: str, size: int):
         smoothness = float(props.get("_Smoothness", 0.5))
         emission = props.get("_EmissionColor", (0.0, 0.0, 0.0))
         emit_intensity = float(props.get("_EmissionIntensity", 0.0))
-        tex_path = props.get("_BaseMap", None)
+        tex_path = props.get("_BaseMap") or props.get("albedo_texture", None)
         from editor.gl_offscreen import render_sphere
         pm = render_sphere(
             size, size,

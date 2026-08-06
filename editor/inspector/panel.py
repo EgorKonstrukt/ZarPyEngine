@@ -743,12 +743,12 @@ class InspectorPanel(QDockWidget):
                     self._add_shader_property_widget(sp, props, _save, _update_preview)
         else:
             known_keys = {
-                "albedo_color": {"label": "Albedo", "widget": "color"},
+                "_BaseColor": {"label": "Albedo", "widget": "color"},
                 "albedo_texture": {"label": "Albedo Map", "widget": "texture"},
-                "metallic": {"label": "Metallic", "widget": "slider", "min": 0, "max": 1, "step": 0.01},
-                "smoothness": {"label": "Smoothness", "widget": "slider", "min": 0, "max": 1, "step": 0.01},
-                "emission_color": {"label": "Emission", "widget": "color"},
-                "emission_intensity": {"label": "Emission Intensity", "widget": "slider", "min": 0, "max": 100, "step": 0.1},
+                "_Metallic": {"label": "Metallic", "widget": "slider", "min": 0, "max": 1, "step": 0.01},
+                "_Smoothness": {"label": "Smoothness", "widget": "slider", "min": 0, "max": 1, "step": 0.01},
+                "_EmissionColor": {"label": "Emission", "widget": "color"},
+                "_EmissionIntensity": {"label": "Emission Intensity", "widget": "slider", "min": 0, "max": 100, "step": 0.1},
                 "normal_texture": {"label": "Normal Map", "widget": "texture"},
                 "roughness_texture": {"label": "Roughness Map", "widget": "texture"},
                 "double_sided": {"label": "Double Sided", "widget": "toggle"},
@@ -783,7 +783,15 @@ class InspectorPanel(QDockWidget):
                 props[key] = p
                 _save()
                 _update_preview()
-            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
+            tex_legacy = {
+                "_BaseMap": "albedo_texture",
+                "_NormalMap": "normal_texture",
+                "_RoughnessMap": "roughness_texture",
+                "_OcclusionMap": "occlusion_texture",
+                "_EmissionMap": "emission_texture",
+            }
+            current = props.get(key) or props.get(tex_legacy.get(key, ""))
+            picker = make_resource_picker(current, "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
             rl.addWidget(picker, 1)
             self._add_asset_widget(row)
         elif prop_type == "Color":
@@ -903,7 +911,17 @@ class InspectorPanel(QDockWidget):
                 props[_key] = p
                 _save()
                 _update_preview()
-            picker = make_resource_picker(props.get(key, ""), "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
+            tex_candidates = {
+                "albedo_texture": ("albedo_texture", "_BaseMap", "_MainTex", "diffuseMap", "_BaseTex"),
+                "normal_texture": ("normal_texture", "_NormalMap"),
+                "roughness_texture": ("roughness_texture", "_RoughnessMap"),
+            }
+            current = ""
+            for cand in tex_candidates.get(key, (key,)):
+                if props.get(cand):
+                    current = props[cand]
+                    break
+            picker = make_resource_picker(current, "Images (*.png *.jpg *.jpeg *.bmp *.tga *.tif *.tiff *.webp *.hdr *.exr *.dds *.svg)", _on_pick)
             rl.addWidget(picker, 1)
             self._add_asset_widget(row)
         elif widget_type == "color":

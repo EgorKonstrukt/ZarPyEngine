@@ -48,7 +48,7 @@ class MaterialPreviewWidget(QWidget):
         smoothness = self._get_pv(kwargs, "_Smoothness", "u_smoothness", default=0.5)
         emission = self._get_pv(kwargs, "_EmissionColor", "u_emission", default=[0.0, 0.0, 0.0])
         emit_intensity = self._get_pv(kwargs, "_EmissionIntensity", "u_emission_intensity", default=1.0)
-        albedo_tex = self._get_pv(kwargs, "_BaseMap", "u_albedo_tex", default="")
+        albedo_tex = self._get_pv(kwargs, "albedo_tex", "_BaseMap", "u_albedo_tex", default="")
         albedo3 = albedo[:3] if len(albedo) >= 3 else [*albedo, 1.0]
         emit3 = emission[:3] if len(emission) >= 3 else [0.0, 0.0, 0.0]
         changed = (
