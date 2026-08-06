@@ -167,6 +167,7 @@ class _RenderSnapshot:
         'projectors', 'skinned_renderables', 'skinned_shadow_renderables',
         'interactors', 'gaussian_splats', 'dynamic_cubemaps',
         'dynamic_cubemaps_pos', 'dynamic_cubemaps_entity',
+        'cull_entries', 'cull_offsets', 'cull_counts',
     )
     def __init__(self):
         self.lights: list = []
@@ -192,6 +193,9 @@ class _RenderSnapshot:
         self.dynamic_cubemaps = None
         self.dynamic_cubemaps_pos = None
         self.dynamic_cubemaps_entity = None
+        self.cull_entries: list = []
+        self.cull_offsets: list = []
+        self.cull_counts: list = []
 
 
 class Renderer:
@@ -1861,11 +1865,17 @@ out vec4 frag_color;
                 wm = tr.world_matrix
                 sub_ranges = mesh.sub_mesh_ranges
                 fx_list = self._find_object_effect(ent)
+                block_start = len(snap.renderable)
                 if sub_ranges:
                     for sub_idx in range(len(sub_ranges)):
                         snap.renderable.append([ent, tr, mesh, mr, wm, sub_idx, fx_list])
+                    n_sub = len(sub_ranges)
                 else:
                     snap.renderable.append([ent, tr, mesh, mr, wm, -1, fx_list])
+                    n_sub = 1
+                snap.cull_entries.append(snap.renderable[block_start])
+                snap.cull_offsets.append(block_start)
+                snap.cull_counts.append(n_sub)
                 if needs_shadow and mr.cast_shadows:
                     snap.shadow_renderables.append([mesh, tr])
         for ent in scene.get_entities_with_component(SkinnedMeshRenderer):
@@ -2295,15 +2305,36 @@ out vec4 frag_color;
         self._culled_visible = self._culled_total
         if renderable:
             try:
-                n = len(renderable)
                 from core._render_utils import build_frustum_cull_inputs as _bfci
-                radii_in = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float64)
-                centers, radii = _bfci(renderable, radii_in)
+                from itertools import chain as _chain
                 vp = proj_mat._d.T @ view_mat._d.T
-                visible = cpu_frustum_cull(centers, radii, vp)
-                self._culled_visible = len(visible)
-                if len(visible) < n:
-                    renderable = [renderable[idx] for idx in visible]
+                cull_entries = snap.cull_entries
+                n_ent = len(cull_entries)
+                if n_ent:
+                    radii_in = np.array([entry[2].bounding_radius for entry in cull_entries], dtype=np.float64)
+                    centers, radii = _bfci(cull_entries, radii_in)
+                    visible = cpu_frustum_cull(centers, radii, vp)
+                    offsets = snap.cull_offsets
+                    counts = snap.cull_counts
+                    n_vis = len(visible)
+                    self._culled_visible = sum(counts[i] for i in visible) if n_vis else 0
+                    if n_vis < n_ent:
+                        if n_vis == 0:
+                            renderable = []
+                        elif n_vis == 1:
+                            i = int(visible[0])
+                            renderable = renderable[offsets[i]:offsets[i] + counts[i]]
+                        else:
+                            parts = [renderable[offsets[i]:offsets[i] + counts[i]] for i in visible]
+                            renderable = list(_chain.from_iterable(parts))
+                else:
+                    n = len(renderable)
+                    radii_in = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float64)
+                    centers, radii = _bfci(renderable, radii_in)
+                    visible = cpu_frustum_cull(centers, radii, vp)
+                    self._culled_visible = len(visible)
+                    if len(visible) < n:
+                        renderable = [renderable[idx] for idx in visible]
             except Exception:
                 import traceback; traceback.print_exc()
 
