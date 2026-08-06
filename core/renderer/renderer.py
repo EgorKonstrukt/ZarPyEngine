@@ -2168,6 +2168,9 @@ out vec4 frag_color;
             self._gizmo._stat_instances = 0
             self._gizmo._stat_mesh_verts = 0
             self._gizmo._stat_draws = 0
+            self._gizmo._stat_upload_bytes = 0
+            self._gizmo._stat_upload_full = 0
+            self._gizmo._stat_upload_partial = 0
         if prof:
             prof.start("render_scene")
         snap = _RenderSnapshot()

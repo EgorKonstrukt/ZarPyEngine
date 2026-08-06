@@ -167,6 +167,9 @@ class SceneViewport(QOpenGLWidget):
         self._last_dt: float = 0.016
         self._paint_dt: float = 0.016
         self._last_render_ms: float = 0.0
+        self._last_gizmo_ms: float = 0.0
+        self._last_overlay_ms: float = 0.0
+        self._last_paint_full_ms: float = 0.0
         self._fps: float = 0.0
         self._fps_accum: float = 0.0
         self._fps_frames: int = 0
@@ -743,6 +746,7 @@ class SceneViewport(QOpenGLWidget):
                         if gizmo_lines:
                             self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
                 eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
+                self._last_gizmo_ms = (time.perf_counter() - t1) * 1000.0
                 t2 = time.perf_counter()
                 if in_frame:
                     prof.start("overlay_draw")
@@ -752,6 +756,7 @@ class SceneViewport(QOpenGLWidget):
                 if in_frame:
                     prof.stop("overlay_draw")
                 eng.set_profiler_data("overlay_time", (time.perf_counter() - t2) * 1000.0)
+                self._last_overlay_ms = (time.perf_counter() - t2) * 1000.0
                 if not self._no_qt_overlay:
                     now_overlay = time.perf_counter()
                     if now_overlay - self._last_overlay_update >= 0.1:
@@ -763,6 +768,7 @@ class SceneViewport(QOpenGLWidget):
             Logger.error(f"Render error: {e}", e)
         prof.stop("frame")
         _paint_dur = (time.perf_counter() - _p0) * 1000.0
+        self._last_paint_full_ms = _paint_dur
         eng.set_profiler_data("paint_full_ms", _paint_dur)
         eng.set_profiler_data("paint_gap_ms", _paint_gap * 1000.0)
         self._gc_frame_counter += 1

@@ -233,6 +233,9 @@ class GizmoRenderer:
         self._stat_instances: int = 0
         self._stat_mesh_verts: int = 0
         self._stat_draws: int = 0
+        self._stat_upload_bytes: int = 0
+        self._stat_upload_full: int = 0
+        self._stat_upload_partial: int = 0
 
     def _ensure_instanced_prog(self):
         if self._instanced_prog is not None:
@@ -382,6 +385,8 @@ class GizmoRenderer:
                 color_arr[:, 2] = color_key[2]
                 color_arr[:, 3] = alpha_val
                 self._fatline_vbo_color.write(color_arr.tobytes())
+                self._stat_upload_bytes += n_verts * 48
+                self._stat_upload_full += 1
                 self._fatline_vao.render(moderngl.TRIANGLES, vertices=n_verts)
         finally:
             if old_cull:
@@ -446,6 +451,8 @@ class GizmoRenderer:
         self._fatline_vbo_t.write(memoryview(self._fs_t[:n_verts]))
         self._fatline_vbo_side.write(memoryview(self._fs_side[:n_verts]))
         self._fatline_vbo_color.write(memoryview(self._fs_colors[:n_verts]))
+        self._stat_upload_bytes += n_verts * 48
+        self._stat_upload_full += 1
         self._fatline_vao.render(moderngl.TRIANGLES, vertices=n_verts)
         if old_cull:
             self._ctx.enable(moderngl.CULL_FACE)
@@ -465,6 +472,8 @@ class GizmoRenderer:
         data_size = num_instances * mesh.instance_stride
         if data_size > 0:
             mesh.instance_vbo.write(instance_data[:data_size].tobytes())
+            self._stat_upload_bytes += data_size
+            self._stat_upload_full += 1
         try:
             old_cull = bool(self._ctx.cull_face)
         except:
@@ -588,6 +597,8 @@ void main() {
         data_size = num_instances * mesh.instance_stride
         if data_size > 0:
             mesh.instance_vbo.write(instance_data[:data_size].tobytes())
+            self._stat_upload_bytes += data_size
+            self._stat_upload_full += 1
         try:
             old_cull = bool(self._ctx.cull_face)
         except:
@@ -699,6 +710,8 @@ void main() {
                 self._raw_line_start_vbo.write(memoryview(s_arr))
                 self._raw_line_end_vbo.write(memoryview(e_arr))
                 self._raw_line_color_vbo.write(memoryview(c_arr))
+                self._stat_upload_bytes += n * (12 + 12 + 16)
+                self._stat_upload_full += 1
                 self._rl_refresh_shadow(s_arr, e_arr, c_arr)
         self._draw_rawlines(n, vp_mat, fw, fh, desired_pixels, dash_opts)
 
@@ -722,8 +735,11 @@ void main() {
         bounds = np.flatnonzero(np.diff(idx) > 1)
         rs = np.concatenate(([idx[0]], idx[bounds + 1]))
         re = np.concatenate((idx[bounds] + 1, [idx[-1] + 1]))
+        if idx.size > 0:
+            self._stat_upload_partial += 1
         for r0, r1 in zip(rs.tolist(), re.tolist()):
             vbo.write(memoryview(data[r0:r1]), offset=r0 * stride)
+            self._stat_upload_bytes += (r1 - r0) * stride
 
     def _rl_upload_diff(self, s_arr: np.ndarray, e_arr: np.ndarray, c_arr: np.ndarray) -> bool:
         n = s_arr.shape[0]
@@ -809,6 +825,8 @@ void main() {
                 self._build_solid_buffers(n, n_idx)
             self._solid_vbo.write(v_data.tobytes())
             self._solid_ibo.write(idx_arr.tobytes())
+            self._stat_upload_bytes += len(v_data) * 28 + len(idx_arr) * 4
+            self._stat_upload_full += 1
             self._solid_vao.render(moderngl.TRIANGLES, vertices=n_idx)
         self._ctx.disable(moderngl.BLEND)
         try:
@@ -833,6 +851,8 @@ void main() {
             self._build_solid_buffers(n, n_idx)
         self._solid_vbo.write(v_data.tobytes())
         self._solid_ibo.write(idx_arr.tobytes())
+        self._stat_upload_bytes += len(v_data) * 28 + len(idx_arr) * 4
+        self._stat_upload_full += 1
         self._solid_vao.render(moderngl.TRIANGLES, vertices=n_idx)
         self._ctx.disable(moderngl.BLEND)
         try:
