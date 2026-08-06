@@ -98,6 +98,7 @@ class RenderBatcher:
         self._ctx = ctx
         self._default_prog = self._ensure_instancing_prog(default_prog)
         self._vao_cache: OrderedDict[tuple[int, int], moderngl.VertexArray] = OrderedDict()
+        self._prog_member_cache: dict[int, frozenset] = {}
         self._inst_vbo_capacity: int = _INITIAL_INST_VBO_CAPACITY
         self._shared_inst_vbo = ctx.buffer(reserve=_INITIAL_INST_VBO_CAPACITY * 64)
         self._index_buf: Optional[moderngl.Buffer] = None
@@ -134,6 +135,15 @@ class RenderBatcher:
         self._stats_instanced = 0
 
     _MAT_NONE = object()
+
+    def _uniform_names(self, prog: moderngl.Program) -> frozenset:
+        key = id(prog)
+        cached = self._prog_member_cache.get(key)
+        if cached is not None:
+            return cached
+        names = frozenset(prog)
+        self._prog_member_cache[key] = names
+        return names
 
     def collect_groups(self, renderables, materials, shaders):
         groups = defaultdict(list)
@@ -236,12 +246,13 @@ class RenderBatcher:
             if dyn_ref and dynamic_cubemaps is not None:
                 dynamic_cubemaps.bind_ibl(prog)
             elif not dyn_ref:
+                names = self._uniform_names(prog)
                 try:
-                    if "u_irradiance_map_Active" in prog:
+                    if "u_irradiance_map_Active" in names:
                         prog["u_irradiance_map_Active"].value = 0
-                    if "u_prefilter_map_Active" in prog:
+                    if "u_prefilter_map_Active" in names:
                         prog["u_prefilter_map_Active"].value = 0
-                    if "u_brdf_lut_Active" in prog:
+                    if "u_brdf_lut_Active" in names:
                         prog["u_brdf_lut_Active"].value = 0
                 except Exception:
                     pass
@@ -288,6 +299,7 @@ class RenderBatcher:
                           selected_entities, outline_queue,
                           gpu_storage=None, set_scene=True):
         world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
+        names = self._uniform_names(prog)
 
         if world_ssbo is not None:
             indices = np.array(range(len(group)), dtype=np.uint32)
@@ -295,14 +307,14 @@ class RenderBatcher:
             idx_buf.write(indices.tobytes())
             world_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
             idx_buf.bind_to_storage_buffer(INDEX_BINDING)
-            if "u_use_instancing" in prog:
+            if "u_use_instancing" in names:
                 prog["u_use_instancing"].value = 2
         else:
             model_mats = [item[6] for item in group]
             self._write_shared_vbo(model_mats)
-            if "u_use_instancing" in prog:
+            if "u_use_instancing" in names:
                 prog["u_use_instancing"].value = 1
-        if "u_use_skinning" in prog:
+        if "u_use_skinning" in names:
             prog["u_use_skinning"].value = 0
 
         vao = self._get_vao(prog, mesh)
@@ -313,7 +325,7 @@ class RenderBatcher:
         if mesh.is_error_mesh:
             apply_material_fn(None, prog)
             r = 0.1 + 0.9 * abs(np.sin(time.perf_counter() * 3.0))
-            if "u_albedo_color" in prog:
+            if "u_albedo_color" in names:
                 prog["u_albedo_color"].write(np.array([r, 0.0, 0.0, 0.8], dtype=np.float32).tobytes())
         else:
             apply_material_fn(mat, prog)
@@ -325,7 +337,7 @@ class RenderBatcher:
         if ds and cull_on:
             self._ctx.disable(moderngl.CULL_FACE)
         try:
-            if "u_double_sided" in prog:
+            if "u_double_sided" in names:
                 try:
                     prog["u_double_sided"].value = 1 if ds else 0
                 except Exception:
@@ -354,16 +366,17 @@ class RenderBatcher:
                         selected_entities, outline_queue, set_scene=True):
         self._stats_draw_calls += 1
         ent, tr, _, _, _, _, wm, sub_idx = item
-        if "u_use_instancing" in prog:
+        names = self._uniform_names(prog)
+        if "u_use_instancing" in names:
             prog["u_use_instancing"].value = 0
-        if "u_use_skinning" in prog:
+        if "u_use_skinning" in names:
             prog["u_use_skinning"].value = 0
         if set_scene:
             set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos, lights,
                                   disable_shadows=disable_shadows)
         model = wm
         model_f32 = model.to_f32()
-        if "u_model" in prog:
+        if "u_model" in names:
             prog["u_model"].write(model_f32)
         nm = normal_cache.get(ent._id)
         if nm is None:
@@ -373,12 +386,12 @@ class RenderBatcher:
                 normal_cache[ent._id] = nm
             except Exception:
                 nm = np.eye(3, dtype=np.float32).T
-        if "u_normal_matrix" in prog:
+        if "u_normal_matrix" in names:
             prog["u_normal_matrix"].write(nm.tobytes())
         if mesh.is_error_mesh:
             apply_material_fn(None, prog)
             r = 0.1 + 0.9 * abs(np.sin(time.perf_counter() * 3.0))
-            if "u_albedo_color" in prog:
+            if "u_albedo_color" in names:
                 prog["u_albedo_color"].write(np.array([r, 0.0, 0.0, 0.8], dtype=np.float32).tobytes())
         else:
             apply_material_fn(mat, prog)
@@ -388,7 +401,7 @@ class RenderBatcher:
         if ds and cull_on:
             self._ctx.disable(moderngl.CULL_FACE)
         try:
-            if "u_double_sided" in prog:
+            if "u_double_sided" in names:
                 try:
                     prog["u_double_sided"].value = 1 if ds else 0
                 except Exception:
@@ -423,6 +436,7 @@ class RenderBatcher:
             except Exception:
                 pass
         self._vao_cache.clear()
+        self._prog_member_cache.clear()
         if self._shared_inst_vbo:
             try:
                 self._shared_inst_vbo.release()

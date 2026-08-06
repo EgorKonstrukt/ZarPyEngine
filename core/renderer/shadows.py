@@ -97,6 +97,7 @@ class ShadowRenderer:
         self._projector_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(2)]
         self._has_projector_shadow: list[bool] = [False, False]
         self._shadow_vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
+        self._prog_member_cache: dict[int, frozenset] = {}
         self._shadow_inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
         self._skinned_bone_ssbo: Optional[Any] = None
         self._skinned_bone_ssbo_cap: int = 0
@@ -247,6 +248,15 @@ class ShadowRenderer:
         self._shadow_vao_cache[key] = vao
         return vao
 
+    def _uniform_names(self, prog: moderngl.Program) -> frozenset:
+        key = id(prog)
+        cached = self._prog_member_cache.get(key)
+        if cached is not None:
+            return cached
+        names = frozenset(prog)
+        self._prog_member_cache[key] = names
+        return names
+
     def render_geometry(self, vp: np.ndarray, fbo, renderable_shadow: list, resolution: int = 1024):
         groups = self._build_shadow_groups(renderable_shadow)
         self._render_geometry_with_groups(vp, fbo, groups, resolution)
@@ -322,9 +332,10 @@ class ShadowRenderer:
         self._ctx.depth_mask = True
         self._ctx.disable(moderngl.CULL_FACE)
         prog["u_light_vp"].write(vp.tobytes())
-        if "u_use_instancing" in prog:
+        names = self._uniform_names(prog)
+        if "u_use_instancing" in names:
             prog["u_use_instancing"].value = 0
-        if "u_use_skinning" in prog:
+        if "u_use_skinning" in names:
             prog["u_use_skinning"].value = 1
         skinning_cache = self._skinning_cache
         for entry in self._pending_skinned:
@@ -342,12 +353,12 @@ class ShadowRenderer:
             if n_bones == 0:
                 continue
             self._bind_bone_ssbo(flat)
-            if "u_bone_count" in prog:
+            if "u_bone_count" in names:
                 prog["u_bone_count"].value = int(n_bones)
-            if "u_model" in prog:
+            if "u_model" in names:
                 prog["u_model"].write(wm.to_f32().tobytes())
             mesh.render(prog)
-        if "u_use_skinning" in prog:
+        if "u_use_skinning" in names:
             prog["u_use_skinning"].value = 0
         self._ctx.enable(moderngl.CULL_FACE)
 
@@ -732,6 +743,7 @@ class ShadowRenderer:
                 pass
         self._shadow_inst_vbo.clear()
         self._shadow_vao_cache.clear()
+        self._prog_member_cache.clear()
         if self._skinned_bone_ssbo is not None:
             try:
                 self._skinned_bone_ssbo.release()

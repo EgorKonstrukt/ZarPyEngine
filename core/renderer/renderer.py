@@ -271,6 +271,7 @@ class Renderer:
         self._snap_mesh_gen: int = -1
         self._snap_scene: object = None
         self._normal_cache: dict[int, np.ndarray] = {}
+        self._prog_member_cache: dict[int, frozenset] = {}
         self._skinning_cache: dict[tuple, tuple] = {}
         self._skinning_frame: int = -1
         self._rendering_cubemap_face: bool = False
@@ -1532,7 +1533,8 @@ out vec4 frag_color;
                                           disable_shadows=not smr.receive_shadows)
                 last_prog = prog
                 skinning_set = False
-            if "u_model" in prog:
+            names = self._uniform_names(prog)
+            if "u_model" in names:
                 model_f32 = wm.to_f32()
                 prog["u_model"].write(model_f32.tobytes())
             nm = self._normal_cache.get(ent._id)
@@ -1542,17 +1544,17 @@ out vec4 frag_color;
                 except Exception:
                     nm = np.eye(3, dtype=np.float32).T
                 self._normal_cache[ent._id] = nm
-            if "u_normal_matrix" in prog:
+            if "u_normal_matrix" in names:
                 prog["u_normal_matrix"].write(nm.tobytes())
             if not skinning_set:
-                if "u_use_skinning" in prog:
+                if "u_use_skinning" in names:
                     prog["u_use_skinning"].value = 1
                 skinning_set = True
-            if "u_bone_count" in prog:
+            if "u_bone_count" in names:
                 prog["u_bone_count"].value = int(n_bones)
             self._bind_bone_ssbo(flat)
             self._materials.apply_material(mat, prog)
-            if "u_use_instancing" in prog:
+            if "u_use_instancing" in names:
                 prog["u_use_instancing"].value = 0
             if sub_idx >= 0 and mesh.sub_mesh_ranges:
                 start, count = mesh.sub_mesh_ranges[sub_idx]
@@ -1593,11 +1595,12 @@ out vec4 frag_color;
                             shader_path = mat.shader_path if mat else ""
                             p = self._shaders.get_or_compile(shader_path if shader_path else "") or prog
                             self._set_scene_uniforms(p, view_f32, proj_f32, cam_pos, lights, disable_shadows=True)
+                            names = self._uniform_names(p)
                             model_f32 = wm.to_f32()
-                            if "u_model" in p:
+                            if "u_model" in names:
                                 p["u_model"].write(model_f32.tobytes())
                             nm = np.eye(3, dtype=np.float32).T
-                            if "u_normal_matrix" in p:
+                            if "u_normal_matrix" in names:
                                 p["u_normal_matrix"].write(nm.tobytes())
                             self._materials.apply_material(mat, p)
                             ds = self._mat_double_sided(mat)
@@ -2066,13 +2069,25 @@ out vec4 frag_color;
         props = mat.properties
         return bool(props.get("double_sided") or props.get("_double_sided"))
 
+    def _uniform_names(self, prog) -> frozenset:
+        key = id(prog)
+        cached = self._prog_member_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            names = frozenset(prog)
+        except Exception:
+            names = frozenset()
+        self._prog_member_cache[key] = names
+        return names
+
     def _render_mesh_double_sided(self, prog, mesh, double_sided: bool):
         ctx = self._ctx
         cull_on = bool(ctx.cull_face)
         if double_sided and cull_on:
             ctx.disable(moderngl.CULL_FACE)
         try:
-            if "u_double_sided" in prog:
+            if "u_double_sided" in self._uniform_names(prog):
                 try:
                     prog["u_double_sided"].value = 1 if double_sided else 0
                 except Exception:
@@ -2318,21 +2333,22 @@ out vec4 frag_color;
                     shader_path = mat.shader_path if mat else ""
                     prog = self._shaders.get_or_compile(shader_path if shader_path else "") or self._default_prog
                     self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=not mr.receive_shadows)
+                    names = self._uniform_names(prog)
                     if getattr(mr, 'dynamic_reflections', False) and dynamic_cubemaps is not None:
                         dynamic_cubemaps.bind_ibl(prog)
                     elif not getattr(mr, 'dynamic_reflections', False):
                         try:
-                            if "u_irradiance_map_Active" in prog:
+                            if "u_irradiance_map_Active" in names:
                                 prog["u_irradiance_map_Active"].value = 0
-                            if "u_prefilter_map_Active" in prog:
+                            if "u_prefilter_map_Active" in names:
                                 prog["u_prefilter_map_Active"].value = 0
-                            if "u_brdf_lut_Active" in prog:
+                            if "u_brdf_lut_Active" in names:
                                 prog["u_brdf_lut_Active"].value = 0
                         except Exception:
                             pass
                     model = wm
                     model_f32 = model.to_f32()
-                    if "u_model" in prog:
+                    if "u_model" in names:
                         prog["u_model"].write(model_f32.tobytes())
                     try:
                         nm = self._normal_cache.get(ent._id)
@@ -2345,7 +2361,7 @@ out vec4 frag_color;
                             self._normal_cache[ent._id] = nm
                     except Exception:
                         nm = np.eye(3, dtype=np.float32).T
-                    if "u_normal_matrix" in prog:
+                    if "u_normal_matrix" in names:
                         prog["u_normal_matrix"].write(nm.tobytes())
                     self._materials.apply_material(mat, prog)
                     ds = self._mat_double_sided(mat)
@@ -2355,11 +2371,12 @@ out vec4 frag_color;
                 except Exception:
                     prog = self._default_prog
                     self._set_scene_uniforms(prog, view_f32, proj_f32, cam_pos, lights, disable_shadows=not mr.receive_shadows)
+                    names = self._uniform_names(prog)
                     model = wm
                     model_f32 = model.to_f32()
-                    if "u_model" in prog:
+                    if "u_model" in names:
                         prog["u_model"].write(model_f32.tobytes())
-                    if "u_normal_matrix" in prog:
+                    if "u_normal_matrix" in names:
                         prog["u_normal_matrix"].write(np.eye(3, dtype=np.float32).tobytes())
                     self._materials.apply_material(None, prog)
                     mesh.render(prog)
@@ -3221,6 +3238,7 @@ out vec4 frag_color;
         """Clear per-frame caches on scene reload. Does NOT clear mesh/material
         caches to avoid reloading all 3D models after play mode toggle."""
         self._normal_cache.clear()
+        self._prog_member_cache.clear()
         self._import_meta_cache.clear()
         self._import_meta_mtime.clear()
         self._snap_cache = None
@@ -3231,6 +3249,7 @@ out vec4 frag_color;
         """Clear mesh, material and texture caches. Called when loading a
         completely different scene (not on play mode toggle)."""
         self._normal_cache.clear()
+        self._prog_member_cache.clear()
         self._import_meta_cache.clear()
         self._import_meta_mtime.clear()
         self._snap_cache = None

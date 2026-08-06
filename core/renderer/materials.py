@@ -261,15 +261,25 @@ class MaterialManager:
                 if alias and alias in names:
                     self._set_uniform_value(prog, alias, value)
 
+    def _has_uniform(self, prog, name: str) -> bool:
+        names = self._prog_uniform_names.get(id(prog))
+        if names is None:
+            try:
+                names = frozenset(prog)
+            except Exception:
+                names = frozenset()
+            self._prog_uniform_names[id(prog)] = names
+        return name in names
+
     def _set_uniform_value(self, prog, name: str, value):
         if isinstance(value, (float, int)):
-            if name in prog:
+            if self._has_uniform(prog, name):
                 try:
                     prog[name].value = value
                 except Exception as e:
                     Logger.error(f"set_uniform {name}={value} float failed: {e}")
         elif isinstance(value, (list, tuple)):
-            if name in prog:
+            if self._has_uniform(prog, name):
                 try:
                     arr = np.array(value, dtype=np.float32)
                     uni = prog[name]
@@ -280,7 +290,7 @@ class MaterialManager:
                 except Exception as e:
                     Logger.error(f"set_uniform {name}={value} list failed: {e}")
         elif isinstance(value, bool):
-            if name in prog:
+            if self._has_uniform(prog, name):
                 try:
                     prog[name].value = 1 if value else 0
                 except Exception as e:
