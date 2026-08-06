@@ -1207,22 +1207,20 @@ class GizmosManager:
             gizmos = list(self.persistent_draws)
             if self.unique_draws:
                 gizmos.extend(self.unique_draws.values())
-            np_data_copies = None
+            current_revision = self._revision
+            np_data = None
             if self.enabled:
                 np_data = self._get_render_data()
-                if np_data is not None:
-                    np_data_copies = (np.copy(np_data[0]), np.copy(np_data[1]), np.copy(np_data[2]))
-            current_revision = self._revision
             self._batches.clear()
             self._flat_size = 0
         s_list = []
         e_list = []
         c_list = []
         if self.enabled:
-            if np_data_copies is not None:
-                s_list.append(np_data_copies[0])
-                e_list.append(np_data_copies[1])
-                c_list.append(np_data_copies[2])
+            if np_data is not None:
+                s_list.append(np_data[0])
+                e_list.append(np_data[1])
+                c_list.append(np_data[2])
             for g in gizmos:
                 builder = _GIZMO_LINE_BUILDERS.get(g.gizmo_type)
                 if builder is None:
@@ -1297,7 +1295,8 @@ class GizmosManager:
             return
         with self._lock:
             old_sz = self._flat_size
-            new_sz = old_sz + starts.shape[0]
+            n = starts.shape[0]
+            new_sz = old_sz + n
             if new_sz > self._flat_starts.shape[0]:
                 new_cap = int(new_sz * 1.5 + 4096)
                 self._flat_starts = np.resize(self._flat_starts, (new_cap, 3))
@@ -1305,7 +1304,13 @@ class GizmosManager:
                 self._flat_colors = np.resize(self._flat_colors, (new_cap, 4))
             self._flat_starts[old_sz:new_sz] = starts
             self._flat_ends[old_sz:new_sz] = ends
-            self._flat_colors[old_sz:new_sz] = colors
+            if colors.shape[1] >= 4:
+                self._flat_colors[old_sz:new_sz] = colors[:, :4]
+            elif colors.shape[1] == 3:
+                self._flat_colors[old_sz:new_sz, :3] = colors
+                self._flat_colors[old_sz:new_sz, 3] = 1.0
+            else:
+                self._flat_colors[old_sz:new_sz] = 1.0
             self._flat_size = new_sz
             self._revision += 1
 

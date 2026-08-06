@@ -20,6 +20,8 @@ from core.renderer.gpu_primitives import (
 _STRIP_T = np.array([0.0, 1.0, 1.0, 0.0, 1.0, 0.0], dtype=np.float32)
 _STRIP_S = np.array([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0], dtype=np.float32)
 
+_RL_DIFF_THRESHOLD = 50000
+
 FATLINE_VERT = """
 #version 460 core
 uniform mat4 u_mvp;
@@ -111,6 +113,69 @@ void main() {
 }
 """
 
+RAWLINES_VERT = """
+#version 460 core
+in vec4 i_start;
+in vec4 i_end;
+in vec4 i_color;
+in vec2 a_strip;
+uniform mat4 u_mvp;
+uniform float u_thickness_ndc_x;
+uniform float u_thickness_ndc_y;
+uniform bool u_dash_enabled;
+uniform float u_dash_length;
+uniform float u_gap_length;
+uniform float u_dash_time;
+out vec4 v_color;
+out float v_t;
+out float v_line_len;
+void main() {
+    float a_t = a_strip.x;
+    float a_side = a_strip.y;
+    vec4 clip_start = u_mvp * vec4(i_start.xyz, 1.0);
+    vec4 clip_end   = u_mvp * vec4(i_end.xyz, 1.0);
+    vec4 clipPos = mix(clip_start, clip_end, a_t);
+    vec2 dxy = clip_end.xy - clip_start.xy;
+    float len = length(dxy);
+    vec2 perp;
+    if (len > 1e-6) {
+        vec2 dir = dxy / len;
+        perp = vec2(-dir.y, dir.x);
+    } else {
+        perp = vec2(1.0, 0.0);
+    }
+    clipPos.xy += perp * a_side * vec2(u_thickness_ndc_x, u_thickness_ndc_y) * clipPos.w;
+    gl_Position = clipPos;
+    v_color = i_color;
+    v_t = a_t;
+    v_line_len = length(i_end.xyz - i_start.xyz);
+}
+"""
+
+RAWLINES_FRAG = """
+#version 460 core
+in vec4 v_color;
+in float v_t;
+in float v_line_len;
+uniform bool u_dash_enabled;
+uniform float u_dash_length;
+uniform float u_gap_length;
+uniform float u_dash_time;
+out vec4 fragColor;
+void main() {
+    if (u_dash_enabled) {
+        float total = u_dash_length + u_gap_length;
+        float offset = u_dash_time * 1.2;
+        float pos = v_t * v_line_len + offset;
+        float mod_pos = mod(pos, total);
+        if (mod_pos > u_dash_length) {
+            discard;
+        }
+    }
+    fragColor = v_color;
+}
+"""
+
 class GizmoRenderer:
     def __init__(self, ctx: moderngl.Context, gizmo_prog: moderngl.Program,
                  fatline_prog: moderngl.Program, solid_prog: moderngl.Program):
@@ -147,6 +212,21 @@ class GizmoRenderer:
         self._box_inst_mesh: Optional[GpuMesh] = None
         self._sphere_inst_mesh: Optional[GpuMesh] = None
         self._inst_line_initialized: bool = False
+        self._raw_line_prog: Optional[moderngl.Program] = None
+        self._raw_line_static_vbo: Optional[moderngl.Buffer] = None
+        self._raw_line_start_vbo: Optional[moderngl.Buffer] = None
+        self._raw_line_end_vbo: Optional[moderngl.Buffer] = None
+        self._raw_line_color_vbo: Optional[moderngl.Buffer] = None
+        self._raw_line_vao: Optional[moderngl.VertexArray] = None
+        self._raw_line_capacity: int = 0
+        self._fs_starts: np.ndarray = np.empty((0, 3), dtype=np.float32)
+        self._fs_ends: np.ndarray = np.empty((0, 3), dtype=np.float32)
+        self._fs_colors4: np.ndarray = np.empty((0, 4), dtype=np.float32)
+        self._rl_shadow_scalar: np.ndarray = np.zeros(3, dtype=np.uint32)
+        self._rl_shadow_starts: np.ndarray = np.zeros(0, dtype=np.uint32)
+        self._rl_shadow_ends: np.ndarray = np.zeros(0, dtype=np.uint32)
+        self._rl_shadow_colors: np.ndarray = np.zeros(0, dtype=np.uint32)
+        self._rl_shadow_n: int = 0
         self._build_fatline_buffers()
         self._build_solid_buffers()
         self._stat_lines: int = 0
@@ -515,6 +595,192 @@ void main() {
         self._ctx.disable(moderngl.CULL_FACE)
         self._ctx.disable(moderngl.DEPTH_TEST)
         mesh.vao.render(moderngl.TRIANGLES, vertices=mesh.vertex_count, instances=num_instances)
+        if old_cull:
+            self._ctx.enable(moderngl.CULL_FACE)
+        else:
+            self._ctx.disable(moderngl.CULL_FACE)
+        self._ctx.enable(moderngl.DEPTH_TEST)
+
+    def _ensure_rawline_prog(self):
+        if self._raw_line_prog is not None:
+            return
+        try:
+            self._raw_line_prog = self._ctx.program(
+                vertex_shader=RAWLINES_VERT,
+                fragment_shader=RAWLINES_FRAG
+            )
+        except Exception:
+            self._raw_line_prog = None
+
+    def _build_rawline_buffers(self, capacity: int = 262144):
+        cap = max(capacity, 262144)
+        for buf_name in ('_raw_line_vao', '_raw_line_static_vbo',
+                         '_raw_line_start_vbo', '_raw_line_end_vbo', '_raw_line_color_vbo'):
+            b = getattr(self, buf_name, None)
+            if b is not None:
+                try:
+                    b.release()
+                except Exception:
+                    pass
+        static = np.empty((6, 2), dtype=np.float32)
+        static[:, 0] = _STRIP_T
+        static[:, 1] = _STRIP_S
+        self._raw_line_static_vbo = self._ctx.buffer(static.tobytes())
+        self._raw_line_start_vbo = self._ctx.buffer(reserve=cap * 12, dynamic=True)
+        self._raw_line_end_vbo = self._ctx.buffer(reserve=cap * 12, dynamic=True)
+        self._raw_line_color_vbo = self._ctx.buffer(reserve=cap * 16, dynamic=True)
+        self._raw_line_vao = self._ctx.vertex_array(
+            self._raw_line_prog,
+            [
+                (self._raw_line_static_vbo, "2f", "a_strip"),
+                (self._raw_line_start_vbo, "3f /i", "i_start"),
+                (self._raw_line_end_vbo, "3f /i", "i_end"),
+                (self._raw_line_color_vbo, "4f /i", "i_color"),
+            ]
+        )
+        self._fs_starts = np.empty((cap, 3), dtype=np.float32)
+        self._fs_ends = np.empty((cap, 3), dtype=np.float32)
+        self._fs_colors4 = np.empty((cap, 4), dtype=np.float32)
+        self._rl_shadow_starts = np.zeros(cap, dtype=np.uint32)
+        self._rl_shadow_ends = np.zeros(cap, dtype=np.uint32)
+        self._rl_shadow_colors = np.zeros(cap, dtype=np.uint32)
+        self._rl_shadow_n = 0
+        self._rl_shadow_scalar[:] = 0
+        self._raw_line_capacity = cap
+
+    def _ensure_rawline_capacity(self, n: int):
+        if n <= self._raw_line_capacity:
+            return False
+        new_cap = self._raw_line_capacity or 262144
+        while new_cap < n:
+            new_cap <<= 1
+        self._build_rawline_buffers(new_cap)
+        return True
+
+    def render_raw_lines(self, starts: np.ndarray, ends: np.ndarray, colors: np.ndarray,
+                         vp_mat: Mat4, fw: int, fh: int, desired_pixels: float,
+                         dash_opts: Optional[dict] = None, dirty: bool = True):
+        n = starts.shape[0]
+        if n == 0:
+            return
+        self._ensure_rawline_prog()
+        if self._raw_line_prog is None:
+            self._render_lines_np(starts, ends, colors, vp_mat, fw, fh, desired_pixels, dash_opts)
+            return
+        grew = self._ensure_rawline_capacity(n)
+        if grew:
+            dirty = True
+        self._stat_lines += n
+        self._stat_draws += 1
+        if dirty:
+            if (starts.flags.c_contiguous and ends.flags.c_contiguous and colors.ndim == 2
+                    and colors.shape[1] >= 4 and colors.flags.c_contiguous):
+                s_arr = starts
+                e_arr = ends
+                c_arr = colors[:, :4]
+            else:
+                fs = self._fs_starts[:n]
+                fs[:] = starts
+                self._fs_ends[:n] = ends
+                fc = self._fs_colors4[:n]
+                if colors.shape[1] >= 4:
+                    fc[:] = colors[:, :4]
+                elif colors.shape[1] == 3:
+                    fc[:, :3] = colors
+                    fc[:, 3] = 1.0
+                else:
+                    fc[:] = 0.5
+                s_arr = self._fs_starts[:n]
+                e_arr = self._fs_ends[:n]
+                c_arr = self._fs_colors4[:n]
+            if n >= _RL_DIFF_THRESHOLD:
+                self._rl_upload_diff(s_arr, e_arr, c_arr)
+            else:
+                self._raw_line_start_vbo.write(memoryview(s_arr))
+                self._raw_line_end_vbo.write(memoryview(e_arr))
+                self._raw_line_color_vbo.write(memoryview(c_arr))
+                self._rl_refresh_shadow(s_arr, e_arr, c_arr)
+        self._draw_rawlines(n, vp_mat, fw, fh, desired_pixels, dash_opts)
+
+    def _rl_refresh_shadow(self, s_arr: np.ndarray, e_arr: np.ndarray, c_arr: np.ndarray):
+        n = s_arr.shape[0]
+        vs = s_arr.view(np.uint32)
+        ve = e_arr.view(np.uint32)
+        vc = c_arr.view(np.uint32)
+        self._rl_shadow_starts[:n] = np.bitwise_xor(np.bitwise_xor(vs[:, 0], vs[:, 1]), vs[:, 2])
+        self._rl_shadow_ends[:n] = np.bitwise_xor(np.bitwise_xor(ve[:, 0], ve[:, 1]), ve[:, 2])
+        self._rl_shadow_colors[:n] = np.bitwise_xor(np.bitwise_xor(np.bitwise_xor(vc[:, 0], vc[:, 1]), vc[:, 2]), vc[:, 3])
+        self._rl_shadow_n = n
+        self._rl_shadow_scalar[0] = np.bitwise_xor.reduce(vs.ravel())
+        self._rl_shadow_scalar[1] = np.bitwise_xor.reduce(ve.ravel())
+        self._rl_shadow_scalar[2] = np.bitwise_xor.reduce(vc.ravel())
+
+    def _rl_upload_ranges(self, vbo, data: np.ndarray, mask: np.ndarray, stride: int):
+        idx = np.flatnonzero(mask)
+        if idx.size == 0:
+            return
+        bounds = np.flatnonzero(np.diff(idx) > 1)
+        rs = np.concatenate(([idx[0]], idx[bounds + 1]))
+        re = np.concatenate((idx[bounds] + 1, [idx[-1] + 1]))
+        for r0, r1 in zip(rs.tolist(), re.tolist()):
+            vbo.write(memoryview(data[r0:r1]), offset=r0 * stride)
+
+    def _rl_upload_diff(self, s_arr: np.ndarray, e_arr: np.ndarray, c_arr: np.ndarray) -> bool:
+        n = s_arr.shape[0]
+        vs = s_arr.view(np.uint32)
+        ve = e_arr.view(np.uint32)
+        vc = c_arr.view(np.uint32)
+        scalars = np.empty(3, dtype=np.uint32)
+        scalars[0] = np.bitwise_xor.reduce(vs.ravel())
+        scalars[1] = np.bitwise_xor.reduce(ve.ravel())
+        scalars[2] = np.bitwise_xor.reduce(vc.ravel())
+        if n == self._rl_shadow_n and (scalars == self._rl_shadow_scalar).all():
+            return False
+        grew = n != self._rl_shadow_n
+        for arr, shadow_name, stride, s_idx, vbo in (
+                (vs, '_rl_shadow_starts', 12, 0, self._raw_line_start_vbo),
+                (ve, '_rl_shadow_ends', 12, 1, self._raw_line_end_vbo),
+                (vc, '_rl_shadow_colors', 16, 2, self._raw_line_color_vbo)):
+            shadow = getattr(self, shadow_name)
+            if not (grew or scalars[s_idx] != self._rl_shadow_scalar[s_idx]):
+                continue
+            m = arr.shape[0]
+            cs = np.bitwise_xor(np.bitwise_xor(arr[:, 0], arr[:, 1]), arr[:, 2])
+            if arr.shape[1] > 3:
+                cs = np.bitwise_xor(cs, arr[:, 3])
+            mask = cs != shadow[:m]
+            shadow[:m] = cs
+            self._rl_upload_ranges(vbo, arr.view(np.float32), mask, stride)
+        self._rl_shadow_n = n
+        self._rl_shadow_scalar[:] = scalars
+        return True
+
+    def _draw_rawlines(self, n: int, vp_mat: Mat4, fw: int, fh: int, desired_pixels: float,
+                       dash_opts: Optional[dict]):
+        try:
+            old_cull = bool(self._ctx.cull_face)
+        except Exception:
+            old_cull = True
+        self._ctx.disable(moderngl.CULL_FACE)
+        self._ctx.disable(moderngl.DEPTH_TEST)
+        prog = self._raw_line_prog
+        vp_f32 = vp_mat.to_f32()
+        if "u_mvp" in prog:
+            prog["u_mvp"].write(vp_f32.tobytes())
+        ndc_x = desired_pixels / max(1.0, float(fw))
+        ndc_y = desired_pixels / max(1.0, float(fh))
+        if "u_thickness_ndc_x" in prog:
+            prog["u_thickness_ndc_x"] = float(ndc_x)
+        if "u_thickness_ndc_y" in prog:
+            prog["u_thickness_ndc_y"] = float(ndc_y)
+        if dash_opts and "u_dash_enabled" in prog:
+            prog["u_dash_enabled"] = True
+            prog["u_dash_length"] = float(dash_opts.get('dash_length', 0.3))
+            prog["u_gap_length"] = float(dash_opts.get('gap_length', 0.15))
+            prog["u_dash_time"] = float(dash_opts.get('time', 0.0))
+        elif "u_dash_enabled" in prog:
+            prog["u_dash_enabled"] = False
+        self._raw_line_vao.render(moderngl.TRIANGLES, vertices=6, instances=n)
         if old_cull:
             self._ctx.enable(moderngl.CULL_FACE)
         else:

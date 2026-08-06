@@ -1451,7 +1451,10 @@ class SceneViewport(QOpenGLWidget):
         vp_mat = view * proj
         starts, ends, colors = gm.build_render_arrays()
         if starts is not None:
-            self._renderer.render_gizmo_arrays(starts, ends, colors, vp_mat, fw, fh, thickness_multiplier=1.0)
+            rev = getattr(gm, '_revision', 0)
+            dirty = (rev != getattr(self, '_gizmo_api_last_rev', -1))
+            self._gizmo_api_last_rev = rev
+            self._renderer.render_gizmo_arrays(starts, ends, colors, vp_mat, fw, fh, thickness_multiplier=1.0, dirty=dirty)
         labels = gm.get_label_data()
         if labels:
             self._render_api_labels(labels, vp_mat, fw, fh)
