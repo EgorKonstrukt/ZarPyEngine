@@ -334,6 +334,10 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
             "body_b": bb,
             "entity_a": physics_scene._body_to_entity.get(ba, ""),
             "entity_b": physics_scene._body_to_entity.get(bb, ""),
+            "position": ev.get("position", (0, 0, 0)),
+            "normal": ev.get("normal", (0, 0, 0)),
+            "distance": ev.get("distance", 0.0),
+            "force": ev.get("force", 0.0),
         })
 
     result_queue.put({"type": "step_result", "collision_events": events, "version": result_ver + 1})

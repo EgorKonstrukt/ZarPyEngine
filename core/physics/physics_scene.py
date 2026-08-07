@@ -36,6 +36,7 @@ class PhysicsScene:
         self._body_items_dirty: bool = False
         self._has_collision_scripts: bool = False
         self._collision_scripts_checked: bool = False
+        self._collision_listener_sig: tuple = None
 
 
     @property
@@ -232,6 +233,11 @@ class PhysicsScene:
     def _has_collision_listeners(self) -> bool:
         if not self._scene:
             return False
+        sig = self._listener_signature()
+        if sig != self._collision_listener_sig:
+            self._collision_listener_sig = sig
+            self._collision_scripts_checked = False
+            self._has_collision_scripts = False
         if self._collision_scripts_checked:
             return self._has_collision_scripts
         self._collision_scripts_checked = True
@@ -246,7 +252,17 @@ class PhysicsScene:
                         hasattr(inst, 'on_collision_exit')):
                         self._has_collision_scripts = True
                         return True
+                elif hasattr(comp, 'on_collision_enter'):
+                    self._has_collision_scripts = True
+                    return True
         return False
+
+    def _listener_signature(self) -> tuple:
+        entities = self._scene._entities
+        count = 0
+        for ent in entities.values():
+            count += len(ent._components)
+        return (len(entities), count)
 
     def _process_collision_events(self):
         from core.components import ScriptComponent
@@ -255,11 +271,15 @@ class PhysicsScene:
             return
         raw = self._solver.get_collision_events()
         current: set[frozenset[int]] = set()
+        forces: dict[frozenset[int], float] = {}
         for ev in raw:
             ba, bb = ev["body_a"], ev["body_b"]
             if ba < 0 or bb < 0:
                 continue
-            current.add(frozenset([ba, bb]))
+            pair = frozenset([ba, bb])
+            current.add(pair)
+            force = float(ev.get("force", 0.0) or 0.0)
+            forces[pair] = max(forces.get(pair, 0.0), force)
 
         entered = current - self._prev_frame_contacts
         exited = self._prev_frame_contacts - current
@@ -283,11 +303,39 @@ class PhysicsScene:
                         try: getattr(inst, callback_name)(e0)
                         except Exception as ex: Logger.error(f"Script {callback_name} error: {ex}")
 
+        def _dispatch_components(pairs, callback_name):
+            for pair in pairs:
+                bodies = list(pair)
+                e0 = self._body_to_entity.get(bodies[0], "")
+                e1 = self._body_to_entity.get(bodies[1], "")
+                if not e0 or not e1:
+                    continue
+                force = forces.get(pair, 0.0)
+                self._invoke_component_collision(self._get_entity(e0), e1, callback_name, force)
+                self._invoke_component_collision(self._get_entity(e1), e0, callback_name, force)
+
         _dispatch(entered, 'on_collision_enter')
         _dispatch(exited, 'on_collision_exit')
         _dispatch(stayed, 'on_collision_stay')
 
+        _dispatch_components(entered, 'on_collision_enter')
+        _dispatch_components(exited, 'on_collision_exit')
+        _dispatch_components(stayed, 'on_collision_stay')
+
         self._prev_frame_contacts = current
+
+    def _invoke_component_collision(self, entity, other_eid: str, callback_name: str, force: float):
+        if not entity:
+            return
+        from core.components import ScriptComponent
+        for comp in entity.get_all_components():
+            if isinstance(comp, ScriptComponent):
+                continue
+            if hasattr(comp, callback_name):
+                try:
+                    getattr(comp, callback_name)(other_eid, force)
+                except Exception as ex:
+                    Logger.error(f"Component {callback_name} error: {ex}")
 
     def _check_shape_changes(self):
         for entity_id in list(self._entity_to_body.keys()):

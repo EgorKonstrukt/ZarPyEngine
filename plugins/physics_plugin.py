@@ -642,28 +642,32 @@ class PhysicsPlugin(PluginBase):
             return
         entities = scene._entities
         current: set = set()
+        forces: dict = {}
         for ev in events:
             ea, eb = ev.get("entity_a", ""), ev.get("entity_b", "")
             if ea and eb:
-                current.add(frozenset((ea, eb)))
+                pair = frozenset((ea, eb))
+                current.add(pair)
+                force = float(ev.get("force", 0.0) or 0.0)
+                forces[pair] = max(forces.get(pair, 0.0), force)
         entered = current - self._prev_frame_contacts
         exited = self._prev_frame_contacts - current
         stayed = current & self._prev_frame_contacts
         for pair in entered:
             e0, e1 = tuple(pair)
-            self._dispatch_collision(entities, e0, e1, "on_collision_enter")
-            self._dispatch_collision(entities, e1, e0, "on_collision_enter")
+            self._dispatch_collision(entities, e0, e1, "on_collision_enter", forces.get(pair, 0.0))
+            self._dispatch_collision(entities, e1, e0, "on_collision_enter", forces.get(pair, 0.0))
         for pair in exited:
             e0, e1 = tuple(pair)
-            self._dispatch_collision(entities, e0, e1, "on_collision_exit")
-            self._dispatch_collision(entities, e1, e0, "on_collision_exit")
+            self._dispatch_collision(entities, e0, e1, "on_collision_exit", forces.get(pair, 0.0))
+            self._dispatch_collision(entities, e1, e0, "on_collision_exit", forces.get(pair, 0.0))
         for pair in stayed:
             e0, e1 = tuple(pair)
-            self._dispatch_collision(entities, e0, e1, "on_collision_stay")
-            self._dispatch_collision(entities, e1, e0, "on_collision_stay")
+            self._dispatch_collision(entities, e0, e1, "on_collision_stay", forces.get(pair, 0.0))
+            self._dispatch_collision(entities, e1, e0, "on_collision_stay", forces.get(pair, 0.0))
         self._prev_frame_contacts = current
 
-    def _dispatch_collision(self, entities, eid: str, other_eid: str, callback: str):
+    def _dispatch_collision(self, entities, eid: str, other_eid: str, callback: str, force: float = 0.0):
         entity = entities.get(eid)
         if not entity:
             return
@@ -675,6 +679,14 @@ class PhysicsPlugin(PluginBase):
                     getattr(inst, callback)(other_eid)
                 except Exception as e:
                     Logger.error(f"Script {callback} error: {e}")
+        for comp in entity.get_all_components():
+            if isinstance(comp, ScriptComponent):
+                continue
+            if hasattr(comp, callback):
+                try:
+                    getattr(comp, callback)(other_eid, force)
+                except Exception as e:
+                    Logger.error(f"Component {callback} error: {e}")
 
     def shutdown(self):
         if self._simulation_mode == "per_layer_process":

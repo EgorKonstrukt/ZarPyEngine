@@ -7,9 +7,11 @@
 from __future__ import annotations
 import math
 import os
+import shutil
 import subprocess
 import io
 import wave
+import tempfile
 from typing import Optional, Dict, Any, Tuple
 from core.ecs.pool import audio as _get_audio_pool
 
@@ -133,16 +135,66 @@ class AudioClip:
         self._buffer = source.buffer
 
     def _load_mp3(self, path: str):
+        if self._decode_mp3_ffmpeg(path):
+            return
         try:
             from pydub import AudioSegment
         except ImportError:
-            raise RuntimeError("pydub is required for MP3 support")
+            raise RuntimeError("MP3 support requires ffmpeg (or install pydub)")
         segment = AudioSegment.from_mp3(path)
         raw_data = segment.raw_data
         self._sample_rate = segment.frame_rate
         self._channels = segment.channels
         self._format = self._detect_format(segment.channels, segment.sample_width)
         self._data = memoryview(bytearray(raw_data))
+
+    @staticmethod
+    def _find_ffmpeg() -> Optional[str]:
+        exe = shutil.which("ffmpeg")
+        if exe:
+            return exe
+        candidates = [
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
+        ]
+        for c in candidates:
+            if c and os.path.exists(c):
+                return c
+        return None
+
+    def _decode_mp3_ffmpeg(self, path: str) -> bool:
+        ffmpeg = self._find_ffmpeg()
+        if not ffmpeg:
+            return False
+        fd, tmp = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-v", "error", "-y", "-i", path, tmp],
+                capture_output=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                return False
+            with wave.open(tmp, "rb") as wf:
+                num_channels = wf.getnchannels()
+                sample_width = wf.getsampwidth()
+                sample_rate = wf.getframerate()
+                frames = wf.getnframes()
+                raw_data = wf.readframes(frames)
+            self._sample_rate = sample_rate
+            self._channels = num_channels
+            self._format = self._detect_format(num_channels, sample_width)
+            self._data = memoryview(bytearray(raw_data))
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def _resample(self, quality: int):
         if quality >= 100 or self._data is None:
@@ -481,6 +533,25 @@ class AudioSourceManager:
         dz = position[2] - self._listener_pos[2]
         return math.sqrt(dx * dx + dy * dy + dz * dz)
 
+    @staticmethod
+    def _clear_al_errors():
+        if not al:
+            return
+        try:
+            while al.alGetError() != al.AL_NO_ERROR:
+                pass
+        except Exception:
+            pass
+
+    @staticmethod
+    def _delete_al_source(src_val: int):
+        if not al or not src_val:
+            return
+        try:
+            al.alDeleteSources(1, al.ctypes.pointer(al.ctypes.c_uint(src_val)))
+        except Exception:
+            pass
+
     def play(self, clip_path: str, loop: bool = False, volume: float = 1.0, pitch: float = 1.0,
              spatial_blend: float = 1.0, min_distance: float = 1.0, max_distance: float = 50.0,
              volume_rolloff: list[list[float]] = None, offset: float = 0.0,
@@ -490,25 +561,33 @@ class AudioSourceManager:
         if not audio_sys: return None
         clip = audio_sys.load_clip(clip_path)
         if not clip or not clip.buffer: return None
-        source_id = al.ctypes.c_uint()
-        al.alGenSources(1, al.ctypes.pointer(source_id))
-        src_val = source_id.value
-        al.alSourcei(src_val, al.AL_BUFFER, clip.buffer._geti())
-        al.alSourcef(src_val, al.AL_PITCH, pitch)
-        al.alSourcef(src_val, al.AL_GAIN, volume)
-        al.alSourcei(src_val, al.AL_LOOPING, 1 if loop else 0)
+        src_val = 0
         try:
-            al.alSourcei(src_val, 0x1214, 0x0001)
+            self._clear_al_errors()
+            source_id = al.ctypes.c_uint()
+            al.alGenSources(1, al.ctypes.pointer(source_id))
+            src_val = source_id.value
+            al.alSourcei(src_val, al.AL_BUFFER, clip.buffer._geti())
+            al.alSourcef(src_val, al.AL_PITCH, pitch)
+            al.alSourcef(src_val, al.AL_GAIN, volume)
+            al.alSourcei(src_val, al.AL_LOOPING, 1 if loop else 0)
+            try:
+                al.alSourcei(src_val, 0x1214, 0x0001)
+            except Exception:
+                pass
+            al.alSource3f(src_val, al.AL_POSITION, 0.0, 0.0, 0.0)
+            al.alSource3f(src_val, al.AL_VELOCITY, *velocity)
+            al.alSourcef(src_val, al.AL_REFERENCE_DISTANCE, min_distance)
+            al.alSourcef(src_val, al.AL_MAX_DISTANCE, max_distance)
+            al.alSourcef(src_val, al.AL_ROLLOFF_FACTOR, 0.0)
+            al.alSourcei(src_val, al.AL_SOURCE_RELATIVE, 0 if spatial_blend > 0 else 1)
+            if offset > 0.0:
+                al.alSourcef(src_val, 0x1024, offset)
+            al.alSourcePlay(src_val)
         except Exception:
-            pass
-        al.alSource3f(src_val, al.AL_POSITION, 0.0, 0.0, 0.0)
-        al.alSource3f(src_val, al.AL_VELOCITY, *velocity)
-        al.alSourcef(src_val, al.AL_REFERENCE_DISTANCE, min_distance)
-        al.alSourcef(src_val, al.AL_MAX_DISTANCE, max_distance)
-        al.alSourcef(src_val, al.AL_ROLLOFF_FACTOR, 0.0)
-        al.alSourcei(src_val, al.AL_SOURCE_RELATIVE, 0 if spatial_blend > 0 else 1)
-        if offset > 0.0:
-            al.alSourcef(src_val, 0x1024, offset)
+            self._delete_al_source(src_val)
+            self._clear_al_errors()
+            return None
         self._active_sources[src_val] = src_val
         self._source_info[src_val] = {
             "min_distance": min_distance,
@@ -520,7 +599,6 @@ class AudioSourceManager:
         }
         self._source_positions[src_val] = (0.0, 0.0, 0.0)
         self._source_aux_slot[src_val] = 0
-        al.alSourcePlay(src_val)
         return src_val
 
     def update_source(self, source: int, volume: float, pitch: float, position: tuple[float, float, float],
