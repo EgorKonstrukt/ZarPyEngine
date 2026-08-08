@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPainter, QPen, QColor
 
-from editor.viewport.overlay import draw_stats_overlay, draw_delta_label
+from editor.viewport.overlay import draw_stats_overlay, draw_delta_label, draw_audio_viz_header, draw_audio_freq_labels, draw_audio_db_labels
 from editor.viewport.navigation_gizmo import draw_navigation_gizmo_overlay
 from editor.viewport.collaboration import draw_remote_cursors
 
@@ -35,6 +35,9 @@ class OverlayWidget(QWidget):
         qp.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         if vp._stats_enabled:
             draw_stats_overlay(vp, qp)
+        draw_audio_viz_header(vp, qp)
+        draw_audio_freq_labels(vp, qp)
+        draw_audio_db_labels(vp, qp)
         draw_delta_label(vp, qp)
         draw_navigation_gizmo_overlay(vp, qp)
         draw_remote_cursors(vp, qp)

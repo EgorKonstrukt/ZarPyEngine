@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import qtawesome as qta
 from core.config.editor_scale import scale, scale_xy
-from PyQt6.QtWidgets import QCheckBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSpinBox, QVBoxLayout, QWidget, QWidgetAction
+from PyQt6.QtWidgets import QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSpinBox, QVBoxLayout, QWidget, QWidgetAction
 from PyQt6.QtGui import QPalette
 
 from core.math.math3d import Vec3
@@ -52,6 +52,17 @@ def setup_toolbar(vp):
     vp._stats_btn.setMinimumWidth(50)
     vp._stats_btn.clicked.connect(vp._toggle_stats)
     cam_row.addWidget(vp._stats_btn)
+
+    vp._audio_btn = QPushButton(qta.icon("fa5s.music", color="#d4d4d4"), " Audio")
+    vp._audio_btn.setCheckable(True)
+    vp._audio_btn.setMinimumWidth(50)
+    vp._audio_btn.clicked.connect(vp._toggle_audio_viz)
+    cam_row.addWidget(vp._audio_btn)
+
+    vp._audio_viz_btn = QPushButton(qta.icon("fa5s.sliders-h", color="#d4d4d4"), " Viz")
+    vp._audio_viz_btn.setMenu(create_audio_viz_menu(vp))
+    vp._audio_viz_btn.setMinimumWidth(40)
+    cam_row.addWidget(vp._audio_viz_btn)
 
     vp._bvh_btn = QPushButton(qta.icon("fa5s.sitemap", color="#d4d4d4"), " BVH")
     vp._bvh_btn.setCheckable(True)
@@ -110,7 +121,6 @@ def setup_toolbar(vp):
 
 def create_camera_menu(vp):
     menu = QMenu(vp._toolbar)
-
     fov_label_w = QWidget()
     fov_label_layout = QHBoxLayout(fov_label_w)
     fov_label_layout.setContentsMargins(4, 1, 4, 1)
@@ -254,5 +264,79 @@ def create_camera_menu(vp):
     res_spin_action = QWidgetAction(menu)
     res_spin_action.setDefaultWidget(res_widget)
     menu.addAction(res_spin_action)
+
+    return menu
+
+
+def _viz_row(menu, label: str):
+    label_w = QWidget()
+    label_layout = QHBoxLayout(label_w)
+    label_layout.setContentsMargins(4, 1, 4, 1)
+    label_layout.addWidget(QLabel(label))
+    label_layout.addStretch()
+    label_action = QWidgetAction(menu)
+    label_action.setDefaultWidget(label_w)
+    menu.addAction(label_action)
+
+
+def create_audio_viz_menu(vp):
+    opts = getattr(vp, "_audio_viz_opts", {}) or {}
+    menu = QMenu(vp._toolbar)
+
+    _viz_row(menu, "Sensitivity")
+
+    vp._scope_gain_spin = QDoubleSpinBox()
+    vp._scope_gain_spin.setRange(0.2, 8.0)
+    vp._scope_gain_spin.setValue(float(opts.get("scope_gain", 0.82)))
+    vp._scope_gain_spin.setSingleStep(0.1)
+    vp._scope_gain_spin.setDecimals(2)
+    vp._scope_gain_spin.setMinimumWidth(60)
+    scope_widget = QWidget()
+    scope_layout = QHBoxLayout(scope_widget)
+    scope_layout.setContentsMargins(4, 1, 4, 1)
+    scope_layout.addWidget(QLabel("Scope"))
+    scope_layout.addStretch()
+    scope_layout.addWidget(vp._scope_gain_spin)
+    vp._scope_gain_spin.valueChanged.connect(
+        lambda v: vp._set_audio_viz_opt("scope_gain", float(v)))
+    scope_spin_action = QWidgetAction(menu)
+    scope_spin_action.setDefaultWidget(scope_widget)
+    menu.addAction(scope_spin_action)
+
+    vp._wave_gain_spin = QDoubleSpinBox()
+    vp._wave_gain_spin.setRange(0.5, 20.0)
+    vp._wave_gain_spin.setValue(float(opts.get("wave_gain", 1.0) or 1.0))
+    vp._wave_gain_spin.setSingleStep(0.5)
+    vp._wave_gain_spin.setDecimals(2)
+    vp._wave_gain_spin.setMinimumWidth(60)
+    wave_widget = QWidget()
+    wave_layout = QHBoxLayout(wave_widget)
+    wave_layout.setContentsMargins(4, 1, 4, 1)
+    wave_layout.addWidget(QLabel("Wave"))
+    wave_layout.addStretch()
+    wave_layout.addWidget(vp._wave_gain_spin)
+    vp._wave_gain_spin.valueChanged.connect(
+        lambda v: vp._set_audio_viz_opt("wave_gain", float(v)))
+    wave_spin_action = QWidgetAction(menu)
+    wave_spin_action.setDefaultWidget(wave_widget)
+    menu.addAction(wave_spin_action)
+
+    vp._hold_decay_spin = QDoubleSpinBox()
+    vp._hold_decay_spin.setRange(0.05, 8.0)
+    vp._hold_decay_spin.setValue(float(opts.get("hold_decay", 0.8)))
+    vp._hold_decay_spin.setSingleStep(0.1)
+    vp._hold_decay_spin.setDecimals(2)
+    vp._hold_decay_spin.setMinimumWidth(60)
+    decay_widget = QWidget()
+    decay_layout = QHBoxLayout(decay_widget)
+    decay_layout.setContentsMargins(4, 1, 4, 1)
+    decay_layout.addWidget(QLabel("Hold Decay"))
+    decay_layout.addStretch()
+    decay_layout.addWidget(vp._hold_decay_spin)
+    vp._hold_decay_spin.valueChanged.connect(
+        lambda v: vp._set_audio_viz_opt("hold_decay", float(v)))
+    decay_spin_action = QWidgetAction(menu)
+    decay_spin_action.setDefaultWidget(decay_widget)
+    menu.addAction(decay_spin_action)
 
     return menu

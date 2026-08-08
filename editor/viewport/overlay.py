@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
@@ -60,6 +62,162 @@ def draw_stats_overlay(vp, painter):
     rows = build_stats_rows(m, st, timings)
     draw_stats_panel(painter, rows, vp._frame_times_ms, _SPIKE_LOG)
     painter.restore()
+
+
+def draw_audio_viz_header(vp, painter):
+    if not getattr(vp, '_audio_viz_enabled', False):
+        return
+    an = getattr(vp, '_audio_analyzer', None)
+    av = getattr(vp, '_audio_viz', None)
+    if an is None or av is None:
+        return
+    try:
+        fw, fh = vp._get_physical_dims()
+        dpr = vp.devicePixelRatio() or 1.0
+        x, y, w, h = av.panel_rect(fw, fh)
+        lx, ly = x / dpr, y / dpr
+        lw = w / dpr
+        painter.save()
+        font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        bar_w = 90
+        pad = 6
+        head_h = fm.height() + 8
+        rect = QRect(int(lx) + 4, int(ly) + 4, int(lw) - 8, head_h)
+        painter.setPen(QPen(QColor(0, 0, 0, 60), 1))
+        painter.setBrush(QColor(12, 14, 16, 150))
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.setPen(QColor(200, 220, 235, 255))
+        painter.drawText(rect.left() + pad, rect.center().y() + fm.ascent() * 0.35, "Audio Viz")
+        info = f"{an.sample_rate // 1000}kHz"
+        try:
+            lvl_db = getattr(an, "level_db", None)
+            db_txt = f"{lvl_db:+.1f}dB" if lvl_db is not None else ""
+            rms_db = getattr(an, "rms_db", None)
+            rms_txt = f"{rms_db:+.1f}" if rms_db is not None else ""
+            pf = float(getattr(an, "peak_freq", 0.0) or 0.0)
+            pf_txt = f"{pf / 1000.0:.1f}k" if pf >= 1000 else f"{pf:.0f}Hz"
+            info += f" | src:{an.active} pk:{db_txt} rms:{rms_txt}dB f:{pf_txt}"
+        except Exception:
+            pass
+        inf_w = fm.horizontalAdvance(info) + 8
+        bar_x = rect.right() - bar_w - inf_w
+        bar_y = rect.center().y() - 3
+        lvl = max(0.0, min(1.0, float(getattr(an, 'level', 0.0) or 0.0)))
+        painter.fillRect(QRect(bar_x, bar_y, bar_w, 6), QColor(40, 40, 40, 220))
+        if lvl > 0.001:
+            bw = int(bar_w * lvl)
+            if lvl > 0.9:
+                lcol = QColor(255, 60, 50, 255)
+            elif lvl > 0.7:
+                lcol = QColor(255, 200, 40, 255)
+            else:
+                lcol = QColor(40, 220, 120, 255)
+            painter.fillRect(QRect(bar_x, bar_y, bw, 6), lcol)
+        painter.setPen(QColor(170, 180, 190, 255))
+        painter.drawText(QRect(bar_x + bar_w + 4, bar_y - 2, inf_w, 12),
+                         Qt.AlignmentFlag.AlignVCenter, info)
+        painter.restore()
+    except Exception:
+        pass
+
+
+def draw_audio_freq_labels(vp, painter):
+    if not getattr(vp, "_audio_viz_enabled", False):
+        return
+    an = getattr(vp, "_audio_analyzer", None)
+    av = getattr(vp, "_audio_viz", None)
+    if an is None or av is None:
+        return
+    try:
+        fw, fh = vp._get_physical_dims()
+        dpr = vp.devicePixelRatio() or 1.0
+        x, y, w, h = av.panel_rect(fw, fh)
+        lx, ly = x / dpr, y / dpr
+        lw = w / dpr
+        lh = h / dpr
+        sr = getattr(an, "sample_rate", 0) or 48000
+        nyquist = sr * 0.5
+        if nyquist <= 20.0:
+            return
+        lmin = math.log10(20.0)
+        lmax = math.log10(nyquist)
+        spec_bottom = ly + lh * 0.52
+        painter.save()
+        font = QFont("Consolas", 7)
+        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        ticks = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
+        for f in ticks:
+            if f < 20.0 or f > nyquist:
+                continue
+            t = (math.log10(f) - lmin) / (lmax - lmin)
+            px = lx + t * lw
+            if f >= 1000:
+                label = f"{f // 1000}k"
+            else:
+                label = str(int(f))
+            tw = fm.horizontalAdvance(label)
+            rect = QRect(int(px - tw / 2 - 2), int(spec_bottom + 2), int(tw) + 4, fm.height())
+            painter.setPen(QColor(160, 180, 200, 220))
+            painter.drawLine(int(px), int(spec_bottom - 4), int(px), int(spec_bottom + 1))
+            painter.fillRect(rect, QColor(0, 0, 0, 110))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+        painter.restore()
+    except Exception:
+        pass
+
+
+def draw_audio_db_labels(vp, painter):
+    if not getattr(vp, "_audio_viz_enabled", False):
+        return
+    an = getattr(vp, "_audio_analyzer", None)
+    av = getattr(vp, "_audio_viz", None)
+    if an is None or av is None:
+        return
+    try:
+        fw, fh = vp._get_physical_dims()
+        dpr = vp.devicePixelRatio() or 1.0
+        x, y, w, h = av.panel_rect(fw, fh)
+        lx, ly = x / dpr, y / dpr
+        lw = w / dpr
+        lh = h / dpr
+        top_db = float(getattr(an, "spec_top_db", 0.0) or 0.0)
+        floor_db = float(getattr(an, "spec_floor_db", -60.0) or -60.0)
+        if floor_db >= top_db:
+            return
+        span = max(top_db - floor_db, 1e-3)
+        spec_bottom = ly + lh * 0.52
+        painter.save()
+        font = QFont("Consolas", 7)
+        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        db0 = int(math.floor(floor_db / 10.0) * 10.0)
+        for db in range(db0, int(math.ceil(top_db)) + 1, 10):
+            if db < floor_db - 0.01:
+                continue
+            v = (db - floor_db) / span
+            py = spec_bottom - 2.0 - v * (spec_bottom - ly - 4.0)
+            if py < ly + 1.0 or py > spec_bottom - 1.0:
+                continue
+            label = str(int(db))
+            tw = fm.horizontalAdvance(label)
+            txt_x = lx + 3.0
+            txt_y = py - fm.height() * 0.5
+            painter.setPen(QColor(120, 150, 170, 90))
+            painter.drawLine(int(lx + 30), int(py), int(lx + lw - 2), int(py))
+            painter.fillRect(QRect(int(txt_x), int(txt_y), int(tw) + 4, fm.height()),
+                             QColor(0, 0, 0, 110))
+            painter.setPen(QColor(150, 175, 195, 210))
+            painter.drawText(QRect(int(txt_x + 2), int(txt_y), int(tw), fm.height()),
+                             Qt.AlignmentFlag.AlignVCenter, label)
+        painter.restore()
+    except Exception:
+        pass
 
 
 def draw_delta_label(vp, painter):

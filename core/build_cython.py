@@ -36,6 +36,7 @@ EXTENSIONS = [
     _ext("core._physics_sync", "_physics_sync.pyx"),
     _ext("core._mesh_import", "_mesh_import.pyx"),
     _ext("core._skinning", "_skinning.pyx"),
+    _ext("core._audio_dsp_cy", "_audio_dsp.pyx"),
 ]
 
 def build():

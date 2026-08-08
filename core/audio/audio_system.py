@@ -12,6 +12,7 @@ import subprocess
 import io
 import wave
 import tempfile
+import numpy as np
 from typing import Optional, Dict, Any, Tuple
 from core.ecs.pool import audio as _get_audio_pool
 
@@ -72,6 +73,10 @@ class AudioClip:
         self._format: int = 0
         self._buffer: Optional[al.Buffer] = None
         self._source: Optional[Any] = None
+        self._path: str = ""
+        self._vis_pcm: Any = None
+        self._vis_stereo: Any = None
+        self._vis_rate: int = 0
 
     @property
     def sample_rate(self) -> int: return self._sample_rate
@@ -81,6 +86,78 @@ class AudioClip:
     def data(self): return self._data
     @property
     def buffer(self): return self._buffer
+
+    def ensure_pcm(self):
+        if self._vis_pcm is not None:
+            return self._vis_pcm
+        if self._data is not None:
+            raw = np.frombuffer(self._data, dtype=np.int16)
+            pcm = raw.astype(np.float32) / 32768.0
+            if self._channels == 2:
+                if pcm.size % 2:
+                    pcm = pcm[:pcm.size - pcm.size % 2]
+                pcm = pcm.reshape(-1, 2).mean(axis=1)
+            self._vis_pcm = np.ascontiguousarray(pcm, dtype=np.float32)
+            self._vis_rate = self._sample_rate
+            return self._vis_pcm
+        if self._path and self._source is not None:
+            ext = os.path.splitext(self._path)[1].lower()
+            if ext in (".ogg", ".vorbis"):
+                try:
+                    from pyogg import VorbisFile
+                    vf = VorbisFile(self._path)
+                    raw = np.frombuffer(vf.buffer, dtype=np.int16)
+                    pcm = raw.astype(np.float32) / 32768.0
+                    if vf.channels == 2:
+                        if pcm.size % 2:
+                            pcm = pcm[:pcm.size - pcm.size % 2]
+                        pcm = pcm.reshape(-1, 2).mean(axis=1)
+                    self._sample_rate = vf.frequency
+                    self._channels = vf.channels
+                    self._vis_pcm = np.ascontiguousarray(pcm, dtype=np.float32)
+                    self._vis_rate = vf.frequency
+                    return self._vis_pcm
+                except Exception:
+                    return None
+        return None
+
+    def ensure_stereo_pcm(self):
+        if self._vis_stereo is not None:
+            return self._vis_stereo
+        if self._data is not None:
+            raw = np.frombuffer(self._data, dtype=np.int16)
+            pcm = raw.astype(np.float32) / 32768.0
+            if self._channels == 2:
+                if pcm.size % 2:
+                    pcm = pcm[:pcm.size - pcm.size % 2]
+                pcm = pcm.reshape(-1, 2)
+            else:
+                pcm = np.column_stack([pcm, pcm])
+            self._vis_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
+            self._vis_rate = self._sample_rate
+            return self._vis_stereo
+        if self._path and self._source is not None:
+            ext = os.path.splitext(self._path)[1].lower()
+            if ext in (".ogg", ".vorbis"):
+                try:
+                    from pyogg import VorbisFile
+                    vf = VorbisFile(self._path)
+                    raw = np.frombuffer(vf.buffer, dtype=np.int16)
+                    pcm = raw.astype(np.float32) / 32768.0
+                    if vf.channels == 2:
+                        if pcm.size % 2:
+                            pcm = pcm[:pcm.size - pcm.size % 2]
+                        pcm = pcm.reshape(-1, 2)
+                    else:
+                        pcm = np.column_stack([pcm, pcm])
+                    self._sample_rate = vf.frequency
+                    self._channels = vf.channels
+                    self._vis_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
+                    self._vis_rate = vf.frequency
+                    return self._vis_stereo
+                except Exception:
+                    return None
+        return None
 
     def _detect_format(self, num_channels: int, sample_width: int) -> int:
         if num_channels == 1:
@@ -92,6 +169,7 @@ class AudioClip:
     def load_from_file(self, path: str):
         import json
         quality = None
+        self._path = path
         import_path = path + ".import"
         if os.path.exists(import_path):
             try:
@@ -301,6 +379,9 @@ class AudioSystem:
                     pass
             mgr._active_sources.clear()
             mgr._source_info.clear()
+            mgr._source_positions.clear()
+            mgr._source_clips.clear()
+            mgr._source_gains.clear()
         for _, clip in list(self._clips.values()):
             if clip.buffer:
                 try:
@@ -522,6 +603,8 @@ class AudioSourceManager:
         self._source_info: dict[int, dict] = {}
         self._source_positions: dict[int, tuple[float, float, float]] = {}
         self._source_aux_slot: dict[int, int] = {}
+        self._source_clips: dict[int, AudioClip] = {}
+        self._source_gains: dict[int, float] = {}
         self._listener_pos: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @classmethod
@@ -589,6 +672,8 @@ class AudioSourceManager:
             self._clear_al_errors()
             return None
         self._active_sources[src_val] = src_val
+        self._source_clips[src_val] = clip
+        self._source_gains[src_val] = volume
         self._source_info[src_val] = {
             "min_distance": min_distance,
             "max_distance": max_distance,
@@ -596,6 +681,7 @@ class AudioSourceManager:
             "volume_rolloff": volume_rolloff or [[0, 1], [1, 0]],
             "offset": offset,
             "velocity": velocity,
+            "looping": loop,
         }
         self._source_positions[src_val] = (0.0, 0.0, 0.0)
         self._source_aux_slot[src_val] = 0
@@ -721,6 +807,8 @@ class AudioSourceManager:
         self._source_info.pop(source, None)
         self._source_positions.pop(source, None)
         self._source_aux_slot.pop(source, None)
+        self._source_clips.pop(source, None)
+        self._source_gains.pop(source, None)
 
     def stop_all(self):
         if not al.oalGetInit(): return
@@ -737,3 +825,5 @@ class AudioSourceManager:
         self._source_info.clear()
         self._source_positions.clear()
         self._source_aux_slot.clear()
+        self._source_clips.clear()
+        self._source_gains.clear()

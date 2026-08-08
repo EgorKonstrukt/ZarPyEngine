@@ -197,6 +197,14 @@ class SceneViewport(QOpenGLWidget):
         self._target_fps: int = 60
         self._init_format()
         self._stats_enabled: bool = True
+        self._audio_viz_enabled: bool = False
+        self._audio_analyzer = None
+        self._audio_viz = None
+        self._audio_viz_opts = {
+            "scope_gain": 0.82,
+            "wave_gain": None,
+            "hold_decay": 0.8,
+        }
         self._fps_history: list[float] = []
         self._debug_lines: list[tuple[Vec3, Vec3, list[float]]] = []
         self._show_bvh_debug: bool = False
@@ -304,6 +312,49 @@ class SceneViewport(QOpenGLWidget):
         self._stats_enabled = checked
         if checked:
             self._fps_history.clear()
+        self.update()
+
+    def _toggle_audio_viz(self, checked: bool):
+        self._audio_viz_enabled = checked
+        if checked:
+            an = self._audio_analyzer
+            if an is None:
+                from core.audio.audio_analyzer import get_analyzer
+                an = get_analyzer()
+                self._audio_analyzer = an
+            an.reset()
+        self.update()
+
+    def _render_audio_osd(self, now):
+        if not getattr(self, '_audio_viz_enabled', False):
+            return
+        an = self._audio_analyzer
+        if an is None:
+            from core.audio.audio_analyzer import get_analyzer
+            an = get_analyzer()
+            self._audio_analyzer = an
+        av = getattr(self, '_audio_viz', None)
+        if av is None or not av.ready():
+            return
+        try:
+            an.update()
+            opts = getattr(self, "_audio_viz_opts", None) or {}
+            if opts.get("hold_decay") is not None:
+                try:
+                    an.hold_decay = float(opts["hold_decay"])
+                except Exception:
+                    pass
+            fw, fh = self._get_physical_dims()
+            av.set_options(**self._audio_viz_opts)
+            av.render(an, fw, fh, self._screen_fbo, now=now)
+        except Exception:
+            traceback.print_exc()
+
+    def _set_audio_viz_opt(self, key: str, value):
+        opts = getattr(self, "_audio_viz_opts", None)
+        if opts is None:
+            return
+        opts[key] = value
         self.update()
 
     def _toggle_bvh_debug(self, checked: bool):
@@ -564,6 +615,12 @@ class SceneViewport(QOpenGLWidget):
             self._renderer = Renderer(self._ctx)
             self._renderer.initialize()
             self._renderer.request_render(lambda: self.update())
+            try:
+                from editor.viewport.audio_viz_gl import AudioVizGL
+                self._audio_viz = AudioVizGL(self._ctx)
+            except Exception as e:
+                self._audio_viz = None
+                print(f"[Zarin Engine] AudioViz init error: {e}", flush=True)
             self._pb_scale_gizmo = PbScaleGizmo(self)
             self._engine.on("scene_loaded", self._on_scene_loaded)
             self._engine.on("play_stop", self._on_play_stop)
@@ -762,6 +819,8 @@ class SceneViewport(QOpenGLWidget):
                     if now_overlay - self._last_overlay_update >= 0.1:
                         self._last_overlay_update = now_overlay
                         self._overlay_widget.update()
+            if self._audio_viz_enabled:
+                self._render_audio_osd(now)
             eng.set_profiler_data("paint_total_ms", (time.perf_counter() - _p0) * 1000.0)
         except Exception as e:
             traceback.print_exc()
