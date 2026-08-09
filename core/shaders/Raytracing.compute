@@ -52,6 +52,8 @@ ComputeShader "Zarin/Raytracing"
     uniform int u_light_count;
     uniform int u_max_bounces;
     uniform int u_accum_frame;
+    uniform int u_frame;
+    uniform int u_accumulate;
     uniform int u_samples_per_pixel;
     uniform sampler2D u_sky_env;
     uniform sampler2DArray u_albedo_array;
@@ -277,21 +279,23 @@ ComputeShader "Zarin/Raytracing"
     vec3 g_emissive = vec3(0.0);
 
     float _hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
     }
 
-    vec3 _scatter_dir(vec3 refl_dir, vec3 N, float roughness, vec2 pix, float bounce_idx) {
+    vec3 _scatter_dir(vec3 refl_dir, vec3 N, float roughness, vec2 pix, float bounce_idx, float fi) {
         if (roughness < 0.01) return refl_dir;
         float ang = roughness * 1.5707963;
-        float h1 = _hash(pix + vec2(bounce_idx * 17.3, bounce_idx * 31.7));
-        float h2 = _hash(pix + vec2(bounce_idx * 53.1, bounce_idx * 7.9));
-        float theta = ang * (h1 - 0.5);
+        float h1 = _hash(pix + vec2(bounce_idx * 17.3 + fi * 127.1, bounce_idx * 31.7 + fi * 231.7));
+        float h2 = _hash(pix + vec2(bounce_idx * 53.1 + fi * 41.1, bounce_idx * 7.9 + fi * 17.9));
+        float theta = ang * h1;
         float phi = 6.2831853 * h2;
-        vec3 up = abs(N.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-        vec3 tangent = normalize(cross(up, N));
-        vec3 bitangent = cross(N, tangent);
+        vec3 up = abs(refl_dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 tangent = normalize(cross(up, refl_dir));
+        vec3 bitangent = cross(refl_dir, tangent);
         vec3 local = vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
-        return normalize(tangent * local.x + N * local.y + bitangent * local.z);
+        return normalize(tangent * local.x + refl_dir * local.y + bitangent * local.z);
     }
 
     vec3 sample_albedo_tex(vec2 uv, int tex_layer) {
@@ -300,7 +304,7 @@ ComputeShader "Zarin/Raytracing"
         return texture(u_albedo_array, vec3(fract(uv), layer)).rgb;
     }
 
-    vec3 trace_ray(vec3 ro, vec3 rd, ivec2 pix) {
+    vec3 trace_ray(vec3 ro, vec3 rd, ivec2 pix, float fi) {
         vec3 accumulated = vec3(0.0);
         vec3 throughput = vec3(1.0);
         g_emissive = vec3(0.0);
@@ -352,7 +356,7 @@ ComputeShader "Zarin/Raytracing"
             accumulated += throughput * diff_w * albedo * sample_sky(hit_N) * occlusion;
 
             vec3 reflect_dir = reflect(rd, hit_N);
-            reflect_dir = _scatter_dir(reflect_dir, hit_N, roughness, pix, float(bounce));
+            reflect_dir = _scatter_dir(reflect_dir, hit_N, roughness, pix, float(bounce), fi);
             ro = hit_pos + hit_N * 0.001;
             rd = normalize(reflect_dir);
 
@@ -375,7 +379,7 @@ ComputeShader "Zarin/Raytracing"
         float inv_spp = 1.0 / float(spp);
 
         for (int s = 0; s < spp; s++) {
-            float fi = float(u_accum_frame * spp + s);
+            float fi = float(u_frame * spp + s);
             vec2 jitter = vec2(
                 _hash(pix + vec2(fi * 13.7, fi * 29.3)) - 0.5,
                 _hash(pix + vec2(fi * 41.1, fi * 7.9)) - 0.5
@@ -386,11 +390,11 @@ ComputeShader "Zarin/Raytracing"
             vec4 world_near = u_inv_view_proj * ndc;
             vec3 ray_d = normalize(world_near.xyz / world_near.w - ray_o);
 
-            color += trace_ray(ray_o, ray_d, pix) * inv_spp;
+            color += trace_ray(ray_o, ray_d, pix, fi) * inv_spp;
             em_total += g_emissive * inv_spp;
         }
 
-        if (u_accum_frame <= 1) {
+        if (u_accumulate == 0 || u_accum_frame <= 1) {
             imageStore(output_image, pix, vec4(color, 1.0));
             imageStore(emissive_image, pix, vec4(em_total, 1.0));
         } else {

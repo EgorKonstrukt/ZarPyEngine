@@ -95,6 +95,7 @@ class RaytracingRenderer(Component):
         self._fixed_light: Optional[np.ndarray] = None
 
         self._accum_frame: int = 1
+        self._frame: int = 0
         self._prev_view_proj: Optional[np.ndarray] = None
         self._prev_width: int = 0
         self._prev_height: int = 0
@@ -105,7 +106,6 @@ class RaytracingRenderer(Component):
         d.update({
             "compute_shader_path": self._compute_shader_path,
             "resolution_scale": self._resolution_scale,
-            "max_bounces": self._max_bounces,
             "samples_per_pixel": self._samples_per_pixel,
             "accumulate": self._accumulate,
             "show_overlay": self._show_overlay,
@@ -118,7 +118,6 @@ class RaytracingRenderer(Component):
         r.enabled = data.get("enabled", True)
         r._compute_shader_path = data.get("compute_shader_path", "core/shaders/Raytracing.compute")
         r._resolution_scale = float(data.get("resolution_scale", 0.5))
-        r._max_bounces = int(data.get("max_bounces", 1))
         r._samples_per_pixel = int(data.get("samples_per_pixel", 1))
         r._accumulate = data.get("accumulate", False)
         r._show_overlay = data.get("show_overlay", True)
@@ -203,7 +202,7 @@ class RaytracingRenderer(Component):
             self._emissive_tex.repeat_y = False
             self._prev_width = rw
             self._prev_height = rh
-            self._accum_frame = 0
+            self._accum_frame = 1
 
         if self._albedo_array_tex is None:
             self._albedo_array_tex = ctx.texture_array((*self._albedo_array_size, _MAX_ALBEDO_LAYERS), 4, dtype="f1")
@@ -533,7 +532,9 @@ class RaytracingRenderer(Component):
             prog["u_instance_count"] = self._inst_np.shape[0]
             prog["u_light_count"] = self._light_np.shape[0]
             prog["u_max_bounces"] = self._max_bounces
-            prog["u_accum_frame"] = self._accum_frame if self._accumulate else 0
+            prog["u_accum_frame"] = self._accum_frame
+            prog["u_frame"] = self._frame
+            prog["u_accumulate"] = 1 if self._accumulate else 0
             prog["u_samples_per_pixel"] = self._samples_per_pixel
         except KeyError as e:
             Logger.warning(f"Raytracing uniform missing: {e}")
@@ -592,6 +593,7 @@ class RaytracingRenderer(Component):
 
         self._rays_per_frame = rw * rh * self._samples_per_pixel * (self._max_bounces + 1)
 
+        self._frame += 1
         if self._accumulate:
             self._accum_frame += 1
         return True
