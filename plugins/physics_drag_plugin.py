@@ -10,7 +10,7 @@ from PyQt6.QtCore import QObject, QEvent, Qt
 from PyQt6.QtGui import QMouseEvent
 from core.foundation.plugin_manager import PluginBase
 from core.foundation.logger import Logger
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 if TYPE_CHECKING:
     from editor.scene_viewport import SceneViewport
     from core.physics.physics_scene import PhysicsScene

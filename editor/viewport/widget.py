@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QEvent, QObject
 from PyQt6.QtGui import QMouseEvent, QWheelEvent, QKeyEvent, QSurfaceFormat
 
-from core.math.math3d import Vec3, Mat4, Quat
+from core.maths.math3d import Vec3, Mat4, Quat
 from core.foundation.logger import Logger
 from editor.scene_camera import SceneCamera
 from core.gizmo.gizmo import Gizmo, GizmoMode, GizmoSpace
@@ -160,6 +160,7 @@ class SceneViewport(QOpenGLWidget):
         self._selected_entities: list = []
         self._selected_set: frozenset = frozenset()
         self._selected_set_key = (None, -1)
+        self._selected_set_version: int = 0
         self._gc_frame_counter: int = 0
         self._last_frame_time: float = time.perf_counter()
         self._last_paint_time: float = time.perf_counter()
@@ -862,7 +863,7 @@ class SceneViewport(QOpenGLWidget):
 
     def _get_selected_set(self):
         lst = self._selected_entities
-        v = id(lst), len(lst)
+        v = id(lst), len(lst), self._selected_set_version
         if v != self._selected_set_key:
             self._selected_set_key = v
             self._selected_set = frozenset(lst)
@@ -960,6 +961,7 @@ class SceneViewport(QOpenGLWidget):
                     self.entities_selected.emit(self._selected_entities)
                 else:
                     self._selected_entities = []
+                    self._selected_set_version += 1
                     self._set_gizmo_entity(None)
                     self.entity_selected.emit(None)
                 from editor.viewport.collaboration import send_collab_selection; send_collab_selection(self)
@@ -1460,7 +1462,7 @@ class SceneViewport(QOpenGLWidget):
 
     def _drop_world_pos(self, sx: int, sy: int):
         from editor.viewport.projection import screen_to_ray
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         ray_origin, ray_dir = screen_to_ray(self, sx, sy)
         from editor.viewport.picking import pick_entity
         hit_entity = pick_entity(self, sx, sy)

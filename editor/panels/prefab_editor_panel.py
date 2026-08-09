@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QFrame)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QSurfaceFormat, QKeyEvent, QMouseEvent, QWheelEvent
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.foundation.logger import Logger
 if TYPE_CHECKING:
     from core.engine.engine import Engine
@@ -189,7 +189,7 @@ class PrefabEditorPanel(QDockWidget):
         from core.components import Transform, Camera
         cam_entity = self._edit_scene.create_entity("Prefab Camera")
         cam_entity.add_component(Transform())
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         cam_entity.transform.local_position = Vec3(0, 2, 5)
         cam_entity.add_component(Camera())
         self._engine._plugin_manager.notify_scene_loaded(self._edit_scene)

@@ -9,7 +9,7 @@ import json
 import os
 import numpy as np
 from typing import Optional, TYPE_CHECKING
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 if TYPE_CHECKING:
     from core.ecs.ecs import Entity

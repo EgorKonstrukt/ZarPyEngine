@@ -2,7 +2,7 @@ from __future__ import annotations
 import numpy as np
 import moderngl
 from typing import Optional
-from core.math.math3d import Mat4
+from core.maths.math3d import Mat4
 from core.renderer.culling import extract_frustum_planes
 
 

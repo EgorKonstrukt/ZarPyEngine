@@ -999,7 +999,7 @@ class CollaborationManager:
         r = data.get("r")
         s = data.get("s")
         if p:
-            from core.math.math3d import Vec3
+            from core.maths.math3d import Vec3
             old_local = Vec3(t.local_position.x, t.local_position.y, t.local_position.z)
             t.local_position = p
             pid = data.get("id", "")
@@ -1011,7 +1011,7 @@ class CollaborationManager:
                 if abs(dx) > 0.0001 or abs(dy) > 0.0001 or abs(dz) > 0.0001:
                     peer.transform_deltas[entity_id] = {"pos": [dx, dy, dz], "time": time.time()}
         if r:
-            from core.math.math3d import Quat
+            from core.maths.math3d import Quat
             t.local_rotation = Quat(r[0], r[1], r[2], r[3])
         if s:
             t.local_scale = s
@@ -1036,10 +1036,10 @@ class CollaborationManager:
                     if hasattr(current, 'from_list') and isinstance(v, list):
                         current.from_list(v)
                     elif hasattr(current, 'x') and isinstance(v, (list, tuple)) and len(v) == 3:
-                        from core.math.math3d import Vec3
+                        from core.maths.math3d import Vec3
                         setattr(comp, k, Vec3(v[0], v[1], v[2]))
                     elif hasattr(current, 'x') and isinstance(v, (list, tuple)) and len(v) == 4:
-                        from core.math.math3d import Quat
+                        from core.maths.math3d import Quat
                         setattr(comp, k, Quat(v[0], v[1], v[2], v[3]))
                     else:
                         setattr(comp, k, v)
@@ -1074,10 +1074,10 @@ class CollaborationManager:
             if hasattr(current, 'from_list') and isinstance(value, list):
                 current.from_list(value)
             elif hasattr(current, 'x') and isinstance(value, (list, tuple)) and len(value) == 3:
-                from core.math.math3d import Vec3
+                from core.maths.math3d import Vec3
                 setattr(comp, prop, Vec3(value[0], value[1], value[2]))
             elif hasattr(current, 'x') and isinstance(value, (list, tuple)) and len(value) == 4:
-                from core.math.math3d import Quat
+                from core.maths.math3d import Quat
                 setattr(comp, prop, Quat(value[0], value[1], value[2], value[3]))
             else:
                 setattr(comp, prop, value)

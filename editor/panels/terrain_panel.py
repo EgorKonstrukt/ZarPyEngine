@@ -463,7 +463,7 @@ class TerrainPanel(QDockWidget):
             mgr.send_component_sync(eid, "TerrainCollider", cd)
 
     def _terrain_size_vec(self, height_scale=1.0):
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         ws = float(self._world_spin.value()) if self._world_spin else 1000.0
         return Vec3(ws, height_scale, ws)
 

@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
@@ -308,6 +309,7 @@ class _CodeEditor(QPlainTextEdit):
     DEFAULT_FONT = 12
 
     cursorMoved = pyqtSignal(int, int)
+    _vcs_result_ready = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -316,12 +318,16 @@ class _CodeEditor(QPlainTextEdit):
         self._show_indent_guides = True
         self._show_blame = False
 
+        self._vcs_result_ready.connect(self._on_vcs_result)
+
         self._vcs_git: _Git | None = None
         self._vcs_file_path: str = ""
         self._vcs_blame_data: dict[int, dict] = {}
         self._vcs_diff_data: dict[int, str] = {}
         self._vcs_status: str = ""
         self._vcs_branch: str = ""
+        self._vcs_refreshing: bool = False
+        self._vcs_pending: bool = False
 
         self._line_number = _LineNumberArea(self)
         self._blame_gutter = _VcsBlameGutter(self)
@@ -1273,81 +1279,105 @@ class _CodeEditor(QPlainTextEdit):
             return
         rel = rel.replace("\\", "/")
 
-        self._vcs_branch = self._vcs_git.current_branch()
+        if self._vcs_refreshing:
+            self._vcs_pending = True
+            return
+        self._vcs_refreshing = True
+        threading.Thread(
+            target=self._vcs_worker,
+            args=(self._vcs_git, rel, self._vcs_file_path, self._show_blame),
+            daemon=True,
+        ).start()
 
-        rc, out, _ = self._vcs_git.status()
-        if rc == 0:
-            for entry in out.strip().split("\n"):
-                entry = entry.rstrip()
-                if not entry or len(entry) < 3:
-                    continue
-                xy = entry[:2]
-                path = entry[3:]
-                if path == rel:
-                    if xy[0] == "?" and xy[1] == "?":
-                        self._vcs_status = "untracked"
-                    elif xy[0] == "M" or xy[1] == "M" or xy[0] == "A":
-                        self._vcs_status = "modified"
-                    elif xy[0] == "D" or xy[1] == "D":
-                        self._vcs_status = "deleted"
-                    elif xy[0] == "U" or xy[1] == "U":
-                        self._vcs_status = "conflict"
-                    break
+    def _vcs_worker(self, git, rel: str, file_path: str, show_blame: bool):
+        result: dict = {"branch": "", "status": "", "diff_data": {}, "blame_data": {}}
+        try:
+            result["branch"] = git.current_branch()
 
-        diff_text = self._vcs_git.file_diff(rel)
-        if diff_text:
-            added_lines = set()
-            for line in diff_text.split("\n"):
-                m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-                if m:
-                    current = int(m.group(1))
-                    continue
-
-            for line in diff_text.split("\n"):
-                if line.startswith("@@ "):
-                    m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-                    if m:
-                        current = int(m.group(1))
-                elif line.startswith("+"):
-                    self._vcs_diff_data[current - 1] = "added"
-                    current += 1
-                elif line.startswith("-"):
-                    pass
-                elif line.startswith(" "):
-                    current += 1
-
-        if self._show_blame:
-            if "GIT_AUTHOR_NAME" not in os.environ:
-                os.environ["GIT_AUTHOR_NAME"] = ""
-            if "GIT_COMMITTER_NAME" not in os.environ:
-                os.environ["GIT_COMMITTER_NAME"] = ""
-            blame_text = self._vcs_git.blame(self._vcs_file_path)
-            if blame_text:
-                for bline in blame_text.strip().split("\n"):
-                    if not bline.strip():
+            rc, out, _ = git.status()
+            if rc == 0:
+                for entry in out.strip().split("\n"):
+                    entry = entry.rstrip()
+                    if not entry or len(entry) < 3:
                         continue
-                    parts = bline.split("\t")
-                    if len(parts) >= 4:
-                        try:
-                            rev_info = parts[0].strip()
-                            line_num_part = parts[2].strip().rstrip(")")
-                            line_num = int(line_num_part.split()[0]) - 1
-                            author = parts[1].strip()
-                            time_str = parts[3].strip() if len(parts) > 3 else ""
-                            self._vcs_blame_data[line_num] = {
-                                "author": author,
-                                "short": rev_info[:7],
-                                "time_str": time_str,
-                                "email": "",
-                                "message": "",
-                            }
-                        except (ValueError, IndexError):
-                            pass
+                    xy = entry[:2]
+                    path = entry[3:]
+                    if path == rel:
+                        if xy[0] == "?" and xy[1] == "?":
+                            result["status"] = "untracked"
+                        elif xy[0] == "M" or xy[1] == "M" or xy[0] == "A":
+                            result["status"] = "modified"
+                        elif xy[0] == "D" or xy[1] == "D":
+                            result["status"] = "deleted"
+                        elif xy[0] == "U" or xy[1] == "U":
+                            result["status"] = "conflict"
+                        break
 
-        self._update_extra()
-        self._line_number.update()
-        self._blame_gutter.update()
-        self.viewport().update()
+            diff_text = git.file_diff(rel)
+            if diff_text:
+                current = None
+                for line in diff_text.split("\n"):
+                    if line.startswith("@@ "):
+                        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+                        if m:
+                            current = int(m.group(1))
+                    elif line.startswith("+"):
+                        if current is not None:
+                            result["diff_data"][current - 1] = "added"
+                        current = (current or 0) + 1
+                    elif line.startswith("-"):
+                        pass
+                    elif line.startswith(" "):
+                        if current is not None:
+                            current += 1
+
+            if show_blame:
+                if "GIT_AUTHOR_NAME" not in os.environ:
+                    os.environ["GIT_AUTHOR_NAME"] = ""
+                if "GIT_COMMITTER_NAME" not in os.environ:
+                    os.environ["GIT_COMMITTER_NAME"] = ""
+                blame_text = git.blame(file_path)
+                if blame_text:
+                    for bline in blame_text.strip().split("\n"):
+                        if not bline.strip():
+                            continue
+                        parts = bline.split("\t")
+                        if len(parts) >= 4:
+                            try:
+                                rev_info = parts[0].strip()
+                                line_num_part = parts[2].strip().rstrip(")")
+                                line_num = int(line_num_part.split()[0]) - 1
+                                author = parts[1].strip()
+                                time_str = parts[3].strip() if len(parts) > 3 else ""
+                                result["blame_data"][line_num] = {
+                                    "author": author,
+                                    "short": rev_info[:7],
+                                    "time_str": time_str,
+                                    "email": "",
+                                    "message": "",
+                                }
+                            except (ValueError, IndexError):
+                                pass
+        except Exception:
+            pass
+        self._vcs_result_ready.emit(result)
+
+    def _on_vcs_result(self, result: dict):
+        self._vcs_refreshing = False
+        try:
+            self._vcs_branch = result.get("branch", "")
+            self._vcs_status = result.get("status", "")
+            self._vcs_diff_data = result.get("diff_data", {})
+            self._vcs_blame_data = result.get("blame_data", {})
+            self._update_extra()
+            self._line_number.update()
+            self._blame_gutter.update()
+            self.viewport().update()
+        except RuntimeError:
+            pass
+        if self._vcs_pending:
+            self._vcs_pending = False
+            self.vcs_refresh()
 
     def vcs_set_blame_visible(self, visible: bool):
         self._show_blame = visible

@@ -7,7 +7,7 @@
 from __future__ import annotations
 import math
 from typing import Optional
-from core.math.math3d import Vec3, Mat4
+from core.maths.math3d import Vec3, Mat4
 from core.input.input_manager import InputManager
 from core.input.constants import KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_SHIFT, MOUSE_R, MOUSE_M, MOUSE_L
 from core.components.rendering.cameras.camera_base import CameraBase

@@ -413,7 +413,7 @@ class TerminalPanel(QDockWidget):
         ns["sys"] = sys
         ns["json"] = json
         ns["math"] = _time_module
-        from core.math.math3d import Vec2, Vec3, Vec4, Quat, Mat4
+        from core.maths.math3d import Vec2, Vec3, Vec4, Quat, Mat4
         ns["Vec2"] = Vec2
         ns["Vec3"] = Vec3
         ns["Vec4"] = Vec4

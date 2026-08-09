@@ -9,7 +9,7 @@ import math
 import numpy as np
 from enum import Enum
 from typing import Optional, TYPE_CHECKING
-from core.math.math3d import Vec3, Mat4, Quat
+from core.maths.math3d import Vec3, Mat4, Quat
 if TYPE_CHECKING:
     from core.ecs.ecs import Entity
     from editor.scene_camera import SceneCamera
@@ -999,7 +999,7 @@ class Gizmo:
             pt = entity.parent.transform
             if pt:
                 from core.math_helpers import mat4_inv_fast
-                from core.math.math3d import FLOAT_TYPE
+                from core.maths.math3d import FLOAT_TYPE
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
                 world_arr = np.array([new_world_pos.x, new_world_pos.y, new_world_pos.z, 1.0], dtype=FLOAT_TYPE)

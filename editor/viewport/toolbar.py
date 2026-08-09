@@ -11,7 +11,7 @@ from core.config.editor_scale import scale, scale_xy
 from PyQt6.QtWidgets import QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QSpinBox, QVBoxLayout, QWidget, QWidgetAction
 from PyQt6.QtGui import QPalette
 
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 
 def _pal(role: QPalette.ColorRole) -> str:

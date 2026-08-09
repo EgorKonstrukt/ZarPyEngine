@@ -10,7 +10,7 @@ import heapq
 import uuid
 import numpy as np
 from typing import Optional
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.spatial.octree import AABB
 
 _COLLIDER_TYPES = ("BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider")

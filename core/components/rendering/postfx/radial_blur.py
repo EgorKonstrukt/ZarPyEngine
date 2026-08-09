@@ -11,7 +11,7 @@ from typing import Optional
 from core.ecs.ecs import ComponentRegistry
 from core.components.rendering.postfx.graphics_effect import GraphicsEffect
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math.math3d import Vec2
+from core.maths.math3d import Vec2
 
 
 RADIAL_BLUR_VERT = """

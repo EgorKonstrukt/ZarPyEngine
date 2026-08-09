@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry, GizmoPrimitive
-from core.math.math3d import Mat4, Vec3, Quat
+from core.maths.math3d import Mat4, Vec3, Quat
 from core.config.config import get_global_config
 from core.components.inspector_meta import FieldType, InspectorField
 

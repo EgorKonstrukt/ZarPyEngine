@@ -50,7 +50,7 @@ class MaterialManager:
             return cached
         eng = Engine.instance()
         root = eng.project_root if eng and eng.project_root else os.getcwd()
-        abs_path = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
+        abs_path = self._resolve_material_path(path, root)
         lib_mat = MaterialLibrary._materials.get(abs_path)
         if lib_mat is not None:
             self._material_cache[path] = lib_mat
@@ -59,6 +59,23 @@ class MaterialManager:
         if m:
             self._material_cache[path] = m
         return m
+
+    def _resolve_material_path(self, path: str, root: str) -> str:
+        if os.path.isabs(path):
+            return os.path.normpath(path)
+        if os.path.exists(path):
+            return os.path.normpath(os.path.abspath(path))
+        # Stored Windows absolute path ("C:/Users/...") — probe subpaths under root.
+        if len(path) > 1 and path[1] == ":":
+            parts = path.replace("\\", "/").split("/")
+            for i in range(len(parts)):
+                sub = "/".join(parts[i:])
+                if sub:
+                    c = os.path.normpath(os.path.join(root, sub))
+                    if os.path.exists(c):
+                        return c
+            return os.path.normpath(os.path.join(root, path))
+        return os.path.normpath(os.path.join(root, path))
 
     def load_texture(self, path: str) -> Optional[Any]:
         if not path:

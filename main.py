@@ -19,16 +19,13 @@ except NameError:
 
 def _ensure_extensions():
     _dir = os.path.dirname(os.path.abspath(__file__))
-    _marker = os.path.join(_dir, ".build_done")
     _pyx = os.path.join(_dir, "core", "_convex_hull.pyx")
-    if os.path.exists(_marker):
-        return
     if not os.path.exists(_pyx):
         return
     import glob as _glob
-    if _glob.glob(os.path.join(_dir, "core", "_convex_hull*.pyd")):
-        with open(_marker, "w") as f:
-            f.write("ok")
+    if _glob.glob(os.path.join(_dir, "core", "_convex_hull*.pyd")) or _glob.glob(
+        os.path.join(_dir, "core", "_convex_hull*.so")
+    ):
         return
     print("[Zarin Engine] Building native extensions...", file=sys.stderr)
     try:
@@ -36,8 +33,6 @@ def _ensure_extensions():
             [sys.executable, "setup.py", "build_ext", "--inplace"],
             cwd=_dir,
         )
-        with open(_marker, "w") as f:
-            f.write("ok")
         print("[Zarin Engine] Extensions built successfully.", file=sys.stderr)
     except Exception as e:
         print(f"[Zarin Engine] Extension build failed: {e}", file=sys.stderr)

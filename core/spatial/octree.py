@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 
 class AABB:

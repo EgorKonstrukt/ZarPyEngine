@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from enum import Enum
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 from core.components.inspector_meta import FieldType, InspectorField, ComponentInspectorMeta
 from core.components.rendering.cameras.camera_base import CameraBase
 

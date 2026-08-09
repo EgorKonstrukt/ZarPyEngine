@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 import numpy as np
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.components.mesh_editor import ProBuilderMesh
 from editor.viewport.projection import screen_to_ray
 

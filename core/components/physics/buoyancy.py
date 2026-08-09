@@ -9,7 +9,7 @@ import math
 import time
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Vec3, Quat
+from core.maths.math3d import Vec3, Quat
 from core.components.inspector_meta import FieldType, InspectorField
 
 

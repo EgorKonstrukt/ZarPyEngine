@@ -9,7 +9,7 @@ import os
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math.math3d import Mat4
+from core.maths.math3d import Mat4
 from core.components.rendering.renderers.svg_renderer import SvgRenderer
 
 from core.assets.texture_import_settings import TextureImportSettings

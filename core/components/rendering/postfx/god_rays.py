@@ -13,7 +13,7 @@ from core.components.rendering.postfx.graphics_effect import GraphicsEffect
 from core.components.lighting.light import Light, LightType
 from core.components.lighting.projector import Projector
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 
 GOD_RAYS_VERT = """

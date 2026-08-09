@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.components.inspector_meta import FieldType, InspectorField
 from core.audio.audio_system import AudioSystem, AudioSourceManager
 from core.foundation.logger import Logger

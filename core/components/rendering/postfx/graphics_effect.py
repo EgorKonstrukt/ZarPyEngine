@@ -8,7 +8,7 @@ from __future__ import annotations
 import moderngl
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 
 
 @ComponentRegistry.register

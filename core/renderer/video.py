@@ -16,7 +16,7 @@ import numpy as np
 import moderngl
 from typing import Optional, Any
 from core.engine.engine import Engine
-from core.math.math3d import Mat4
+from core.maths.math3d import Mat4
 from core.components.rendering.renderers.video_renderer import VideoRenderer
 
 

@@ -586,7 +586,7 @@ class BSPImportPlugin(PluginBase):
 
     def _import_sync(self, path: str, settings: dict, engine, parent):
         from core.components import Transform, MeshFilter, MeshRenderer
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         from core.renderer.mesh_data import MeshData
 
         Logger.info("[BSPImport] Parsing BSP file...")
@@ -733,7 +733,7 @@ class BSPImportPlugin(PluginBase):
     def _on_import_finished(self, result: dict, engine, parent):
         print("[BSP_DEBUG] _on_import_finished start", flush=True)
         from core.components import Transform, MeshFilter, MeshRenderer
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         from core.renderer.mesh_data import MeshData
 
         bsp_name = result['bsp_name']

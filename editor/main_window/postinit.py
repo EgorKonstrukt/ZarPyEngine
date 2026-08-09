@@ -48,7 +48,7 @@ def post_init(mw):
         from core.components import Transform, MeshFilter, MeshRenderer, Light, LightType, Camera
         from core.components.rendering.environment.sky import Sky
         from core.components.rendering.environment.clouds import Cloud
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         dir_light = scene.create_entity("Directional Light")
         t = Transform()
         t.local_euler_angles = Vec3(-45, 45, 0)

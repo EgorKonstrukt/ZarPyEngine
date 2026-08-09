@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 import math
-from core.math.math3d import Mat4
+from core.maths.math3d import Mat4
 
 
 class CameraBase:

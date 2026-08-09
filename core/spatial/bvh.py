@@ -579,7 +579,7 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
 def _build_bvh_lines(bvh: BVH, depth_filter: int = -1) -> list[tuple]:
     depths = _compute_node_depths(bvh) if depth_filter >= 0 else None
     lines = []
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     n_nodes = len(bvh._nodes)
     for ni in range(n_nodes):
         if depth_filter >= 0 and depths[ni] != depth_filter:

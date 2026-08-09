@@ -15,7 +15,7 @@ from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QBrush, QPen, QFont as
 from core.config.editor_scale import scale, scale_xy
 from editor.inspector.constants import _XYZ_COLORS, _accent
 from editor.inspector.widgets import _FocusSpinBox, _DragLabel, _ResourceDropLabel, _EntityDropLabel, EntityPickerDialog
-from core.math.math3d import Vec2, Vec3, Vec4
+from core.maths.math3d import Vec2, Vec3, Vec4
 
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 

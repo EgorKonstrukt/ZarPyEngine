@@ -9,7 +9,7 @@ import numpy as np
 import moderngl
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math.math3d import Mat4
+from core.maths.math3d import Mat4
 from core.components.lighting.light import Light
 
 

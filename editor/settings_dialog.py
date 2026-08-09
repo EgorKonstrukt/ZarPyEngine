@@ -7,7 +7,7 @@
 from __future__ import annotations
 from typing import Optional, Any
 
-from PyQt5.QtGui import QIcon
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QListWidget,
                              QWidget, QFormLayout, QLineEdit, QDoubleSpinBox,
                              QSpinBox, QCheckBox, QPushButton, QListWidgetItem,

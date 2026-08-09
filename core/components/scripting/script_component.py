@@ -10,7 +10,7 @@ from typing import Optional, Any, get_type_hints
 from core.ecs.ecs import Component, ComponentRegistry
 from core.foundation.logger import Logger
 from core.components.inspector_meta import FieldType, InspectorField
-from core.math.math3d import Vec2, Vec3, Vec4
+from core.maths.math3d import Vec2, Vec3, Vec4
 from core.foundation.curve import Curve
 from core.input.input_system import Input, KeyCode
 import importlib.util

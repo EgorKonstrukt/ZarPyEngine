@@ -59,7 +59,7 @@ def _build_skinned_entity(scene, path, name, mesh_path, world_pos, import_data):
         from core.assets.asset_importer import _read_mesh_import
         _scale = float(_read_mesh_import(path).get("scale", 1.0))
         if _scale and _scale != 1.0:
-            from core.math.math3d import Vec3
+            from core.maths.math3d import Vec3
             tr.local_scale = Vec3(_scale, _scale, _scale)
     except Exception:
         pass

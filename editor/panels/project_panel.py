@@ -9,6 +9,7 @@ import os
 import shutil
 import datetime
 import subprocess
+import threading
 from typing import Optional, TYPE_CHECKING
 from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                              QTreeWidget, QTreeWidgetItem, QPushButton,
@@ -1036,6 +1037,7 @@ class ProjectPanel(QDockWidget):
     prefab_drag_started = pyqtSignal(str)
     import_model_requested = pyqtSignal(str)
     file_selected = pyqtSignal(str)
+    _vcs_result_ready = pyqtSignal(dict)
 
     def __init__(self, engine: Engine, project_root: str = "assets", parent=None):
         super().__init__("Project", parent)
@@ -1050,9 +1052,12 @@ class ProjectPanel(QDockWidget):
         self._nav_bar = None
         self._status_bar = None
         self._vcs_status: dict[str, str] = {}
+        self._vcs_refreshing: bool = False
+        self._vcs_pending: bool = False
         self._vcs_timer = QTimer(self)
         self._vcs_timer.timeout.connect(self._refresh_vcs_status)
-        self._vcs_timer.start(3000)
+        self._vcs_timer.start(10000)
+        self._vcs_result_ready.connect(self._on_vcs_result)
         self._refresh_vcs_status()
         self._setup_ui()
         self._populate_tree()
@@ -1317,9 +1322,31 @@ class ProjectPanel(QDockWidget):
         self._pane_a.populate_files(self._project_root)
 
     def _refresh_vcs_status(self):
-        self._vcs_status = _parse_vcs_status(self._project_root)
+        if self._vcs_refreshing:
+            self._vcs_pending = True
+            return
+        self._vcs_refreshing = True
+        root = self._project_root
+        threading.Thread(target=self._vcs_worker, args=(root,), daemon=True).start()
+
+    def _vcs_worker(self, root: str):
+        try:
+            result = _parse_vcs_status(root)
+        except Exception:
+            result = {}
+        self._vcs_result_ready.emit(result)
+
+    def _on_vcs_result(self, result: dict[str, str]):
+        self._vcs_refreshing = False
+        self._vcs_status = result
         if hasattr(self, "_pane_a"):
-            self._apply_vcs_colors()
+            try:
+                self._apply_vcs_colors()
+            except RuntimeError:
+                pass
+        if self._vcs_pending:
+            self._vcs_pending = False
+            self._refresh_vcs_status()
 
     def _vcs_status_of(self, full_path: str) -> str:
         if not self._vcs_status or not full_path:

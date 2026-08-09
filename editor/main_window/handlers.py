@@ -13,7 +13,7 @@ import qtawesome as qta
 from PyQt6.QtWidgets import QMessageBox, QFileDialog
 from PyQt6.QtCore import Qt, QTimer
 
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.foundation.logger import Logger
 from editor.splash import SplashScreen
 
@@ -235,13 +235,13 @@ def _refresh_prefab_instances(scene, prefab_guid, registry):
                     new_root.set_parent(parent_ent)
             t = new_root.transform
             if t and data["position"]:
-                from core.math.math3d import Vec3
+                from core.maths.math3d import Vec3
                 t.local_position = Vec3(*data["position"])
             if t and data["rotation"]:
-                from core.math.math3d import Vec3
+                from core.maths.math3d import Vec3
                 t.local_euler_angles = Vec3(*data["rotation"])
             if t and data["scale"]:
-                from core.math.math3d import Vec3
+                from core.maths.math3d import Vec3
                 t.local_scale = Vec3(*data["scale"])
 
 

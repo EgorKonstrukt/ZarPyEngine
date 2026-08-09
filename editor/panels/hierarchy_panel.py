@@ -841,7 +841,7 @@ class HierarchyPanel(QDockWidget):
             return
         from core.foundation.commands import CreateEntityCommand, get_history
         from core.components import Transform, Light, LightType
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         name_map = {"sun": "Sun", "directional": "Directional Light", "point": "Point Light", "spot": "Spot Light"}
         cmd = CreateEntityCommand(self._scene, name_map.get(ltype, "Light"))
         get_history().execute(cmd)

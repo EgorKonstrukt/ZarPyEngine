@@ -72,6 +72,8 @@ class PhysicsProcess:
                 self._process.terminate()
                 self._process.join(2)
             self._process = None
+            self._shared.close()
+            self._shared.unlink()
         return ok
 
     def send(self, cmd: dict):

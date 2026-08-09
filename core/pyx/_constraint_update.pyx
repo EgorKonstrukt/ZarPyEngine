@@ -156,7 +156,7 @@ cdef _compute_weighted_position(object constraint):
         px += wp._x * inv_w
         py += wp._y * inv_w
         pz += wp._z * inv_w
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     return Vec3._make(px, py, pz)
 
 
@@ -197,7 +197,7 @@ cdef _compute_weighted_rotation(object constraint):
         sz += q._z * inv_w
         sw += q._w * inv_w
     _quat_normalize_inplace(&sx, &sy, &sz, &sw)
-    from core.math.math3d import Quat
+    from core.maths.math3d import Quat
     return Quat._make(sx, sy, sz, sw)
 
 
@@ -231,7 +231,7 @@ cdef _compute_weighted_scale(object constraint):
         sx += sc._x * inv_w
         sy += sc._y * inv_w
         sz += sc._z * inv_w
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     return Vec3._make(sx, sy, sz)
 
 
@@ -250,7 +250,7 @@ cdef void _update_position_constraint(object c, double dt):
     cdef double rx = current._x + (target._x + ox - current._x) * wx
     cdef double ry = current._y + (target._y + oy - current._y) * wy
     cdef double rz = current._z + (target._z + oz - current._z) * wz
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.position = Vec3._make(rx, ry, rz)
 
 
@@ -279,7 +279,7 @@ cdef void _update_rotation_constraint(object c, double dt):
     cdef double nx = ce_x + (te_x - ce_x) * wx
     cdef double ny = ce_y + (te_y - ce_y) * wy
     cdef double nz = ce_z + (te_z - ce_z) * wz
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.local_euler_angles = Vec3._make(nx, ny, nz)
 
 
@@ -299,7 +299,7 @@ cdef void _update_scale_constraint(object c, double dt):
     cdef double rx = current._x + (ex - current._x) * wx
     cdef double ry = current._y + (ey - current._y) * wy
     cdef double rz = current._z + (ez - current._z) * wz
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.local_scale = Vec3._make(rx, ry, rz)
 
 
@@ -319,7 +319,7 @@ cdef void _update_parent_constraint(object c, double dt):
     t = c.transform
     if t is None:
         return
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
 
     pos_target = _compute_weighted_position(c)
     if pos_target is not None:
@@ -390,7 +390,7 @@ cdef void _update_move_towards_constraint(object c, double dt):
     if move_dist > dist:
         move_dist = dist
     cdef double inv_dist = move_dist / dist
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.position = Vec3._make(current._x + dx * inv_dist,
                             current._y + dy * inv_dist,
                             current._z + dz * inv_dist)
@@ -413,7 +413,7 @@ cdef void _update_rotate_towards_constraint(object c, double dt):
     _quat_slerp(cur_q._x, cur_q._y, cur_q._z, cur_q._w,
                 target_quat._x, target_quat._y, target_quat._z, target_quat._w,
                 max_angle, &rx, &ry, &rz, &rw)
-    from core.math.math3d import Quat
+    from core.maths.math3d import Quat
     t.local_rotation = Quat._make(rx, ry, rz, rw)
 
 
@@ -432,7 +432,7 @@ cdef void _update_scale_to_constraint(object c, double dt):
     cdef double nx = _clamp(target._x * factor, lo, hi)
     cdef double ny = _clamp(target._y * factor, lo, hi)
     cdef double nz = _clamp(target._z * factor, lo, hi)
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.local_scale = Vec3._make(nx, ny, nz)
 
 
@@ -489,7 +489,7 @@ cdef void _update_aim_constraint(object c, double dt):
     ny = ce_y + (ny - ce_y) * aim_w
     nz = ce_z + (nz - ce_z) * aim_w
 
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.local_euler_angles = Vec3._make(nx, ny, nz)
 
 
@@ -542,7 +542,7 @@ cdef void _update_look_at_constraint(object c, double dt):
     ny = ce_y + (te_y - ce_y) * w
     nz = ce_z + (te_z - ce_z) * w
 
-    from core.math.math3d import Vec3
+    from core.maths.math3d import Vec3
     t.local_euler_angles = Vec3._make(nx, ny, nz)
 
 
@@ -554,7 +554,7 @@ cdef void _update_follow_transform_constraint(object c, double dt):
     t = c.transform
     if t is None:
         return
-    from core.math.math3d import Vec3, Quat
+    from core.maths.math3d import Vec3, Quat
 
     if c.follow_position:
         target_pos = _compute_weighted_position(c)

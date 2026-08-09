@@ -13,7 +13,7 @@ import numpy as np
 import moderngl
 
 from core.foundation.plugin_manager import PluginBase
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 
 class VRPlugin(PluginBase):
     NAME = "VRPlugin"

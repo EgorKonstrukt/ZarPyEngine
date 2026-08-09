@@ -41,6 +41,23 @@ except ImportError:
     PhysicsWorld = None
     _HAS_CULVERIN = False
 
+    SHAPE_BOX = 0
+    SHAPE_SPHERE = 1
+    SHAPE_CAPSULE = 2
+    SHAPE_CYLINDER = 3
+    SHAPE_PLANE = 4
+    SHAPE_MESH = 5
+    SHAPE_CONVEX_HULL = 6
+    MOTION_STATIC = 0
+    MOTION_KINEMATIC = 1
+    MOTION_DYNAMIC = 2
+    CONSTRAINT_FIXED = 0
+    CONSTRAINT_POINT = 1
+    CONSTRAINT_HINGE = 2
+    CONSTRAINT_SLIDER = 3
+    CONSTRAINT_DISTANCE = 4
+    CONSTRAINT_CONE = 5
+
     def euler_to_quat(roll: float, pitch: float, yaw: float):
         cx, sx = math.cos(roll / 2), math.sin(roll / 2)
         cy, sy = math.cos(pitch / 2), math.sin(pitch / 2)

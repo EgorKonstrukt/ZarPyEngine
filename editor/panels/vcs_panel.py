@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -1299,6 +1300,8 @@ class _CreateRepoDialog(QDialog):
 
 
 class VcsPanel(QDockWidget):
+    _status_result_ready = pyqtSignal(int, str)
+
     def __init__(self, parent=None):
         super().__init__("Version Control", parent)
         self.setObjectName("VersionControlDock")
@@ -1315,10 +1318,13 @@ class VcsPanel(QDockWidget):
         self._branches_list: list[str] = []
         self._status_entries: list[dict] = []
         self._last_status_output: str = ""
+        self._status_refreshing: bool = False
+        self._status_pending: bool = False
         self._watch_timer = QTimer(self)
         self._watch_timer.timeout.connect(self._on_timer)
         self._watch_interval: int = 3000
         self._diff_cache: dict[str, str] = {}
+        self._status_result_ready.connect(self._on_status_result)
 
         self._setup_ui()
         self._watch_timer.start(self._watch_interval)
@@ -1493,30 +1499,47 @@ class VcsPanel(QDockWidget):
     def _refresh_status(self):
         if not self._git.repo_root:
             return
-        rc, out, _ = self._git.status()
-        if rc != 0:
+        if self._status_refreshing:
+            self._status_pending = True
             return
-        if out == self._last_status_output:
+        self._status_refreshing = True
+        threading.Thread(target=self._status_worker, daemon=True).start()
+
+    def _status_worker(self):
+        try:
+            rc, out, _ = self._git.status()
+        except Exception:
+            rc, out = -3, ""
+        self._status_result_ready.emit(rc, out)
+
+    def _on_status_result(self, rc: int, out: str):
+        self._status_refreshing = False
+        try:
+            if rc == 0 and self._git.repo_root and out != self._last_status_output:
+                self._last_status_output = out
+                self._status_entries = _parse_porcelain(out)
+                self._status_tree.set_entries(self._status_entries)
+                staged = sum(1 for e in self._status_entries if e["staged"])
+                unstaged = sum(1 for e in self._status_entries
+                               if not e["staged"] and e["status"] != "untracked")
+                untracked = sum(1 for e in self._status_entries if e["status"] == "untracked")
+                conflicts = sum(1 for e in self._status_entries if e["status"] == "conflict")
+                parts = []
+                if conflicts:
+                    parts.append(f"Conflicts: {conflicts}")
+                if staged:
+                    parts.append(f"Staged: {staged}")
+                if unstaged:
+                    parts.append(f"Modified: {unstaged}")
+                if untracked:
+                    parts.append(f"Untracked: {untracked}")
+                self._commit_panel.set_status(" | ".join(parts) if parts else " Working tree clean")
+                self._diff_cache.clear()
+        except RuntimeError:
             return
-        self._last_status_output = out
-        self._status_entries = _parse_porcelain(out)
-        self._status_tree.set_entries(self._status_entries)
-        staged = sum(1 for e in self._status_entries if e["staged"])
-        unstaged = sum(1 for e in self._status_entries
-                       if not e["staged"] and e["status"] != "untracked")
-        untracked = sum(1 for e in self._status_entries if e["status"] == "untracked")
-        conflicts = sum(1 for e in self._status_entries if e["status"] == "conflict")
-        parts = []
-        if conflicts:
-            parts.append(f"Conflicts: {conflicts}")
-        if staged:
-            parts.append(f"Staged: {staged}")
-        if unstaged:
-            parts.append(f"Modified: {unstaged}")
-        if untracked:
-            parts.append(f"Untracked: {untracked}")
-        self._commit_panel.set_status(" | ".join(parts) if parts else " Working tree clean")
-        self._diff_cache.clear()
+        if self._status_pending:
+            self._status_pending = False
+            self._refresh_status()
 
     def _refresh_log(self):
         commits = self._git.log(100)

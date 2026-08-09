@@ -14,7 +14,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QColor, QBrush, QIcon
 from PyQt6.QtWidgets import QTabBar, QMessageBox
 
 from core.ecs.ecs import Scene
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 try:
     import qtawesome as qta

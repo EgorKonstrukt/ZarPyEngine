@@ -12,7 +12,7 @@ import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 
-from core.math.math3d import (
+from core.maths.math3d import (
     Vec3,
     Vec4,
     mat4_mul_flat,

@@ -12,3 +12,5 @@ setuptools
 pillow
 qtawesome
 xxhash
+psutil
+culverin

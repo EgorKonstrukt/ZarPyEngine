@@ -241,7 +241,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         t.position = Vec3(*position)
         return {"message": f"Set position to {position}"}
 
@@ -273,7 +273,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         t.local_position = Vec3(*position)
         return {"message": f"Set local position to {position}"}
 
@@ -305,7 +305,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         t.local_euler_angles = Vec3(*euler)
         return {"message": f"Set rotation to {euler}"}
 
@@ -337,7 +337,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         t.local_scale = Vec3(*scale)
         return {"message": f"Set scale to {scale}"}
 
@@ -376,7 +376,7 @@ def register(registry, engine):
         t = e.transform
         if t is None:
             return {"error": "Entity has no Transform"}
-        from core.math.math3d import Vec3, Quat
+        from core.maths.math3d import Vec3, Quat
         direction = Vec3(*target) - t.position
         if direction.length() < 1e-10:
             return {"error": "Target is at the same position as entity"}

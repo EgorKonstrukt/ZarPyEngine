@@ -12,7 +12,7 @@ import math
 import numpy as np
 import os
 from typing import Optional
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.ecs.ecs import Component, ComponentRegistry, GizmoPrimitive
 from core.components.inspector_meta import FieldType, InspectorField
 from core.engine.engine import Engine
@@ -153,7 +153,7 @@ def _decimate_verts(verts: np.ndarray, max_vertices: int) -> np.ndarray:
 
 def _compute_hull_edges_np(verts: np.ndarray) -> Optional[np.ndarray]:
     try:
-        from core.math.convex_hull import convex_hull_simplices
+        from core.maths.convex_hull import convex_hull_simplices
         simplices = convex_hull_simplices(verts)
         if len(simplices) == 0:
             return None

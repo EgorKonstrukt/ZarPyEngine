@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from editor.viewport.projection import screen_to_ray, world_to_screen
 
 _font_atlas_cache: dict[tuple[str, int], "FontAtlas"] = {}

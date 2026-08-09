@@ -12,7 +12,7 @@ from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 from core.foundation.logger import Logger
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 
 
 _FACE_DIRS = [

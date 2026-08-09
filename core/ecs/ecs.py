@@ -108,7 +108,7 @@ class Component:
             wm = tr.world_matrix._d.tobytes()
         except Exception:
             return None
-        from core.math.math3d import Vec2, Vec3, Vec4
+        from core.maths.math3d import Vec2, Vec3, Vec4
         from enum import Enum
         parts = [wm]
         for a in attrs:
@@ -881,7 +881,7 @@ class Scene:
         return result
 
     def rebuild_spatial(self):
-        from core.math.math3d import Vec3
+        from core.maths.math3d import Vec3
         import numpy as np
         self._spatial.clear()
         from core.components.transform import Transform

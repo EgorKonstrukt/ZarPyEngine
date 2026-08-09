@@ -13,7 +13,7 @@ from core.foundation.logger import Logger
 from core.physics import PhysicsProcess, PhysicsScene
 from core.physics.shared_buffer import MAX_ENTITIES
 from core.physics.physics_solver import IPhysicsSolver
-from core.math.math3d import Vec2, Vec3
+from core.maths.math3d import Vec2, Vec3
 from core.physics.shape_utils import find_shape_info
 from core.config.config import get_project_config
 
@@ -143,7 +143,11 @@ class PhysicsPlugin(PluginBase):
             mod = importlib.import_module(solver_module)
             cls = getattr(mod, solver_class)
             self._solver = cls()
-            self._solver.initialize(settings)
+            if not self._solver.initialize(settings):
+                Logger.error(f"PhysicsPlugin: single-threaded {solver_name} solver initialize failed")
+                self._solver = None
+                self._physics_scene = None
+                return
             self._physics_scene = PhysicsScene(self._solver)
             Logger.info(f"PhysicsPlugin: {solver_name} in-process (single-threaded).")
         except Exception as e:

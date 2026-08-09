@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import moderngl
 from typing import Optional
-from core.math.math3d import Vec3, Mat4
+from core.maths.math3d import Vec3, Mat4
 from core.renderer.gpu_primitives import (
     GpuMesh, make_cone_mesh, make_cylinder_mesh,
     make_cube_mesh, make_quad_mesh, make_circle_ring_mesh, make_instance_vao,

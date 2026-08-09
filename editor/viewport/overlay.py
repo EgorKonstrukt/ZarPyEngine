@@ -12,7 +12,7 @@ import numpy as np
 from PyQt6.QtCore import QRect, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
 
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.renderer.render_stats import (
     _SPIKE_LOG,
     build_stats_rows,

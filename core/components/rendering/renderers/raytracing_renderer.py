@@ -15,7 +15,7 @@ from core.components.rendering.renderers.mesh_filter import MeshFilter
 from core.components.rendering.renderers.mesh_renderer import MeshRenderer
 from core.components.lighting.light import Light, LightType
 
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 from core.foundation.logger import Logger
 import math
 

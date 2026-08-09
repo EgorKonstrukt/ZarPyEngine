@@ -15,7 +15,7 @@ from core.components.rendering.postfx.graphics_effect import GraphicsEffect
 from core.components.rendering.effects.voxel_cpu import compute_voxel_instances
 from core.components.rendering.renderers.mesh_filter import MeshFilter
 from core.engine.engine import Engine
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 
 VR_VERT = """

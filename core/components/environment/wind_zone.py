@@ -9,7 +9,7 @@ import math
 import time
 import numpy as np
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.components.inspector_meta import FieldType, InspectorField
 
 

@@ -10,7 +10,7 @@ import time
 import numpy as np
 import moderngl
 from typing import Optional, Any
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 from core.components.rendering.particles.particle_force_field import FORCE_FIELD_DTYPE, FORCE_FIELD_SSBO_SIZE, MAX_FORCE_FIELDS
 
 

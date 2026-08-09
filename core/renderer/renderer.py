@@ -35,7 +35,7 @@ from core.components.rendering.renderers.video_renderer import VideoRenderer
 from core.components.rendering.effects.object_effect import ObjectEffect
 from core.components.rendering.effects.voxelize_effect import VoxelizeEffect
 from core.components.rendering.effects.voxel_cpu import compute_voxel_instances
-from core.math.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3
 
 from core.renderer.types import RenderMode
 from core.renderer.mesh_data import MeshData, read_shader
@@ -1236,7 +1236,7 @@ out vec4 frag_color;
         return m
 
     def _compute_water_chunk_models(self, cam_pos, water_y, ocean_size, chunk_size=200):
-        from core.math.math3d import Mat4, Vec3
+        from core.maths.math3d import Mat4, Vec3
         grid_radius = max(1, int(round(ocean_size / (2.0 * chunk_size))))
         gcx = round(cam_pos.x / chunk_size) * chunk_size
         gcz = round(cam_pos.z / chunk_size) * chunk_size

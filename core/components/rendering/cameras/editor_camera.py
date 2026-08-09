@@ -7,7 +7,7 @@
 from __future__ import annotations
 import math
 from core.ecs.ecs import Component, ComponentRegistry
-from core.math.math3d import Vec3, Quat
+from core.maths.math3d import Vec3, Quat
 from core.input.input_manager import InputManager
 from core.input.constants import KEY_W, KEY_A, KEY_S, KEY_D, KEY_Q, KEY_E, KEY_SHIFT, MOUSE_R, MOUSE_M, MOUSE_L
 from core.components.inspector_meta import FieldType, InspectorField

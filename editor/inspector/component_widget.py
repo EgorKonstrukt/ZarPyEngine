@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QSize, QEvent
 import qtawesome as qta
 from PyQt6.QtGui import QAction, QPixmap, QIcon, QDrag, QCursor, QColor
 from core.config.editor_scale import scale, scale_xy
-from core.math.math3d import Vec2, Vec3, Vec4, Quat
+from core.maths.math3d import Vec2, Vec3, Vec4, Quat
 from core.foundation.logger import Logger
 from core.foundation.commands import SetComponentCommand, CompoundCommand, get_history
 from core.foundation.curve import Curve

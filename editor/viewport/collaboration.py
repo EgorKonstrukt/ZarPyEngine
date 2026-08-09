@@ -11,7 +11,7 @@ import time
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 
-from core.math.math3d import Vec3
+from core.maths.math3d import Vec3
 
 
 def render_remote_collaborator_gizmos(vp, vp_mat, cam_pos, fw, fh):
