@@ -94,7 +94,8 @@ class RaytracingRenderer(Component):
         self._fixed_inst: Optional[np.ndarray] = None
         self._fixed_light: Optional[np.ndarray] = None
 
-        self._accum_frame: int = 0
+        self._accum_frame: int = 1
+        self._prev_view_proj: Optional[np.ndarray] = None
         self._prev_width: int = 0
         self._prev_height: int = 0
         self._rays_per_frame: int = 0
@@ -499,6 +500,13 @@ class RaytracingRenderer(Component):
         rw = max(1, int(width * self._resolution_scale))
         rh = max(1, int(height * self._resolution_scale))
 
+        if self._accumulate:
+            cur_vp = (proj_mat.to_f32().reshape(4, 4) @ view_mat.to_f32().reshape(4, 4))
+            if self._prev_view_proj is not None:
+                if np.max(np.abs(cur_vp - self._prev_view_proj)) > 1e-5:
+                    self._accum_frame = 1
+            self._prev_view_proj = cur_vp.copy()
+
         if not self._ensure_resources(ctx, width, height):
             return False
 
@@ -526,6 +534,7 @@ class RaytracingRenderer(Component):
             prog["u_light_count"] = self._light_np.shape[0]
             prog["u_max_bounces"] = self._max_bounces
             prog["u_accum_frame"] = self._accum_frame if self._accumulate else 0
+            prog["u_samples_per_pixel"] = self._samples_per_pixel
         except KeyError as e:
             Logger.warning(f"Raytracing uniform missing: {e}")
             return False
