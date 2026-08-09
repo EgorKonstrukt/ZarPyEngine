@@ -22,6 +22,8 @@ import math
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
 _MAX_LIGHTS = 8
+_MAT_STRIDE = 17
+_MAX_ALBEDO_LAYERS = 32
 
 try:
     from core._raytracing_data import prepare_raytrace_data as _cy_prepare
@@ -64,6 +66,11 @@ class RaytracingRenderer(Component):
 
         self._sky_env_tex: Optional[moderngl.Texture] = None
         self._sky_env_prog: Optional[moderngl.ComputeShader] = None
+
+        self._albedo_array_tex: Optional[moderngl.TextureArray] = None
+        self._albedo_tex_map: dict = {}
+        self._albedo_array_size: tuple = (256, 256)
+        self._albedo_count: int = 0
 
         self._bvh_buf: Optional[moderngl.Buffer] = None
         self._vert_buf: Optional[moderngl.Buffer] = None
@@ -197,6 +204,12 @@ class RaytracingRenderer(Component):
             self._prev_height = rh
             self._accum_frame = 0
 
+        if self._albedo_array_tex is None:
+            self._albedo_array_tex = ctx.texture_array((*self._albedo_array_size, _MAX_ALBEDO_LAYERS), 4, dtype="f1")
+            self._albedo_array_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._albedo_array_tex.repeat_x = False
+            self._albedo_array_tex.repeat_y = False
+
         if self._sky_env_tex is None:
             self._sky_env_tex = ctx.texture((256, 128), 4, dtype="f4")
             self._sky_env_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -292,7 +305,7 @@ class RaytracingRenderer(Component):
         total_tris = cum_tris
         total_bvh_nodes = cum_bvh_nodes
 
-        vert_np = np.empty((total_verts, 6), dtype=np.float32)
+        vert_np = np.empty((total_verts, 8), dtype=np.float32)
         idx_np = np.empty((total_tris, 3), dtype=np.uint32)
         bvh_np = np.empty((total_bvh_nodes, 8), dtype=np.float32)
 
@@ -305,13 +318,16 @@ class RaytracingRenderer(Component):
             m = meshes[i]
             norms = getattr(m, 'normals', None)
             if norms is not None and norms.shape[0] == nv * 3:
-                vert_np[vo:vo + nv, 3:] = norms.reshape(-1, 3)
+                vert_np[vo:vo + nv, 3:6] = norms.reshape(-1, 3)
             else:
                 f0 = verts3[0::3]; f1 = verts3[1::3]; f2 = verts3[2::3]
                 face_norms = np.cross(f1 - f0, f2 - f0)
                 fn_len = np.linalg.norm(face_norms, axis=1, keepdims=True)
                 fn_len[fn_len == 0] = 1
-                vert_np[vo:vo + nv, 3:] = np.repeat(face_norms / fn_len, 3, axis=0)
+                vert_np[vo:vo + nv, 3:6] = np.repeat(face_norms / fn_len, 3, axis=0)
+            uvs = getattr(m, 'uvs', None)
+            if uvs is not None and len(uvs) >= nv * 2:
+                vert_np[vo:vo + nv, 6:8] = uvs.reshape(-1, 2)[:nv]
             if bvh.tri_indices is not None and len(bvh.tri_indices) == nt:
                 idx_np[io:io + nt] = idxs[bvh.tri_indices] + vo
             else:
@@ -331,32 +347,44 @@ class RaytracingRenderer(Component):
         self._bvh_np = bvh_np.reshape(-1)
 
         n_mats = max(len(material_map), 1)
-        mat_np = np.zeros((n_mats, 12), dtype=np.float32)
+        mat_np = np.zeros((n_mats, _MAT_STRIDE), dtype=np.float32)
         mat_np[:, :3] = 0.8
         mat_np[:, 3] = 0.0
         mat_np[:, 4] = 0.5
+        mat_np[:, 10] = 1.0
+        mat_np[:, 9] = -1.0
 
-        from core.engine.engine import Engine
-        eng = Engine.instance()
-        if eng:
-            rndr = getattr(eng, '_renderer', None)
-            if rndr:
-                for mat_path, mi in material_map.items():
-                    mat = rndr._materials.load_material(mat_path)
-                    if mat:
-                        props = mat.properties
-                        bc = props.get("_BaseColor", (1, 1, 1, 1))
-                        mat_np[mi, 0] = bc[0]
-                        mat_np[mi, 1] = bc[1]
-                        mat_np[mi, 2] = bc[2]
-                        mat_np[mi, 3] = float(props.get("_Metallic", 0.0))
-                        mat_np[mi, 4] = float(props.get("_Smoothness", 0.5))
-                        ec = props.get("_EmissionColor") or props.get("emission", (0, 0, 0, 0))
-                        mat_np[mi, 5] = ec[0]
-                        mat_np[mi, 6] = ec[1]
-                        mat_np[mi, 7] = ec[2]
-                        mat_np[mi, 8] = float(props.get("_EmissionIntensity", 0.0))
-                        mat_np[mi, 9] = float(props.get("_OcclusionStrength", 1.0))
+        mmgr = getattr(renderer, '_materials', None)
+        if mmgr:
+            for mat_path, mi in material_map.items():
+                mat = mmgr.load_material(mat_path)
+                if mat:
+                    props = mat.properties
+                    bc = props.get("_BaseColor", None)
+                    if bc is None:
+                        bc = props.get("albedo_color", (0.8, 0.8, 0.8, 1.0))
+                    mat_np[mi, 0] = float(bc[0])
+                    mat_np[mi, 1] = float(bc[1])
+                    mat_np[mi, 2] = float(bc[2])
+                    mat_np[mi, 3] = float(props.get("_Metallic", 0.0))
+                    mat_np[mi, 4] = float(props.get("_Smoothness", 0.5))
+                    ec = props.get("_EmissionColor")
+                    if ec is None:
+                        ec = props.get("emission_color", (0, 0, 0, 0))
+                    if ec is None:
+                        ec = (0, 0, 0, 0)
+                    mat_np[mi, 5] = float(ec[0])
+                    mat_np[mi, 6] = float(ec[1])
+                    mat_np[mi, 7] = float(ec[2])
+                    mat_np[mi, 8] = float(props.get("_EmissionIntensity", 0.0))
+                    mat_np[mi, 10] = float(props.get("_OcclusionStrength", 1.0))
+                    albedo_tex_path = props.get("_BaseMap")
+                    if not albedo_tex_path:
+                        albedo_tex_path = props.get("albedo_texture", "")
+                    if albedo_tex_path and isinstance(albedo_tex_path, str):
+                        layer = self._get_or_load_albedo_layer(albedo_tex_path, mmgr)
+                        if layer >= 0:
+                            mat_np[mi, 9] = float(layer)
         self._mat_np = mat_np
 
         wm_list = np.array([wm._d for _, _, wm, _, _ in instances])
@@ -540,6 +568,13 @@ class RaytracingRenderer(Component):
         self._output_tex.bind_to_image(0, read=False, write=True)
         self._emissive_tex.bind_to_image(1, read=False, write=True)
 
+        self._albedo_array_tex.use(2)
+        try:
+            prog["u_albedo_array"] = 2
+            prog["u_albedo_tex_count"] = self._albedo_count
+        except KeyError:
+            pass
+
         if hasattr(renderer, '_raytracing_emissive_tex'):
             renderer._raytracing_emissive_tex = self._emissive_tex
 
@@ -583,6 +618,40 @@ class RaytracingRenderer(Component):
         ctx.disable(moderngl.BLEND)
         ctx.enable(moderngl.DEPTH_TEST)
 
+    def _get_or_load_albedo_layer(self, tex_path: str, mmgr) -> int:
+        if tex_path in self._albedo_tex_map:
+            return self._albedo_tex_map[tex_path]
+        if self._albedo_count >= _MAX_ALBEDO_LAYERS:
+            return -1
+        abs_path = mmgr._resolve_tex_path(tex_path) if mmgr else tex_path
+        if not abs_path or not os.path.exists(abs_path):
+            self._albedo_tex_map[tex_path] = -1
+            return -1
+        try:
+            from PIL import Image
+            img = Image.open(abs_path).convert("RGBA")
+        except Exception:
+            self._albedo_tex_map[tex_path] = -1
+            return -1
+        w, h = img.size
+        aw, ah = self._albedo_array_size
+        if w > aw or h > ah:
+            scale = min(aw / w, ah / h)
+            w = max(1, int(w * scale))
+            h = max(1, int(h * scale))
+            img = img.resize((w, h), Image.LANCZOS)
+        data = img.tobytes()
+        x_off = (aw - w) // 2
+        y_off = (ah - h) // 2
+        try:
+            layer = self._albedo_count
+            self._albedo_array_tex.write(data, viewport=(x_off, y_off, layer, w, h, 1))
+            self._albedo_count += 1
+            self._albedo_tex_map[tex_path] = layer
+            return layer
+        except Exception:
+            return -1
+
     def on_destroy(self):
         self._release_gl()
 
@@ -615,3 +684,8 @@ class RaytracingRenderer(Component):
         if self._sky_env_prog:
             self._sky_env_prog.release()
             self._sky_env_prog = None
+        if self._albedo_array_tex:
+            self._albedo_array_tex.release()
+            self._albedo_array_tex = None
+        self._albedo_tex_map.clear()
+        self._albedo_count = 0
