@@ -168,6 +168,83 @@ ComputeShader "Zarin/Raytracing"
         return best_t;
     }
 
+    bool trace_shadow(vec3 ro, vec3 rd, float max_dist) {
+        vec3 inv_rd = 1.0 / rd;
+        for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
+            int ib = inst * 46;
+            vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
+            vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
+            float aabb_t = ray_aabb_min(ro, inv_rd, wbmin, wbmax);
+            if (aabb_t < 0.0 || aabb_t >= max_dist) continue;
+
+            int bvh_offset = int(inst_data[ib + 32]);
+            int idx_off = int(inst_data[ib + 34]);
+
+            mat4 inv_wm = mat4(
+                vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
+                vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
+                vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
+                vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
+            );
+
+            vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
+            vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
+            vec3 inv_lrd = 1.0 / lrd;
+
+            if (bvh_offset < 0) continue;
+            int stack[32];
+            int sp = 0;
+            stack[sp++] = bvh_offset;
+            while (sp > 0) {
+                int ni = stack[--sp];
+                int base = ni * 8;
+                vec3 bmin = vec3(bvh_nodes[base], bvh_nodes[base + 1], bvh_nodes[base + 2]);
+                vec3 bmax = vec3(bvh_nodes[base + 3], bvh_nodes[base + 4], bvh_nodes[base + 5]);
+                float box_t = ray_aabb_min(lro, inv_lrd, bmin, bmax);
+                if (box_t < 0.0 || box_t >= max_dist) continue;
+
+                int left_or_start = int(bvh_nodes[base + 6]);
+                int right_or_count = int(bvh_nodes[base + 7]);
+                if (right_or_count >= 0) {
+                    stack[sp++] = right_or_count;
+                    stack[sp++] = left_or_start;
+                    continue;
+                }
+
+                int tri_end = left_or_start + (-right_or_count - 1);
+                for (int ti = left_or_start; ti < tri_end; ti++) {
+                    int idx_b = int((idx_off + ti)) * 3;
+                    uint i0 = idx_data[idx_b];
+                    uint i1 = idx_data[idx_b + 1];
+                    uint i2 = idx_data[idx_b + 2];
+                    int i0i = int(i0) * 8;
+                    int i1i = int(i1) * 8;
+                    int i2i = int(i2) * 8;
+
+                    vec3 v0 = vec3(vert_data[i0i], vert_data[i0i + 1], vert_data[i0i + 2]);
+                    vec3 v1 = vec3(vert_data[i1i], vert_data[i1i + 1], vert_data[i1i + 2]);
+                    vec3 v2 = vec3(vert_data[i2i], vert_data[i2i + 1], vert_data[i2i + 2]);
+
+                    vec3 e1 = v1 - v0;
+                    vec3 e2 = v2 - v0;
+                    vec3 p = cross(lrd, e2);
+                    float det = dot(e1, p);
+                    if (abs(det) < 1e-12) continue;
+                    float inv_det = 1.0 / det;
+                    vec3 t_vec = lro - v0;
+                    float u = dot(t_vec, p) * inv_det;
+                    if (u < 0.0 || u > 1.0) continue;
+                    vec3 q = cross(t_vec, e1);
+                    float v = dot(lrd, q) * inv_det;
+                    if (v < 0.0 || (u + v) > 1.0) continue;
+                    float tt = dot(e2, q) * inv_det;
+                    if (tt > 0.0 && tt < max_dist) return true;
+                }
+            }
+        }
+        return false;
+    }
+
     float intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd,
                           inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
                           inout int hit_mat) {
@@ -259,6 +336,10 @@ ComputeShader "Zarin/Raytracing"
 
             float NdotL = dot(N, light_dir);
             if (NdotL <= 0.0) continue;
+
+            float shadow_dist = (lt == 0) ? 1e20 : length(lpos - pos);
+            vec3 shadow_ro = pos + N * 0.002;
+            if (trace_shadow(shadow_ro, light_dir, shadow_dist)) continue;
 
             vec3 H = normalize(V + light_dir);
             float NdotH = dot(N, H);
