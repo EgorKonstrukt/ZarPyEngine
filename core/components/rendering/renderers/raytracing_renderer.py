@@ -90,6 +90,7 @@ class RaytracingRenderer(Component):
         self._accum_frame: int = 0
         self._prev_width: int = 0
         self._prev_height: int = 0
+        self._rays_per_frame: int = 0
 
     def serialize(self) -> dict:
         d = super().serialize()
@@ -544,6 +545,8 @@ class RaytracingRenderer(Component):
 
         prog.run(group_x=(rw + 7) // 8, group_y=(rh + 7) // 8, group_z=1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)
+
+        self._rays_per_frame = rw * rh * self._samples_per_pixel * (self._max_bounces + 1)
 
         if self._accumulate:
             self._accum_frame += 1

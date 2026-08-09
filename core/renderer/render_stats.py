@@ -50,6 +50,7 @@ VALUE_COLORS = {
     "Res": QColor(180, 200, 255),
     "GPU": QColor(200, 200, 200),
     "GL": QColor(200, 200, 200),
+    "MRays": QColor(255, 200, 100),
 }
 
 
@@ -246,6 +247,7 @@ def collect_render_stats(engine, renderer) -> dict:
         info = getattr(ctx, 'info', None) or {}
         st['gl_renderer'] = str(info.get('GL_RENDERER', ''))
         st['gl_version'] = str(info.get('GL_VERSION', ''))
+    st['rt_rays_per_frame'] = getattr(renderer, '_rt_rays_per_frame', 0)
     st.update(collect_expensive_stats())
     return st
 
@@ -284,16 +286,20 @@ def build_stats_rows(m: dict, st: dict, timings: dict) -> list:
     if cull_total > 0:
         cull_str += f" ({100.0 * st['culled_visible'] / cull_total:.0f}%)"
     fill_mts = st['triangles'] * m['fps'] / 1e6
+    frame_kvs = [
+        ("FPS", f"{m['fps']:.1f}", "FPS"),
+        ("1%", f"{m['p1_fps']:.1f}", "1%"),
+        ("0.1%", f"{m['p01_fps']:.1f}", "0.1%"),
+        ("Min", f"{m['min_fps']:.1f}", "Min"),
+        ("CPU", f"{timings['cpu_ms']:.1f}ms", "CPU"),
+        ("GPU", f"{timings['render_ms']:.1f}ms", "GPU"),
+    ]
+    if st['rt_rays_per_frame'] > 0:
+        rt_mrays = st['rt_rays_per_frame'] * m['fps'] / 1e6
+        frame_kvs.append(("MRays", f"{rt_mrays:.1f}MR/s", "MRays"))
     return [
         ("h", "Frame"),
-        ("kv", [
-            ("FPS", f"{m['fps']:.1f}", "FPS"),
-            ("1%", f"{m['p1_fps']:.1f}", "1%"),
-            ("0.1%", f"{m['p01_fps']:.1f}", "0.1%"),
-            ("Min", f"{m['min_fps']:.1f}", "Min"),
-            ("CPU", f"{timings['cpu_ms']:.1f}ms", "CPU"),
-            ("GPU", f"{timings['render_ms']:.1f}ms", "GPU"),
-        ]),
+        ("kv", frame_kvs),
         ("h", "Timing"),
         ("kv", [
             ("Render", f"{timings['render_ms']:.2f}ms", "Render"),

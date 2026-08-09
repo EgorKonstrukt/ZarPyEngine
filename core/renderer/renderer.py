@@ -261,6 +261,7 @@ class Renderer:
         self._particle_count: int = 0
         self._culled_total: int = 0
         self._culled_visible: int = 0
+        self._rt_rays_per_frame: int = 0
         self._render_callback: Optional[Callable] = None
         self._shadow_resolution: int = 1024
         self._shadow_distance: float = 50.0
@@ -2707,7 +2708,10 @@ out vec4 frag_color;
                     if rtr._dispatch(self._ctx, viewport_w, viewport_h, view_mat, proj_mat, cam_pos, scene, self):
                         rtr.blit_to_screen(self._ctx, viewport_w, viewport_h)
                         rtr._blit_to_fbo(self._ctx, self._scene_fbo, viewport_w, viewport_h)
+                        self._rt_rays_per_frame = rtr._rays_per_frame
                     break
+            else:
+                self._rt_rays_per_frame = 0
 
         if scene:
             from core.components.rendering.environment.radiance_cascades_gi import RadianceCascadesGI
