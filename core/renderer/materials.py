@@ -198,6 +198,8 @@ class MaterialManager:
         "_Smoothness": "u_smoothness",
         "_BaseColor": "u_albedo_color",
         "_DoubleSided": "u_double_sided",
+        "_Transmission": None,
+        "_IOR": None,
     }
 
     def apply_material(self, mat: Optional[Material], prog: moderngl.Program):
@@ -240,6 +242,10 @@ class MaterialManager:
             prog["_EmissionColor"].write(zero3)
         if "_EmissionIntensity" in names:
             prog["_EmissionIntensity"].value = 0.0
+        if "_Transmission" in names:
+            prog["_Transmission"].value = 0.0
+        if "_IOR" in names:
+            prog["_IOR"].value = 1.5
         if "_NormalMap" in names:
             prog["_NormalMap"].value = 0
         if "_OcclusionMap" in names:

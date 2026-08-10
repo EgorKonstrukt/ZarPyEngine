@@ -22,7 +22,7 @@ import math
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
 _MAX_LIGHTS = 8
-_MAT_STRIDE = 17
+_MAT_STRIDE = 20
 _MAX_ALBEDO_LAYERS = 32
 
 try:
@@ -352,6 +352,8 @@ class RaytracingRenderer(Component):
         mat_np[:, 3] = 0.0
         mat_np[:, 4] = 0.5
         mat_np[:, 10] = 1.0
+        mat_np[:, 11] = 1.0
+        mat_np[:, 13] = 1.5
         mat_np[:, 9] = -1.0
 
         mmgr = getattr(renderer, '_materials', None)
@@ -378,6 +380,9 @@ class RaytracingRenderer(Component):
                     mat_np[mi, 7] = float(ec[2])
                     mat_np[mi, 8] = float(props.get("_EmissionIntensity", 0.0))
                     mat_np[mi, 10] = float(props.get("_OcclusionStrength", 1.0))
+                    mat_np[mi, 11] = float(bc[3]) if bc is not None and len(bc) > 3 else 1.0
+                    mat_np[mi, 12] = float(props.get("_Transmission", 0.0))
+                    mat_np[mi, 13] = float(props.get("_IOR", 1.5))
                     albedo_tex_path = props.get("_BaseMap")
                     if not albedo_tex_path:
                         albedo_tex_path = props.get("albedo_texture", "")

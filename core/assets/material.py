@@ -448,5 +448,15 @@ class MaterialLibrary:
     def create_default(cls) -> Material:
         m = Material("Default")
         m.shader_path = "default"
+        m.properties = {
+            "_BaseColor": [1.0, 1.0, 1.0, 1.0],
+            "_Metallic": 0.0,
+            "_Smoothness": 0.5,
+            "_EmissionColor": [0.0, 0.0, 0.0, 0.0],
+            "_EmissionIntensity": 0.0,
+            "_OcclusionStrength": 1.0,
+            "_Transmission": 0.0,
+            "_IOR": 1.5,
+        }
         cls._materials["Default"] = m
         return m

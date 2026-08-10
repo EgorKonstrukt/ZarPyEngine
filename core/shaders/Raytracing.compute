@@ -168,8 +168,9 @@ ComputeShader "Zarin/Raytracing"
         return best_t;
     }
 
-    bool trace_shadow(vec3 ro, vec3 rd, float max_dist) {
+    float trace_shadow(vec3 ro, vec3 rd, float max_dist) {
         vec3 inv_rd = 1.0 / rd;
+        float visibility = 1.0;
         for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
             int ib = inst * 46;
             vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
@@ -179,6 +180,7 @@ ComputeShader "Zarin/Raytracing"
 
             int bvh_offset = int(inst_data[ib + 32]);
             int idx_off = int(inst_data[ib + 34]);
+            int mat_idx = int(inst_data[ib + 35]);
 
             mat4 inv_wm = mat4(
                 vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
@@ -238,23 +240,33 @@ ComputeShader "Zarin/Raytracing"
                     float v = dot(lrd, q) * inv_det;
                     if (v < 0.0 || (u + v) > 1.0) continue;
                     float tt = dot(e2, q) * inv_det;
-                    if (tt > 0.0 && tt < max_dist) return true;
+                    if (tt > 0.0 && tt < max_dist) {
+                        int mb = mat_idx * 20;
+                        float shadow_alpha = mat_data[mb + 11];
+                        float shadow_trans = mat_data[mb + 12];
+                        visibility *= max(0.0, 1.0 - shadow_alpha * (1.0 - shadow_trans));
+                        if (visibility < 0.01) return 0.0;
+                        break;
+                    }
                 }
             }
         }
-        return false;
+        return visibility;
     }
 
-    float intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd,
+    float intersect_scene_internal(vec3 ro, vec3 rd, vec3 inv_rd,
                           inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
-                          inout int hit_mat) {
+                          inout int hit_mat, inout int hit_inst,
+                          int scan_inst, bool find_backface) {
         float best_t = 1e30;
         vec3 best_pos = vec3(0.0);
         vec3 best_N = vec3(0.0, 1.0, 0.0);
         vec2 best_uv = vec2(0.0);
         int best_mat = -1;
+        int best_inst = -1;
 
         for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
+            if (scan_inst >= 0 && inst != scan_inst) continue;
             int ib = inst * 46;
             vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
             vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
@@ -288,18 +300,37 @@ ComputeShader "Zarin/Raytracing"
             if (tt < best_t) {
                 best_t = tt;
                 best_mat = mat_idx;
+                best_inst = inst;
                 best_pos = (wm * vec4(lpos, 1.0)).xyz;
-                best_N = normalize(transpose(mat3(inv_wm)) * lN);
+                vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
+                if (find_backface) {
+                    best_N = (dot(wN, rd) > 0.0) ? wN : -wN;
+                } else {
+                    best_N = (dot(wN, rd) > 0.0) ? -wN : wN;
+                }
                 best_uv = luv;
             }
         }
 
-        if (dot(best_N, rd) > 0.0) best_N = -best_N;
         hit_pos = best_pos;
         hit_N = best_N;
         hit_uv = best_uv;
         hit_mat = best_mat;
+        hit_inst = best_inst;
         return best_t;
+    }
+
+    float intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd,
+                          inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
+                          inout int hit_mat, inout int hit_inst) {
+        return intersect_scene_internal(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, hit_inst, -1, false);
+    }
+
+    float intersect_exit(int inst, vec3 ro, vec3 rd, vec3 inv_rd,
+                         inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
+                         inout int hit_mat) {
+        int dummy_inst;
+        return intersect_scene_internal(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, dummy_inst, inst, true);
     }
 
     vec3 direct_light(vec3 pos, vec3 N, vec3 V, float NdotV,
@@ -339,7 +370,8 @@ ComputeShader "Zarin/Raytracing"
 
             float shadow_dist = (lt == 0) ? 1e20 : length(lpos - pos);
             vec3 shadow_ro = pos + N * 0.002;
-            if (trace_shadow(shadow_ro, light_dir, shadow_dist)) continue;
+            float shadow = trace_shadow(shadow_ro, light_dir, shadow_dist);
+            if (shadow < 0.01) continue;
 
             vec3 H = normalize(V + light_dir);
             float NdotH = dot(N, H);
@@ -352,7 +384,7 @@ ComputeShader "Zarin/Raytracing"
             vec3 kD = (1.0 - kS) * (1.0 - metallic);
             vec3 specular = (NDF * G * F) / max(4.0 * NdotV * NdotL, EPS);
             vec3 diffuse = kD * albedo * INV_PI;
-            contrib += (diffuse + specular) * radiance * NdotL * attenuation;
+            contrib += (diffuse + specular) * radiance * NdotL * attenuation * shadow;
         }
         return contrib;
     }
@@ -379,42 +411,80 @@ ComputeShader "Zarin/Raytracing"
         return normalize(tangent * local.x + refl_dir * local.y + bitangent * local.z);
     }
 
-    vec3 sample_albedo_tex(vec2 uv, int tex_layer) {
-        if (u_albedo_tex_count <= 0 || tex_layer < 0) return vec3(1.0);
+    vec4 sample_albedo_tex(vec2 uv, int tex_layer) {
+        if (u_albedo_tex_count <= 0 || tex_layer < 0) return vec4(1.0);
         float layer = clamp(float(tex_layer), 0.0, float(MAX_ALBEDO_LAYERS - 1));
-        return texture(u_albedo_array, vec3(fract(uv), layer)).rgb;
+        return texture(u_albedo_array, vec3(fract(uv), layer));
     }
 
     vec3 trace_ray(vec3 ro, vec3 rd, ivec2 pix, float fi) {
         vec3 accumulated = vec3(0.0);
         vec3 throughput = vec3(1.0);
         g_emissive = vec3(0.0);
+        int medium_inst = -1;
+        float cur_ior = 1.0;
+        vec3 entry_pos = vec3(0.0);
+        vec3 entry_albedo = vec3(1.0);
 
-        for (int bounce = 0; bounce <= u_max_bounces; bounce++) {
+        int bounce = 0;
+        int max_iters = (u_max_bounces + 1) * 6 + 16;
+
+        for (int it = 0; it < max_iters; it++) {
             vec3 hit_pos, hit_N;
             vec2 hit_uv;
             int hit_mat;
             vec3 inv_rd = 1.0 / rd;
-            float hit_t = intersect_scene(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat);
+            float hit_t;
+            int hit_inst;
+            if (medium_inst >= 0) {
+                hit_t = intersect_exit(medium_inst, ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat);
+            } else {
+                hit_t = intersect_scene(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, hit_inst);
+            }
 
             if (hit_mat < 0) {
                 accumulated += throughput * sample_sky(rd);
                 break;
             }
 
-            int mb = hit_mat * 17;
-            vec3 albedo = vec3(mat_data[mb], mat_data[mb+1], mat_data[mb+2]);
+            int mb = hit_mat * 20;
+            vec4 albedo_rgba = vec4(mat_data[mb], mat_data[mb+1], mat_data[mb+2], mat_data[mb+11]);
+            vec3 albedo = albedo_rgba.rgb;
+            float alpha = albedo_rgba.a;
             float metallic = mat_data[mb+3];
             float smoothness = mat_data[mb+4];
             vec3 emission = vec3(mat_data[mb+5], mat_data[mb+6], mat_data[mb+7]);
             float em_intensity = mat_data[mb+8];
             int albedo_tex_layer = int(mat_data[mb+9]);
             float occlusion = mat_data[mb+10];
+            float transmission = mat_data[mb+12];
+            float ior = mat_data[mb+13];
             float roughness = max(1.0 - smoothness, 0.001);
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
-            vec3 tex_albedo = sample_albedo_tex(hit_uv, albedo_tex_layer);
-            albedo *= tex_albedo;
+            vec4 tex_albedo = sample_albedo_tex(hit_uv, albedo_tex_layer);
+            albedo *= tex_albedo.rgb;
+            alpha *= tex_albedo.a;
+
+            if (medium_inst >= 0) {
+                float path_len = length(hit_pos - entry_pos);
+                vec3 absorption = exp(-path_len * max(vec3(0.01), (vec3(1.0) - entry_albedo)) * 3.0);
+                throughput *= absorption;
+                if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
+                float eta = cur_ior;
+                vec3 refract_dir = refract(rd, -hit_N, eta);
+                if (length(refract_dir) < 0.001) {
+                    rd = reflect(rd, hit_N);
+                    ro = hit_pos - hit_N * 0.002;
+                    entry_pos = hit_pos;
+                } else {
+                    rd = normalize(refract_dir);
+                    ro = hit_pos + hit_N * 0.002;
+                    medium_inst = -1;
+                    cur_ior = 1.0;
+                }
+                continue;
+            }
 
             if (em_intensity > EPS) {
                 vec3 em = throughput * emission * em_intensity;
@@ -436,14 +506,45 @@ ComputeShader "Zarin/Raytracing"
 
             accumulated += throughput * diff_w * albedo * sample_sky(hit_N) * occlusion;
 
-            vec3 reflect_dir = reflect(rd, hit_N);
-            reflect_dir = _scatter_dir(reflect_dir, hit_N, roughness, pix, float(bounce), fi);
-            ro = hit_pos + hit_N * 0.001;
-            rd = normalize(reflect_dir);
-
-            throughput *= mix(vec3(spec_w), albedo * spec_w, metallic);
+            float transmittance = 1.0 - alpha * (1.0 - transmission);
+            float h = _hash(pix + vec2(fi * 91.7 + float(bounce) * 13.1, fi * 53.3 + float(bounce) * 27.7));
+            if (transmittance > 0.02) {
+                float fresnel = pow(1.0 - NdotV, 5.0);
+                float refract_prob = transmittance * (1.0 - fresnel);
+                if (h < refract_prob) {
+                    float eta = 1.0 / ior;
+                    vec3 refract_dir = refract(rd, hit_N, eta);
+                    if (length(refract_dir) < 0.001) {
+                        vec3 refl_dir = _scatter_dir(reflect(rd, hit_N), hit_N, roughness, pix, float(bounce), fi);
+                        ro = hit_pos + hit_N * 0.002;
+                        rd = normalize(refl_dir);
+                        throughput *= mix(vec3(spec_w), albedo * spec_w, metallic);
+                    } else {
+                        refract_dir = _scatter_dir(refract_dir, hit_N, roughness, pix, float(bounce), fi);
+                        ro = hit_pos - hit_N * 0.002;
+                        rd = normalize(refract_dir);
+                        medium_inst = hit_inst;
+                        cur_ior = ior;
+                        entry_pos = hit_pos;
+                        entry_albedo = albedo;
+                        if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
+                        continue;
+                    }
+                } else {
+                    vec3 reflect_dir = _scatter_dir(reflect(rd, hit_N), hit_N, roughness, pix, float(bounce), fi);
+                    ro = hit_pos + hit_N * 0.002;
+                    rd = normalize(reflect_dir);
+                    throughput *= mix(vec3(spec_w), albedo * spec_w, metallic);
+                }
+            } else {
+                vec3 reflect_dir = _scatter_dir(reflect(rd, hit_N), hit_N, roughness, pix, float(bounce), fi);
+                ro = hit_pos + hit_N * 0.002;
+                rd = normalize(reflect_dir);
+                throughput *= mix(vec3(spec_w), albedo * spec_w, metallic);
+            }
 
             if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
+            bounce++;
         }
         return accumulated;
     }

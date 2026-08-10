@@ -34,6 +34,8 @@ Shader "Zarin/PBR"
         _SubsurfaceAmount("Subsurface Amount", Range(0, 1)) = 0
         _ThinFilmThickness("Thin Film Thickness", Range(0, 600)) = 0
         _ThinFilmIntensity("Thin Film Intensity", Range(0, 1)) = 0
+        _Transmission("Transmission", Range(0, 1)) = 0
+        _IOR("IOR", Range(1.0, 3.0)) = 1.5
         _double_sided("Double Sided", Range(0, 1)) = 0
     }
 
@@ -146,6 +148,8 @@ Shader "Zarin/PBR"
             uniform float _SubsurfaceAmount;
             uniform float _ThinFilmThickness;
             uniform float _ThinFilmIntensity;
+            uniform float _Transmission;
+            uniform float _IOR;
             uniform int u_double_sided;
 
             uniform vec3 u_camera_pos;
