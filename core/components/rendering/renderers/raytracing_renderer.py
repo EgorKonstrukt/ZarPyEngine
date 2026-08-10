@@ -254,7 +254,9 @@ class RaytracingRenderer(Component):
             vert8[:, 3:6] = norms.reshape(-1, 3)
         else:
             f0 = verts3[0::3]; f1 = verts3[1::3]; f2 = verts3[2::3]
-            face_norms = np.cross(f1 - f0, f2 - f0)
+            e1 = f1 - f0
+            e2 = f2 - f0
+            face_norms = np.cross(e1, e2)
             fn_len = np.linalg.norm(face_norms, axis=1, keepdims=True)
             fn_len[fn_len == 0] = 1
             vert8[:, 3:6] = np.repeat(face_norms / fn_len, 3, axis=0)
@@ -416,30 +418,33 @@ class RaytracingRenderer(Component):
         inv_wm_list = np.linalg.inv(wm_list)
 
         inst_np = np.empty((n_inst, _INST_STRIDE), dtype=np.float32)
-        for i in range(n_inst):
-            _wm, mat_path, _mesh, _bvh = instances[i]
-            w = wm_list[i]
-            inv_w = inv_wm_list[i]
-            inst_np[i, :16] = Mat4(w).to_f32()
-            inst_np[i, 16:32] = Mat4(inv_w).to_f32()
+        wm_f32 = np.array([Mat4(w).to_f32() for w in wm_list])
+        inv_w_f32 = np.array([Mat4(w).to_f32() for w in inv_wm_list])
+        inst_np[:, :16] = wm_f32.reshape(n_inst, 16)
+        inst_np[:, 16:32] = inv_w_f32.reshape(n_inst, 16)
 
-            vo, io, bo, nn, nt = offsets[i]
-            inst_np[i, 32] = float(bo + nn - 1)
-            inst_np[i, 33] = float(vo)
-            inst_np[i, 34] = float(io)
-            inst_np[i, 35] = float(material_map.get(mat_path, 0))
-            inst_np[i, 36] = float(nt)
-            inst_np[i, 37] = float(nn)
+        _bvh_roots = np.array([float(offsets[i][2] + offsets[i][3] - 1) for i in range(n_inst)])
+        _vert_offs = np.array([float(offsets[i][0]) for i in range(n_inst)])
+        _idx_offs = np.array([float(offsets[i][1]) for i in range(n_inst)])
+        _mat_idxs = np.array([float(material_map.get(instances[i][1], 0)) for i in range(n_inst)])
+        _tri_counts = np.array([float(offsets[i][4]) for i in range(n_inst)])
+        _node_counts = np.array([float(offsets[i][3]) for i in range(n_inst)])
+        inst_np[:, 32] = _bvh_roots
+        inst_np[:, 33] = _vert_offs
+        inst_np[:, 34] = _idx_offs
+        inst_np[:, 35] = _mat_idxs
+        inst_np[:, 36] = _tri_counts
+        inst_np[:, 37] = _node_counts
 
-            lbmin = geo_entries[i][8]
-            lbmax = geo_entries[i][9]
-            center = (lbmin + lbmax) * 0.5
-            extent = (lbmax - lbmin) * 0.5
-            r3 = w[:3, :3]
-            wcenter = center @ r3 + w[3, :3]
-            wextent = extent @ np.abs(r3)
-            inst_np[i, 38:41] = wcenter - wextent
-            inst_np[i, 41:44] = wcenter + wextent
+        lbmins = np.array([geo_entries[i][8] for i in range(n_inst)])
+        lbmaxs = np.array([geo_entries[i][9] for i in range(n_inst)])
+        centers = (lbmins + lbmaxs) * 0.5
+        extents = (lbmaxs - lbmins) * 0.5
+        r3 = wm_list[:, :3, :3]
+        wcenters = np.einsum('ij,ikj->ik', centers, r3) + wm_list[:, 3, :3]
+        wextents = np.einsum('ij,ikj->ik', extents, np.abs(r3))
+        inst_np[:, 38:41] = wcenters - wextents
+        inst_np[:, 41:44] = wcenters + wextents
 
         self._inst_np = inst_np
 
@@ -473,8 +478,8 @@ class RaytracingRenderer(Component):
             ])
         n_lights = min(len(lights_list), _MAX_LIGHTS)
         light_np = np.zeros((max(n_lights, 1), 14), dtype=np.float32)
-        for i in range(n_lights):
-            light_np[i] = lights_list[i]
+        if n_lights > 0:
+            light_np[:n_lights] = np.array(lights_list[:n_lights], dtype=np.float32)
         self._light_np = light_np
 
         if self._geo_dirty:

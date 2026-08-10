@@ -200,54 +200,42 @@ class BVH:
                     bin_idx = np.floor((cent_vals - c_bmin[axis]) * scale).astype(np.intp)
                     bin_idx = np.clip(bin_idx, 0, bins - 1)
 
+                    bin_cnt = np.bincount(bin_idx, minlength=bins).astype(np.intp)
+                    sort_idx = np.argsort(bin_idx, kind='stable')
+                    sorted_bin = bin_idx[sort_idx]
+                    sorted_tris = tris[sort_idx]
+                    tri_bm = self._tri_bmin[sorted_tris]
+                    tri_bx = self._tri_bmax[sorted_tris]
+                    boundaries = np.searchsorted(sorted_bin, np.arange(bins))
                     bin_bmin = np.full((bins, 3), 1e30, dtype=np.float32)
                     bin_bmax = np.full((bins, 3), -1e30, dtype=np.float32)
-                    bin_cnt = np.zeros(bins, dtype=np.intp)
-
                     for bi in range(bins):
-                        mask = bin_idx == bi
-                        cnt = mask.sum()
-                        if cnt:
-                            bin_cnt[bi] = cnt
-                            tris_bi = tris[mask]
-                            bin_bmin[bi] = self._tri_bmin[tris_bi].min(axis=0)
-                            bin_bmax[bi] = self._tri_bmax[tris_bi].max(axis=0)
+                        s = boundaries[bi]
+                        e = boundaries[bi + 1] if bi + 1 < bins else n
+                        if s < e:
+                            bin_bmin[bi] = tri_bm[s:e].min(axis=0)
+                            bin_bmax[bi] = tri_bx[s:e].max(axis=0)
 
-                    left_sa = np.empty(bins - 1, dtype=np.float32)
-                    left_cnt = np.empty(bins - 1, dtype=np.intp)
-                    pmin = np.full(3, 1e30, dtype=np.float32)
-                    pmax = np.full(3, -1e30, dtype=np.float32)
-                    pc = 0
-                    for i in range(bins - 1):
-                        if bin_cnt[i]:
-                            pmin = np.minimum(pmin, bin_bmin[i])
-                            pmax = np.maximum(pmax, bin_bmax[i])
-                            pc += bin_cnt[i]
-                        left_sa[i] = _surface_area(pmin, pmax)
-                        left_cnt[i] = pc
-
-                    right_sa = np.empty(bins - 1, dtype=np.float32)
-                    right_cnt = np.empty(bins - 1, dtype=np.intp)
-                    smin = np.full(3, 1e30, dtype=np.float32)
-                    smax = np.full(3, -1e30, dtype=np.float32)
-                    sc = 0
-                    for i in range(bins - 2, -1, -1):
-                        bi = i + 1
-                        if bin_cnt[bi]:
-                            smin = np.minimum(smin, bin_bmin[bi])
-                            smax = np.maximum(smax, bin_bmax[bi])
-                            sc += bin_cnt[bi]
-                        right_sa[i] = _surface_area(smin, smax)
-                        right_cnt[i] = sc
-
-                    for i in range(bins - 1):
-                        if left_cnt[i] == 0 or right_cnt[i] == 0:
-                            continue
-                        cost = _SAH_TRAV + (left_sa[i] * left_cnt[i] + right_sa[i] * right_cnt[i]) / parent_sa
-                        if cost < best_cost:
-                            best_cost = cost
-                            best_axis = axis
-                            best_split = c_bmin[axis] + (i + 1) * c_range[axis] / bins
+                    left_cs = np.cumsum(bin_cnt[:-1])
+                    right_cs = n - left_cs
+                    valid = (left_cs > 0) & (right_cs > 0)
+                    pmin_acc = np.minimum.accumulate(bin_bmin[:-1], axis=0)
+                    pmax_acc = np.maximum.accumulate(bin_bmax[:-1], axis=0)
+                    d_l = pmax_acc - pmin_acc
+                    left_sa_arr = 2.0 * (d_l[:, 0] * d_l[:, 1] + d_l[:, 0] * d_l[:, 2] + d_l[:, 1] * d_l[:, 2])
+                    left_cost = left_sa_arr * left_cs
+                    smin_rev = np.minimum.accumulate(bin_bmin[:0:-1], axis=0)[::-1]
+                    smax_rev = np.maximum.accumulate(bin_bmax[:0:-1], axis=0)[::-1]
+                    d_r = smax_rev - smin_rev
+                    right_sa_arr = 2.0 * (d_r[:, 0] * d_r[:, 1] + d_r[:, 0] * d_r[:, 2] + d_r[:, 1] * d_r[:, 2])
+                    right_cost = right_sa_arr * right_cs
+                    costs = np.full(bins - 1, np.inf, dtype=np.float64)
+                    costs[valid] = _SAH_TRAV + (left_cost[valid] + right_cost[valid]) / parent_sa
+                    i_best = np.argmin(costs)
+                    if costs[i_best] < best_cost:
+                        best_cost = costs[i_best]
+                        best_axis = axis
+                        best_split = c_bmin[axis] + (i_best + 1) * c_range[axis] / bins
 
                 leaf_cost = n * _SAH_HIT
                 if best_axis < 0 or best_cost >= leaf_cost:

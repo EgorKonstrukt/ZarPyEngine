@@ -99,13 +99,20 @@ ComputeShader "Zarin/Raytracing"
     float intersect_bvh(vec3 ro, vec3 rd, vec3 inv_d, int bvh_offset, int idx_offset,
                         inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv) {
         if (bvh_offset < 0) return 1e30;
-        int stack[64];
+        int stack_n[64];
+        float stack_t[64];
         int sp = 0;
-        stack[sp++] = bvh_offset;
+        stack_n[sp] = bvh_offset;
+        stack_t[sp] = 0.0;
+        sp++;
         float best_t = 1e30;
 
         while (sp > 0) {
-            int ni = stack[--sp];
+            sp--;
+            int ni = stack_n[sp];
+            float ni_t = stack_t[sp];
+            if (ni_t >= best_t) continue;
+
             int base = ni * 8;
             int left_or_start = int(bvh_nodes[base + 6]);
             int right_or_count = int(bvh_nodes[base + 7]);
@@ -120,24 +127,19 @@ ComputeShader "Zarin/Raytracing"
                 bool rhit = rt >= 0.0 && rt < best_t;
                 if (lhit && rhit) {
                     if (lt < rt) {
-                        stack[sp++] = right_or_count;
-                        stack[sp++] = left_or_start;
+                        stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
+                        stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
                     } else {
-                        stack[sp++] = left_or_start;
-                        stack[sp++] = right_or_count;
+                        stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
+                        stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
                     }
                 } else if (lhit) {
-                    stack[sp++] = left_or_start;
+                    stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
                 } else if (rhit) {
-                    stack[sp++] = right_or_count;
+                    stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
                 }
                 continue;
             }
-
-            vec3 bmin = vec3(bvh_nodes[base], bvh_nodes[base + 1], bvh_nodes[base + 2]);
-            vec3 bmax = vec3(bvh_nodes[base + 3], bvh_nodes[base + 4], bvh_nodes[base + 5]);
-            float aabb_t = ray_aabb_min(ro, inv_d, bmin, bmax);
-            if (aabb_t < 0.0 || aabb_t >= best_t) continue;
 
             int tri_end = left_or_start + (-right_or_count - 1);
             for (int ti = left_or_start; ti < tri_end; ti++) {
@@ -213,11 +215,18 @@ ComputeShader "Zarin/Raytracing"
             vec3 inv_lrd = 1.0 / lrd;
 
             if (bvh_offset < 0) continue;
-            int stack[32];
+            int stack_n[32];
+            float stack_t[32];
             int sp = 0;
-            stack[sp++] = bvh_offset;
+            stack_n[sp] = bvh_offset;
+            stack_t[sp] = 0.0;
+            sp++;
             while (sp > 0) {
-                int ni = stack[--sp];
+                sp--;
+                int ni = stack_n[sp];
+                float ni_t = stack_t[sp];
+                if (ni_t >= max_dist) continue;
+
                 int base = ni * 8;
                 int left_or_start = int(bvh_nodes[base + 6]);
                 int right_or_count = int(bvh_nodes[base + 7]);
@@ -228,15 +237,10 @@ ComputeShader "Zarin/Raytracing"
                                             vec3(bvh_nodes[lbase + 3], bvh_nodes[lbase + 4], bvh_nodes[lbase + 5]));
                     float rt = ray_aabb_min(lro, inv_lrd, vec3(bvh_nodes[rbase], bvh_nodes[rbase + 1], bvh_nodes[rbase + 2]),
                                             vec3(bvh_nodes[rbase + 3], bvh_nodes[rbase + 4], bvh_nodes[rbase + 5]));
-                    if (lt >= 0.0 && lt < max_dist) stack[sp++] = left_or_start;
-                    if (rt >= 0.0 && rt < max_dist) stack[sp++] = right_or_count;
+                    if (lt >= 0.0 && lt < max_dist) { stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++; }
+                    if (rt >= 0.0 && rt < max_dist) { stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++; }
                     continue;
                 }
-
-                vec3 bmin = vec3(bvh_nodes[base], bvh_nodes[base + 1], bvh_nodes[base + 2]);
-                vec3 bmax = vec3(bvh_nodes[base + 3], bvh_nodes[base + 4], bvh_nodes[base + 5]);
-                float box_t = ray_aabb_min(lro, inv_lrd, bmin, bmax);
-                if (box_t < 0.0 || box_t >= max_dist) continue;
 
                 int tri_end = left_or_start + (-right_or_count - 1);
                 for (int ti = left_or_start; ti < tri_end; ti++) {
@@ -433,7 +437,7 @@ ComputeShader "Zarin/Raytracing"
         vec3 tangent = normalize(cross(up, refl_dir));
         vec3 bitangent = cross(refl_dir, tangent);
         vec3 local = vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
-        return normalize(tangent * local.x + refl_dir * local.y + bitangent * local.z);
+        return tangent * local.x + refl_dir * local.y + bitangent * local.z;
     }
 
     vec4 sample_albedo_tex(vec2 uv, int tex_layer) {
