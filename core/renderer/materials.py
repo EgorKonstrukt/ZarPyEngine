@@ -34,6 +34,7 @@ class MaterialManager:
         self._ctx = ctx
         self._material_cache: dict[str, Material] = {}
         self._prog_uniform_names: dict[int, frozenset] = {}
+        self._prog_tex_active_names: dict[int, dict] = {}
         self._texture_cache: dict[str, Any] = {}
         self._pending_texture_queue: list = []
         self._async_lock = None
@@ -260,6 +261,7 @@ class MaterialManager:
         props = mat.properties
         tex_unit = 0
         tex_uniform_map = self._TEX_UNIFORM_MAP
+        active_names = self._prog_tex_active_names.setdefault(id(prog), {})
         for key, value in props.items():
             if isinstance(value, str):
                 tex_name = tex_uniform_map.get(key, key)
@@ -271,9 +273,12 @@ class MaterialManager:
                         prog[tex_name].value = tex_unit
                         tex_unit += 1
                 tex_active = 1 if tex else 0
-                for aname in (f"{tex_name}_Active", f"u_use_{tex_name[2:]}" if tex_name.startswith("u_") else None):
-                    if aname and aname in names:
-                        prog[aname].value = tex_active
+                candidates = active_names.get(tex_name)
+                if candidates is None:
+                    candidates = [n for n in (f"{tex_name}_Active", f"u_use_{tex_name[2:]}" if tex_name.startswith("u_") else None) if n and n in names]
+                    active_names[tex_name] = candidates
+                for aname in candidates:
+                    prog[aname].value = tex_active
                 continue
             if key in names:
                 self._set_uniform_value(prog, key, value)

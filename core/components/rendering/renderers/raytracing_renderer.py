@@ -101,6 +101,11 @@ class RaytracingRenderer(Component):
         self._prev_height: int = 0
         self._rays_per_frame: int = 0
 
+        self._mesh_geo_cache: dict[int, tuple] = {}
+        self._geo_signature: Optional[tuple] = None
+        self._geo_offsets: list = []
+        self._geo_dirty: bool = True
+
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
@@ -237,23 +242,75 @@ class RaytracingRenderer(Component):
 
         return True
 
+    def _build_mesh_geo(self, mesh, bvh) -> tuple:
+        verts3 = mesh.vertices.reshape(-1, 3)
+        idxs = mesh.indices.reshape(-1, 3)
+        nv = verts3.shape[0]
+        nt = idxs.shape[0]
+        vert8 = np.zeros((nv, 8), dtype=np.float32)
+        vert8[:, :3] = verts3
+        norms = getattr(mesh, 'normals', None)
+        if norms is not None and norms.shape[0] == nv * 3:
+            vert8[:, 3:6] = norms.reshape(-1, 3)
+        else:
+            f0 = verts3[0::3]; f1 = verts3[1::3]; f2 = verts3[2::3]
+            face_norms = np.cross(f1 - f0, f2 - f0)
+            fn_len = np.linalg.norm(face_norms, axis=1, keepdims=True)
+            fn_len[fn_len == 0] = 1
+            vert8[:, 3:6] = np.repeat(face_norms / fn_len, 3, axis=0)
+        uvs = getattr(mesh, 'uvs', None)
+        if uvs is not None and len(uvs) >= nv * 2:
+            vert8[:, 6:8] = uvs.reshape(-1, 2)[:nv]
+        if bvh.tri_indices is not None and len(bvh.tri_indices) == nt:
+            idx_local = idxs[bvh.tri_indices].astype(np.uint32, copy=False)
+        else:
+            idx_local = idxs.astype(np.uint32, copy=False)
+        bvh_flat = np.asarray(bvh.flatten_for_gpu(), dtype=np.float32)
+        nn = bvh_flat.shape[0]
+        internal_mask = bvh_flat[:, 7] >= 0
+        root = bvh.nodes[-1]
+        lbmin = np.asarray(root.bmin, dtype=np.float32)
+        lbmax = np.asarray(root.bmax, dtype=np.float32)
+        return vert8, idx_local, bvh_flat, internal_mask, nn, nt, nv, bvh, lbmin, lbmax
+
+    def _rebuild_geometry_buffers(self, geo_entries: list) -> None:
+        total_v = sum(g[6] for g in geo_entries)
+        total_t = sum(g[5] for g in geo_entries)
+        total_n = sum(g[4] for g in geo_entries)
+        vert_np = np.empty((total_v, 8), dtype=np.float32)
+        idx_np = np.empty((total_t, 3), dtype=np.uint32)
+        bvh_np = np.empty((total_n, 8), dtype=np.float32)
+        offsets = []
+        vo, io, bo = 0, 0, 0
+        for vert8, idx_local, bvh_flat, internal_mask, nn, nt, nv, _bvh, _lbmin, _lbmax in geo_entries:
+            vert_np[vo:vo + nv] = vert8
+            idx_np[io:io + nt] = idx_local + vo
+            if bo > 0 and nn > 0 and internal_mask.any():
+                blk = bvh_flat.copy()
+                blk[internal_mask, 6] += bo
+                blk[internal_mask, 7] += bo
+            else:
+                blk = bvh_flat
+            bvh_np[bo:bo + nn] = blk
+            offsets.append((vo, io, bo, nn, nt))
+            vo += nv; io += nt; bo += nn
+        self._vert_np = vert_np
+        self._idx_np = idx_np.reshape(-1)
+        self._bvh_np = bvh_np.reshape(-1)
+        self._geo_offsets = offsets
+        self._geo_dirty = True
+
     def _collect_and_upload(self, ctx: moderngl.Context, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                             renderer):
         from core.spatial.bvh import get_mesh_bvh
 
         instances = []
-        meshes = []
         material_map = {}
-        cum_verts = 0
-        cum_tris = 0
-        cum_bvh_nodes = 0
-        all_verts = []
-        all_idxs = []
-        all_bvhs = []
-        bvh_node_counts = []
 
         mf_list = scene.get_entities_with_component(MeshFilter)
         for ent in mf_list:
+            if len(instances) >= _MAX_INSTANCES:
+                break
             mr = ent.get_component(MeshRenderer)
             tr = ent.transform
             if not tr or not mr or not mr.enabled:
@@ -276,75 +333,38 @@ class RaytracingRenderer(Component):
             if not bvh or not bvh.nodes:
                 continue
 
-            verts3 = mesh.vertices.reshape(-1, 3)
-            idxs = mesh.indices.reshape(-1, 3)
-            tri_count = idxs.shape[0]
-
-            mat_idx = 0
             mat_path = mr.get_material_path(0)
-            if mat_path:
-                if mat_path not in material_map:
-                    material_map[mat_path] = len(material_map)
-                mat_idx = material_map[mat_path]
+            if mat_path and mat_path not in material_map:
+                material_map[mat_path] = len(material_map)
 
-            meshes.append(mesh)
-            all_verts.append(verts3)
-            all_idxs.append(idxs)
-            all_bvhs.append(bvh)
-            bvh_node_counts.append(bvh.node_count())
-            instances.append((ent, tr, Mat4(tr.world_matrix._d), mat_path, mesh_name))
-            cum_verts += verts3.shape[0]
-            cum_tris += tri_count
-            cum_bvh_nodes += bvh.node_count()
+            instances.append((Mat4(tr.world_matrix._d), mat_path, mesh, bvh))
 
         if not instances:
             return False
 
         n_inst = len(instances)
-        total_verts = cum_verts
-        total_tris = cum_tris
-        total_bvh_nodes = cum_bvh_nodes
+        geo_entries = []
+        sig_parts = []
+        cache = self._mesh_geo_cache
+        for _wm, _mat_path, mesh, bvh in instances:
+            key = id(mesh)
+            geo = cache.get(key)
+            if geo is None or geo[7] is not bvh:
+                geo = self._build_mesh_geo(mesh, bvh)
+                cache[key] = geo
+            geo_entries.append(geo)
+            sig_parts.append(key)
+        signature = tuple(sig_parts)
 
-        vert_np = np.empty((total_verts, 8), dtype=np.float32)
-        idx_np = np.empty((total_tris, 3), dtype=np.uint32)
-        bvh_np = np.empty((total_bvh_nodes, 8), dtype=np.float32)
+        if signature != self._geo_signature:
+            self._rebuild_geometry_buffers(geo_entries)
+            self._geo_signature = signature
+            if len(cache) > max(64, n_inst * 4):
+                active = set(sig_parts)
+                for stale_key in [k for k in cache if k not in active]:
+                    del cache[stale_key]
 
-        vo, io, bo = 0, 0, 0
-        for i, (verts3, idxs, bvh) in enumerate(zip(all_verts, all_idxs, all_bvhs)):
-            nv = verts3.shape[0]
-            nt = idxs.shape[0]
-            nn = bvh.node_count()
-            vert_np[vo:vo + nv, :3] = verts3
-            m = meshes[i]
-            norms = getattr(m, 'normals', None)
-            if norms is not None and norms.shape[0] == nv * 3:
-                vert_np[vo:vo + nv, 3:6] = norms.reshape(-1, 3)
-            else:
-                f0 = verts3[0::3]; f1 = verts3[1::3]; f2 = verts3[2::3]
-                face_norms = np.cross(f1 - f0, f2 - f0)
-                fn_len = np.linalg.norm(face_norms, axis=1, keepdims=True)
-                fn_len[fn_len == 0] = 1
-                vert_np[vo:vo + nv, 3:6] = np.repeat(face_norms / fn_len, 3, axis=0)
-            uvs = getattr(m, 'uvs', None)
-            if uvs is not None and len(uvs) >= nv * 2:
-                vert_np[vo:vo + nv, 6:8] = uvs.reshape(-1, 2)[:nv]
-            if bvh.tri_indices is not None and len(bvh.tri_indices) == nt:
-                idx_np[io:io + nt] = idxs[bvh.tri_indices] + vo
-            else:
-                idx_np[io:io + nt] = idxs + vo
-            bvh_flat = bvh.flatten_for_gpu()
-            if bo > 0 and nn > 0:
-                internal = bvh_flat[:, 7] >= 0
-                if np.any(internal):
-                    bvh_flat = bvh_flat.copy()
-                    bvh_flat[internal, 6] += bo
-                    bvh_flat[internal, 7] += bo
-            bvh_np[bo:bo + nn] = bvh_flat
-            vo += nv; io += nt; bo += nn
-
-        self._vert_np = vert_np
-        self._idx_np = idx_np.reshape(-1)
-        self._bvh_np = bvh_np.reshape(-1)
+        offsets = self._geo_offsets
 
         n_mats = max(len(material_map), 1)
         mat_np = np.zeros((n_mats, _MAT_STRIDE), dtype=np.float32)
@@ -392,59 +412,42 @@ class RaytracingRenderer(Component):
                             mat_np[mi, 9] = float(layer)
         self._mat_np = mat_np
 
-        wm_list = np.array([wm._d for _, _, wm, _, _ in instances])
+        wm_list = np.array([wm._d for wm, _, _, _ in instances])
         inv_wm_list = np.linalg.inv(wm_list)
 
         inst_np = np.empty((n_inst, _INST_STRIDE), dtype=np.float32)
-        vert_offset = 0
-        idx_offset = 0
-        bvh_offset = 0
-        for i, (ent, tr, wm, mat_path, _) in enumerate(instances):
+        for i in range(n_inst):
+            _wm, mat_path, _mesh, _bvh = instances[i]
             w = wm_list[i]
             inv_w = inv_wm_list[i]
             inst_np[i, :16] = Mat4(w).to_f32()
             inst_np[i, 16:32] = Mat4(inv_w).to_f32()
-            nc = bvh_node_counts[i]
-            inst_np[i, 32] = float(bvh_offset + nc - 1)
-            inst_np[i, 33] = float(vert_offset)
-            inst_np[i, 34] = float(idx_offset)
+
+            vo, io, bo, nn, nt = offsets[i]
+            inst_np[i, 32] = float(bo + nn - 1)
+            inst_np[i, 33] = float(vo)
+            inst_np[i, 34] = float(io)
             inst_np[i, 35] = float(material_map.get(mat_path, 0))
-            inst_np[i, 36] = float(all_idxs[i].shape[0])
-            inst_np[i, 37] = float(nc)
+            inst_np[i, 36] = float(nt)
+            inst_np[i, 37] = float(nn)
 
-            bvh = all_bvhs[i]
-            root_nodes = bvh.nodes if bvh else []
-            if root_nodes:
-                root = root_nodes[-1]
-                lbmin = root.bmin
-                lbmax = root.bmax
-                corners = np.array([
-                    [lbmin[0], lbmin[1], lbmin[2], 1.0],
-                    [lbmax[0], lbmin[1], lbmin[2], 1.0],
-                    [lbmin[0], lbmax[1], lbmin[2], 1.0],
-                    [lbmax[0], lbmax[1], lbmin[2], 1.0],
-                    [lbmin[0], lbmin[1], lbmax[2], 1.0],
-                    [lbmax[0], lbmin[1], lbmax[2], 1.0],
-                    [lbmin[0], lbmax[1], lbmax[2], 1.0],
-                    [lbmax[0], lbmax[1], lbmax[2], 1.0],
-                ], dtype=np.float32)
-                wc = corners @ w
-                wbmin = wc[:, :3].min(axis=0)
-                wbmax = wc[:, :3].max(axis=0)
-                inst_np[i, 38:41] = wbmin
-                inst_np[i, 41:44] = wbmax
-            else:
-                inst_np[i, 38:44] = -1e30, -1e30, -1e30, 1e30, 1e30, 1e30
-
-            bvh_offset += nc
-            vert_offset += int(all_verts[i].shape[0])
-            idx_offset += int(all_idxs[i].shape[0])
+            lbmin = geo_entries[i][8]
+            lbmax = geo_entries[i][9]
+            center = (lbmin + lbmax) * 0.5
+            extent = (lbmax - lbmin) * 0.5
+            r3 = w[:3, :3]
+            wcenter = center @ r3 + w[3, :3]
+            wextent = extent @ np.abs(r3)
+            inst_np[i, 38:41] = wcenter - wextent
+            inst_np[i, 41:44] = wcenter + wextent
 
         self._inst_np = inst_np
 
         lights_list = []
         lights_ents = scene.get_entities_with_component(Light)
         for ent in lights_ents:
+            if len(lights_list) >= _MAX_LIGHTS:
+                break
             if not ent.active:
                 continue
             l = ent.get_component(Light)
@@ -474,25 +477,27 @@ class RaytracingRenderer(Component):
             light_np[i] = lights_list[i]
         self._light_np = light_np
 
-        def _upload_or_realloc(buf_attr, data):
-            buf = getattr(self, buf_attr)
-            nbytes = data.nbytes
-            if buf is None or nbytes > buf.size:
-                if buf:
-                    buf.release()
-                nbuf = ctx.buffer(data.tobytes())
-                setattr(self, buf_attr, nbuf)
-            else:
-                buf.write(data.tobytes())
-
-        _upload_or_realloc('_bvh_buf', self._bvh_np)
-        _upload_or_realloc('_vert_buf', self._vert_np)
-        _upload_or_realloc('_idx_buf', self._idx_np)
-        _upload_or_realloc('_mat_buf', self._mat_np)
-        _upload_or_realloc('_inst_buf', self._inst_np)
-        _upload_or_realloc('_light_buf', self._light_np)
+        if self._geo_dirty:
+            self._upload_or_realloc(ctx, '_bvh_buf', self._bvh_np)
+            self._upload_or_realloc(ctx, '_vert_buf', self._vert_np)
+            self._upload_or_realloc(ctx, '_idx_buf', self._idx_np)
+            self._geo_dirty = False
+        self._upload_or_realloc(ctx, '_mat_buf', self._mat_np)
+        self._upload_or_realloc(ctx, '_inst_buf', self._inst_np)
+        self._upload_or_realloc(ctx, '_light_buf', self._light_np)
 
         return True
+
+    def _upload_or_realloc(self, ctx: moderngl.Context, buf_attr: str, data: np.ndarray) -> None:
+        buf = getattr(self, buf_attr)
+        nbytes = data.nbytes
+        if buf is None or nbytes > buf.size:
+            if buf:
+                buf.release()
+            nbuf = ctx.buffer(data, dynamic=True)
+            setattr(self, buf_attr, nbuf)
+        else:
+            buf.write(data)
 
     def _dispatch(self, ctx: moderngl.Context, width: int, height: int,
                   view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3, scene, renderer) -> bool:
@@ -705,3 +710,7 @@ class RaytracingRenderer(Component):
             self._albedo_array_tex = None
         self._albedo_tex_map.clear()
         self._albedo_count = 0
+        self._mesh_geo_cache.clear()
+        self._geo_signature = None
+        self._geo_offsets = []
+        self._geo_dirty = True
