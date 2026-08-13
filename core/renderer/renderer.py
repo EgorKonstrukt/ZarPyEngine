@@ -293,6 +293,9 @@ class Renderer:
         self._pp_fbo_size: tuple = (0, 0)
         self._pp_copy_prog: Optional[moderngl.Program] = None
         self._pp_copy_vao: Optional[moderngl.VertexArray] = None
+        self._pp_tonemap_prog: Optional[moderngl.Program] = None
+        self._pp_tonemap_vao: Optional[moderngl.VertexArray] = None
+        self._exposure: float = 0.0
 
         self._se_fbo_a: Optional[moderngl.Framebuffer] = None
         self._se_fbo_b: Optional[moderngl.Framebuffer] = None
@@ -366,6 +369,7 @@ class Renderer:
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
         self._render_scale = config.get("rendering.render_scale", self._render_scale)
+        self._exposure = config.get("rendering.exposure", self._exposure)
         self._line_width = config.get("gizmo.line_width", self._line_width)
 
     def initialize(self):
@@ -445,12 +449,42 @@ void main() {
                 vertex_shader=read_shader("shadow_overlay.vert"),
                 fragment_shader=PP_COPY_FRAG
             )
+            PP_TONEMAP_FRAG = """
+#version 460 core
+uniform sampler2D u_input_tex;
+uniform float u_exposure;
+in vec2 v_uv;
+out vec4 frag_color;
+vec3 tonemap_aces(vec3 c) {
+    float a = 2.51;
+    float b = 0.03;
+    float c_ = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((c * (a * c + b)) / (c * (c_ * c + d) + e), 0.0, 1.0);
+}
+void main() {
+    vec3 color = texture(u_input_tex, v_uv).rgb;
+    color *= exp2(u_exposure);
+    color = tonemap_aces(color);
+    frag_color = vec4(color, 1.0);
+}
+"""
+            self._pp_tonemap_prog = self._ctx.program(
+                vertex_shader=read_shader("shadow_overlay.vert"),
+                fragment_shader=PP_TONEMAP_FRAG
+            )
             quad_verts = np.array([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0], dtype=np.float32)
             quad_indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.int32)
             self._quad_vbo = self._ctx.buffer(quad_verts.tobytes())
             self._quad_ibo = self._ctx.buffer(quad_indices.tobytes())
             self._pp_copy_vao = self._ctx.vertex_array(
                 self._pp_copy_prog,
+                [(self._quad_vbo, '2f', 'in_position')],
+                self._quad_ibo
+            )
+            self._pp_tonemap_vao = self._ctx.vertex_array(
+                self._pp_tonemap_prog,
                 [(self._quad_vbo, '2f', 'in_position')],
                 self._quad_ibo
             )
@@ -1010,7 +1044,7 @@ out vec4 frag_color;
         if self._scene_fbo_size == (w, h) and self._scene_fbo:
             return
         self._release_scene_fbo()
-        self._scene_color_tex = self._ctx.texture((w, h), 4, dtype='f1')
+        self._scene_color_tex = self._ctx.texture((w, h), 4, dtype='f2')
         self._scene_color_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._scene_depth_tex = self._ctx.depth_texture((w, h))
         self._scene_fbo = self._ctx.framebuffer(self._scene_color_tex, self._scene_depth_tex)
@@ -1032,12 +1066,12 @@ out vec4 frag_color;
         if self._pp_fbo_size == (w, h) and self._pp_fbo_a:
             return
         self._release_pp_fbo()
-        self._pp_color_tex_a = self._ctx.texture((w, h), 4, dtype='f1')
+        self._pp_color_tex_a = self._ctx.texture((w, h), 4, dtype='f2')
         self._pp_color_tex_a.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._pp_color_tex_a.repeat_x = False
         self._pp_color_tex_a.repeat_y = False
         self._pp_fbo_a = self._ctx.framebuffer(self._pp_color_tex_a)
-        self._pp_color_tex_b = self._ctx.texture((w, h), 4, dtype='f1')
+        self._pp_color_tex_b = self._ctx.texture((w, h), 4, dtype='f2')
         self._pp_color_tex_b.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._pp_color_tex_b.repeat_x = False
         self._pp_color_tex_b.repeat_y = False
@@ -1061,12 +1095,12 @@ out vec4 frag_color;
         if self._se_fbo_size == (w, h) and self._se_fbo_a:
             return
         self._release_se_fbo()
-        self._se_color_tex_a = self._ctx.texture((w, h), 4, dtype='f1')
+        self._se_color_tex_a = self._ctx.texture((w, h), 4, dtype='f2')
         self._se_color_tex_a.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._se_color_tex_a.repeat_x = False
         self._se_color_tex_a.repeat_y = False
         self._se_fbo_a = self._ctx.framebuffer(self._se_color_tex_a)
-        self._se_color_tex_b = self._ctx.texture((w, h), 4, dtype='f1')
+        self._se_color_tex_b = self._ctx.texture((w, h), 4, dtype='f2')
         self._se_color_tex_b.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self._se_color_tex_b.repeat_x = False
         self._se_color_tex_b.repeat_y = False
@@ -1090,7 +1124,7 @@ out vec4 frag_color;
         if self._water_fbo_size == (w, h) and self._water_fbo:
             return
         self._release_water_fbo()
-        self._water_color_tex = self._ctx.texture((w, h), 4, dtype='f1')
+        self._water_color_tex = self._ctx.texture((w, h), 4, dtype='f2')
         self._water_color_tex.repeat_x = False
         self._water_color_tex.repeat_y = False
         self._water_depth_rb = self._ctx.depth_renderbuffer((w, h))
@@ -2176,6 +2210,33 @@ out vec4 frag_color;
                 except Exception as e:
                     Logger.error(f"ObjectEffect render failed on '{getattr(ent, 'name', '?')}': {e}", e)
 
+    def _has_tonemap_effect(self):
+        if not GraphicsEffect._registry:
+            return False
+        from core.components.rendering.postfx.color_grading import ColorGrading
+        for e in GraphicsEffect._registry:
+            if isinstance(e, ColorGrading) and e.enabled and e.entity and e.entity.active:
+                return True
+        return False
+
+    def _present_composite(self, tex, fbo, disp_w, disp_h):
+        if fbo is not None:
+            fbo.use()
+            fbo.viewport = (0, 0, disp_w, disp_h)
+        elif self._ctx.screen is not None:
+            self._ctx.screen.use()
+            self._ctx.viewport = (0, 0, disp_w, disp_h)
+        if self._has_tonemap_effect() or self._pp_tonemap_prog is None:
+            prog = self._pp_copy_prog
+            vao = self._pp_copy_vao
+        else:
+            prog = self._pp_tonemap_prog
+            vao = self._pp_tonemap_vao
+            prog["u_exposure"].value = float(self._exposure)
+        prog["u_input_tex"] = 0
+        tex.use(0)
+        vao.render()
+
     def render_scene(self, scene, view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                      viewport_w: int, viewport_h: int, fbo=None,
                      selected_entities: Optional[set] = None,
@@ -2684,16 +2745,8 @@ out vec4 frag_color;
             prof.start("render_overlay")
         dw = display_w if display_w else viewport_w
         dh = display_h if display_h else viewport_h
-        if fbo is not None:
-            fbo.use()
-            fbo.viewport = (0, 0, dw, dh)
-        else:
-            self._ctx.screen.use()
-        self._ctx.viewport = (0, 0, dw, dh)
         self._ctx.disable(moderngl.DEPTH_TEST)
-        self._pp_copy_prog["u_input_tex"] = 0
-        self._scene_color_tex.use(0)
-        self._pp_copy_vao.render()
+        self._present_composite(self._scene_color_tex, fbo, dw, dh)
         self._ctx.enable(moderngl.DEPTH_TEST)
         if prof:
             prof.stop("render_overlay")
@@ -2829,6 +2882,10 @@ out vec4 frag_color;
                     screen_effects.append(e)
                 else:
                     additive_effects.append(e)
+            if additive_effects:
+                self._scene_fbo.use()
+                self._scene_fbo.viewport = (0, 0, rw, rh)
+                self._ctx.viewport = (0, 0, rw, rh)
             for effect in additive_effects:
                 try:
                     extra = {}
@@ -2888,15 +2945,7 @@ out vec4 frag_color;
                     src_tex = src_fbo.color_attachments[0]
                 composite_src = src_tex
             self._ctx.disable(moderngl.BLEND)
-            if fbo is not None:
-                fbo.use()
-                fbo.viewport = (0, 0, disp_w, disp_h)
-            elif self._ctx.screen is not None:
-                self._ctx.screen.use()
-                self._ctx.viewport = (0, 0, disp_w, disp_h)
-            self._pp_copy_prog["u_input_tex"] = 0
-            composite_src.use(0)
-            self._pp_copy_vao.render()
+            self._present_composite(composite_src, fbo, disp_w, disp_h)
             self._ctx.enable(moderngl.BLEND)
             self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
             if prof:
@@ -3493,6 +3542,11 @@ out vec4 frag_color;
                 self._pp_copy_vao.release()
             except Exception:
                 pass
+        if self._pp_tonemap_vao:
+            try:
+                self._pp_tonemap_vao.release()
+            except Exception:
+                pass
         if self._projector_vao:
             try:
                 self._projector_vao.release()
@@ -3511,6 +3565,7 @@ out vec4 frag_color;
                      self._gizmo_fatline_prog, self._gizmo_solid_prog,
                      self._shadow_prog, self._particle_prog, self._icon_prog, self._sprite_prog,
                      self._text_prog, self._overlay_prog, self._projector_prog, self._pp_copy_prog,
+                     self._pp_tonemap_prog,
                      self._velocity_prog]:
             if prog:
                 try:

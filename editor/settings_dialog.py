@@ -111,6 +111,7 @@ FIELD_TOOLTIPS = {
     "rendering.show_grid": "Show the reference grid in the viewport",
     "rendering.grid_size": "Reference grid cell size",
     "rendering.grid_world_size": "Reference grid total world size",
+    "rendering.exposure": "HDR exposure in EV applied before tonemapping",
     "rendering.ambient": "Ambient light color [R, G, B] (0-1)",
     "rendering.selection_outline": "Selection outline color [R, G, B, A] (0-1)",
     "rendering.selection_outline_thickness": "Selection outline thickness",

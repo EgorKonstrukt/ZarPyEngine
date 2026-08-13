@@ -280,11 +280,11 @@ class Bloom(GraphicsEffect):
         bh = max(1, viewport_h // ds)
         if self._bloom_size != (bw, bh):
             self._release_bloom_resources()
-            self._bloom_tex = ctx.texture((bw, bh), 4, dtype='f1')
+            self._bloom_tex = ctx.texture((bw, bh), 4, dtype='f2')
             self._bloom_tex.repeat_x = False
             self._bloom_tex.repeat_y = False
             self._bloom_fbo = ctx.framebuffer(self._bloom_tex)
-            self._bloom_temp_tex = ctx.texture((bw, bh), 4, dtype='f1')
+            self._bloom_temp_tex = ctx.texture((bw, bh), 4, dtype='f2')
             self._bloom_temp_tex.repeat_x = False
             self._bloom_temp_tex.repeat_y = False
             self._bloom_temp_fbo = ctx.framebuffer(self._bloom_temp_tex)
