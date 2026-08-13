@@ -283,10 +283,9 @@ ComputeShader "Zarin/Raytracing"
         return visibility;
     }
 
-    float intersect_scene_internal(vec3 ro, vec3 rd, vec3 inv_rd,
+    float intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd,
                           inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
-                          inout int hit_mat, inout int hit_inst,
-                          int scan_inst, bool find_backface) {
+                          inout int hit_mat, inout int hit_inst) {
         float best_t = 1e30;
         vec3 best_pos = vec3(0.0);
         vec3 best_N = vec3(0.0, 1.0, 0.0);
@@ -295,7 +294,6 @@ ComputeShader "Zarin/Raytracing"
         int best_inst = -1;
 
         for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
-            if (scan_inst >= 0 && inst != scan_inst) continue;
             int ib = inst * 46;
             vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
             vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
@@ -332,11 +330,7 @@ ComputeShader "Zarin/Raytracing"
                 );
                 best_pos = (wm * vec4(lpos, 1.0)).xyz;
                 vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
-                if (find_backface) {
-                    best_N = (dot(wN, rd) > 0.0) ? wN : -wN;
-                } else {
-                    best_N = (dot(wN, rd) > 0.0) ? -wN : wN;
-                }
+                best_N = (dot(wN, rd) > 0.0) ? -wN : wN;
                 best_uv = luv;
             }
         }
@@ -349,17 +343,69 @@ ComputeShader "Zarin/Raytracing"
         return best_t;
     }
 
-    float intersect_scene(vec3 ro, vec3 rd, vec3 inv_rd,
-                          inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
-                          inout int hit_mat, inout int hit_inst) {
-        return intersect_scene_internal(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, hit_inst, -1, false);
-    }
-
     float intersect_exit(int inst, vec3 ro, vec3 rd, vec3 inv_rd,
                          inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
                          inout int hit_mat) {
-        int dummy_inst;
-        return intersect_scene_internal(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, dummy_inst, inst, true);
+        int ib = inst * 46;
+        int bvh_offset = int(inst_data[ib + 32]);
+        int idx_off = int(inst_data[ib + 34]);
+        int mat_idx = int(inst_data[ib + 35]);
+
+        mat4 inv_wm = mat4(
+            vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
+            vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
+            vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
+            vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
+        );
+
+        vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
+        vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
+        vec3 inv_lrd = 1.0 / lrd;
+
+        vec3 lpos, lN;
+        vec2 luv;
+        float tt = intersect_bvh(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv);
+        if (bvh_offset < 0 || tt >= 1e29) {
+            hit_mat = -1;
+            return tt;
+        }
+
+        mat4 wm = mat4(
+            vec4(inst_data[ib], inst_data[ib+1], inst_data[ib+2], inst_data[ib+3]),
+            vec4(inst_data[ib+4], inst_data[ib+5], inst_data[ib+6], inst_data[ib+7]),
+            vec4(inst_data[ib+8], inst_data[ib+9], inst_data[ib+10], inst_data[ib+11]),
+            vec4(inst_data[ib+12], inst_data[ib+13], inst_data[ib+14], inst_data[ib+15])
+        );
+        hit_pos = (wm * vec4(lpos, 1.0)).xyz;
+        vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
+        hit_N = (dot(wN, rd) > 0.0) ? wN : -wN;
+        hit_uv = luv;
+        hit_mat = mat_idx;
+        return tt;
+    }
+
+    float intersect_exit_cached(mat4 inv_wm, mat4 wm, int bvh_offset, int idx_off, int mat_idx,
+                                vec3 ro, vec3 rd,
+                                inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
+                                inout int hit_mat) {
+        vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
+        vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
+        vec3 inv_lrd = 1.0 / lrd;
+
+        vec3 lpos, lN;
+        vec2 luv;
+        float tt = intersect_bvh(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv);
+        if (bvh_offset < 0 || tt >= 1e29) {
+            hit_mat = -1;
+            return tt;
+        }
+
+        hit_pos = (wm * vec4(lpos, 1.0)).xyz;
+        vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
+        hit_N = (dot(wN, rd) > 0.0) ? wN : -wN;
+        hit_uv = luv;
+        hit_mat = mat_idx;
+        return tt;
     }
 
     vec3 direct_light(vec3 pos, vec3 N, vec3 V, float NdotV,
@@ -455,6 +501,9 @@ ComputeShader "Zarin/Raytracing"
         vec3 entry_pos = vec3(0.0);
         vec3 entry_albedo = vec3(1.0);
 
+        mat4 medium_inv_wm, medium_wm;
+        int medium_bvh_offset = -1, medium_idx_off = 0, medium_mat_idx = 0;
+
         int bounce = 0;
         int max_iters = (u_max_bounces + 1) * 6 + 16;
 
@@ -466,7 +515,8 @@ ComputeShader "Zarin/Raytracing"
             float hit_t;
             int hit_inst;
             if (medium_inst >= 0) {
-                hit_t = intersect_exit(medium_inst, ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat);
+                hit_t = intersect_exit_cached(medium_inv_wm, medium_wm, medium_bvh_offset, medium_idx_off,
+                                              medium_mat_idx, ro, rd, hit_pos, hit_N, hit_uv, hit_mat);
             } else {
                 hit_t = intersect_scene(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, hit_inst);
             }
@@ -556,6 +606,24 @@ ComputeShader "Zarin/Raytracing"
                         cur_ior = ior;
                         entry_pos = hit_pos;
                         entry_albedo = albedo;
+                        {
+                            int ib = hit_inst * 46;
+                            medium_bvh_offset = int(inst_data[ib + 32]);
+                            medium_idx_off = int(inst_data[ib + 34]);
+                            medium_mat_idx = int(inst_data[ib + 35]);
+                            medium_inv_wm = mat4(
+                                vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
+                                vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
+                                vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
+                                vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
+                            );
+                            medium_wm = mat4(
+                                vec4(inst_data[ib], inst_data[ib+1], inst_data[ib+2], inst_data[ib+3]),
+                                vec4(inst_data[ib+4], inst_data[ib+5], inst_data[ib+6], inst_data[ib+7]),
+                                vec4(inst_data[ib+8], inst_data[ib+9], inst_data[ib+10], inst_data[ib+11]),
+                                vec4(inst_data[ib+12], inst_data[ib+13], inst_data[ib+14], inst_data[ib+15])
+                            );
+                        }
                         if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
                         continue;
                     }

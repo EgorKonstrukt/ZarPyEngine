@@ -449,6 +449,46 @@ class BVH:
     def flatten_for_gpu(self):
         return self._nodes
 
+    def flatten_for_gpu_stackless(self) -> np.ndarray:
+        nodes = self._nodes
+        n = len(nodes)
+        if n == 0:
+            return np.empty((0, 8), dtype=np.float32)
+
+        sizes = np.empty(n, dtype=np.int64)
+        for i in range(n):
+            right_or_count = nodes[i, 7]
+            if right_or_count < 0:
+                sizes[i] = 1
+            else:
+                l = int(nodes[i, 6])
+                r = int(right_or_count)
+                sizes[i] = 1 + sizes[l] + sizes[r]
+
+        order = np.empty(n, dtype=np.int64)
+        stack = [n - 1]
+        w = 0
+        while stack:
+            old = stack.pop()
+            order[w] = old
+            w += 1
+            right_or_count = nodes[old, 7]
+            if right_or_count >= 0:
+                stack.append(int(right_or_count))
+                stack.append(int(nodes[old, 6]))
+
+        out = np.empty((n, 8), dtype=np.float32)
+        out[:, 0:6] = nodes[order, 0:6]
+        right_or_count_ord = nodes[order, 7]
+        leaf_mask = right_or_count_ord < 0
+        out[leaf_mask, 6] = nodes[order[leaf_mask], 6]
+        out[leaf_mask, 7] = right_or_count_ord[leaf_mask]
+        internal_new_idx = np.nonzero(~leaf_mask)[0]
+        out[internal_new_idx, 6] = (internal_new_idx + sizes[order[internal_new_idx]]).astype(np.float32)
+        out[internal_new_idx, 7] = 0.0
+        return out
+
+
     @property
     def tri_indices(self) -> np.ndarray:
         return self._tri_indices
