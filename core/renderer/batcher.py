@@ -62,6 +62,11 @@ def _make_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
     content = [
         (vbo, '3f 3f 2f', 'in_position', 'in_normal', 'in_uv'),
     ]
+    if "in_color" in prog:
+        n_verts = len(mesh.vertices) // 3 if len(mesh.vertices) > 0 else vbo.size // 32
+        if n_verts > 0:
+            col = ctx.buffer(np.full((n_verts, 4), 1.0, dtype=np.float32).tobytes())
+            content.append((col, '4f', 'in_color'))
     if _supports_instancing(prog):
         content.append((instance_vbo, '4f 4f 4f 4f /i',
                         'in_model0', 'in_model1', 'in_model2', 'in_model3'))

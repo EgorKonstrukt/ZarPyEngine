@@ -515,18 +515,34 @@ def ray_sphere_intersect_batch(
 def mat4_normal_matrix(np.ndarray[DTYPE_t, ndim=2] model):
     cdef np.ndarray[DTYPE_t, ndim=2] m = model[:3, :3].copy()
     cdef np.ndarray[np.float32_t, ndim=2] nm = np.empty((3, 3), dtype=np.float32)
-    cdef int r, c
-    cdef DTYPE_t norm_val
-    for r in range(3):
-        norm_val = sqrt(m[0, r]*m[0, r] + m[1, r]*m[1, r] + m[2, r]*m[2, r])
-        if norm_val < 1e-10:
-            norm_val = 1e-10
-        m[r, 0] /= norm_val
-        m[r, 1] /= norm_val
-        m[r, 2] /= norm_val
-    for r in range(3):
-        for c in range(3):
-            nm[c, r] = <np.float32_t>m[r, c]
+    cdef DTYPE_t a, b, c, d, e, f, g, h, i
+    cdef DTYPE_t A, B, C, D, E, F, G, H, I, det, inv_det
+    a = m[0,0]; b = m[0,1]; c = m[0,2]
+    d = m[1,0]; e = m[1,1]; f = m[1,2]
+    g = m[2,0]; h = m[2,1]; i = m[2,2]
+    # Cofactor matrix (transpose of the adjugate), used for (M^-1)^T.
+    A = e*i - f*h
+    B = -(d*i - f*g)
+    C = d*h - e*g
+    D = -(b*i - c*h)
+    E = a*i - c*g
+    F = -(a*h - b*g)
+    G = b*f - c*e
+    H = -(a*f - c*d)
+    I = a*e - b*d
+    det = a*A + b*B + c*C
+    if det < 1e-12 and det > -1e-12:
+        return np.eye(3, dtype=np.float32)
+    inv_det = 1.0 / det
+    nm[0,0] = <np.float32_t>(A * inv_det)
+    nm[0,1] = <np.float32_t>(B * inv_det)
+    nm[0,2] = <np.float32_t>(C * inv_det)
+    nm[1,0] = <np.float32_t>(D * inv_det)
+    nm[1,1] = <np.float32_t>(E * inv_det)
+    nm[1,2] = <np.float32_t>(F * inv_det)
+    nm[2,0] = <np.float32_t>(G * inv_det)
+    nm[2,1] = <np.float32_t>(H * inv_det)
+    nm[2,2] = <np.float32_t>(I * inv_det)
     return nm
 
 

@@ -366,11 +366,12 @@ def ray_aabb_intersect(ox: float, oy: float, oz: float,
 
 
 def mat4_normal_matrix(model: np.ndarray) -> np.ndarray:
-    m = model[:3, :3].copy()
-    m[0] /= max(1e-10, float(np.linalg.norm(m[:, 0])))
-    m[1] /= max(1e-10, float(np.linalg.norm(m[:, 1])))
-    m[2] /= max(1e-10, float(np.linalg.norm(m[:, 2])))
-    return m.T.astype(np.float32)
+    m = model[:3, :3]
+    try:
+        inv = np.linalg.inv(m)
+    except np.linalg.LinAlgError:
+        return np.eye(3, dtype=np.float32)
+    return inv.T.astype(np.float32)
 
 
 def batch_matrices_to_f32(matrices: np.ndarray) -> np.ndarray:

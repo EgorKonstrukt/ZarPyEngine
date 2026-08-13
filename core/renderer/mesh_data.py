@@ -143,6 +143,9 @@ class MeshData:
         else:
             fmt_parts.append("2x4")
         buffers = [(self._vbo, " ".join(fmt_parts), *attrib_names)]
+        if has_col and self._color_vbo is None and len(self.vertices) > 0:
+            n = len(self.vertices) // 3
+            self._color_vbo = self._ctx.buffer(np.full((n, 4), 1.0, dtype=np.float32).tobytes())
         if self._bone_vbo is not None and has_bone_idx and has_bone_w:
             buffers.append((self._bone_vbo, "4f 4f", "in_bone_indices", "in_bone_weights"))
         if self._color_vbo is not None and has_col:
