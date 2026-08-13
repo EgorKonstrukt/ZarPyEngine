@@ -12,6 +12,7 @@ from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 from core.maths.math3d import Mat4
 from core.components.lighting.light import Light
+from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache
 
 _ENV_TEX_CACHE: dict[str, tuple[float, object]] = {}
 
@@ -183,6 +184,7 @@ def release_env_cache():
             except Exception:
                 pass
     _ENV_TEX_CACHE.clear()
+    release_sky_ibl_cache()
 
 
 @ComponentRegistry.register
@@ -200,6 +202,7 @@ class Sky(Component):
         super().__init__()
         self.material_path: str = "core/shaders/Sky.shader"
         self.environment_path: str = ""
+        self._sky_ibl = None
 
     def render_sky(self, ctx, shaders, view_mat, proj_mat, dir_light, cube_mesh):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
@@ -219,8 +222,9 @@ class Sky(Component):
                 prog["_SunSize"].value = 0.0008
             if "_SunConvergence" in prog:
                 prog["_SunConvergence"].value = 0.5
+        env_tex = _get_env_texture(ctx, self.environment_path) if self.environment_path else None
+        self._sky_ibl = get_sky_ibl(ctx, self.environment_path, env_tex) if self.environment_path else None
         if "u_env_tex" in prog:
-            env_tex = _get_env_texture(ctx, self.environment_path)
             if env_tex is not None:
                 env_tex.use(0)
                 prog["u_env_tex"].value = 0

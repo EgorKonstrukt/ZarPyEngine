@@ -65,7 +65,7 @@ from core.renderer.text import TextRendererGL
 from core.renderer.materials import MaterialManager
 from core.renderer.shaders import ShaderManager
 from core.renderer.mesh_loader import MeshLoader
-from core.renderer.batcher import RenderBatcher
+from core.renderer.batcher import RenderBatcher, resolve_normal_matrix
 from core.renderer.culling import cpu_frustum_cull
 from core.renderer.gpu_culling import GpuStorage, GpuCulling
 
@@ -1541,7 +1541,6 @@ out vec4 frag_color;
         self._skinned_bone_ssbo.bind_to_storage_buffer(6)
 
     def _render_skinned_meshes(self, snap, view_f32, proj_f32, cam_pos, lights):
-        from core.math_helpers import mat4_normal_matrix
         eng = Engine.instance()
         scene = eng.scene if eng and hasattr(eng, 'scene') else None
         if scene is None:
@@ -1577,13 +1576,7 @@ out vec4 frag_color;
             if "u_model" in names:
                 model_f32 = wm.to_f32()
                 prog["u_model"].write(model_f32.tobytes())
-            nm = self._normal_cache.get(ent._id)
-            if nm is None:
-                try:
-                    nm = mat4_normal_matrix(wm._d)
-                except Exception:
-                    nm = np.eye(3, dtype=np.float32).T
-                self._normal_cache[ent._id] = nm
+            nm = resolve_normal_matrix(self._normal_cache, ent._id, wm._d)
             if "u_normal_matrix" in names:
                 prog["u_normal_matrix"].write(nm.tobytes())
             if not skinning_set:
@@ -2413,7 +2406,8 @@ out vec4 frag_color;
                 self._normal_cache,
                 selected_entities or set(), outline_queue,
                 gpu_storage=self._gpu_storage,
-                dynamic_cubemaps=dynamic_cubemaps)
+                dynamic_cubemaps=dynamic_cubemaps,
+                sky_ibl=getattr(sky_component, '_sky_ibl', None) if sky_component else None)
         else:
             for entry in renderable:
                 ent, tr, mesh, mr = entry[:4]
@@ -2426,6 +2420,8 @@ out vec4 frag_color;
                     names = self._uniform_names(prog)
                     if getattr(mr, 'dynamic_reflections', False) and dynamic_cubemaps is not None:
                         dynamic_cubemaps.bind_ibl(prog)
+                    elif getattr(sky_component, '_sky_ibl', None) is not None and sky_component._sky_ibl.ready:
+                        sky_component._sky_ibl.bind(prog)
                     elif not getattr(mr, 'dynamic_reflections', False):
                         try:
                             if "u_irradiance_map_Active" in names:
@@ -2440,17 +2436,7 @@ out vec4 frag_color;
                     model_f32 = model.to_f32()
                     if "u_model" in names:
                         prog["u_model"].write(model_f32.tobytes())
-                    try:
-                        nm = self._normal_cache.get(ent._id)
-                        if nm is None:
-                            nm3x3 = model._d[:3, :3].copy()
-                            nm3x3[0] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 0])))
-                            nm3x3[1] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 1])))
-                            nm3x3[2] /= max(1e-10, float(np.linalg.norm(nm3x3[:, 2])))
-                            nm = nm3x3.T.astype(np.float32)
-                            self._normal_cache[ent._id] = nm
-                    except Exception:
-                        nm = np.eye(3, dtype=np.float32).T
+                    nm = resolve_normal_matrix(self._normal_cache, ent._id, model._d)
                     if "u_normal_matrix" in names:
                         prog["u_normal_matrix"].write(nm.tobytes())
                     self._materials.apply_material(mat, prog)

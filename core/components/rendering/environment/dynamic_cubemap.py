@@ -24,6 +24,15 @@ _FACE_DIRS = [
     (Vec3(0, 0, -1), Vec3(0, -1, 0)),
 ]
 
+_FACE_BASIS = [
+    ((0.0, 0.0, -1.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0)),
+    ((0.0, 0.0, 1.0), (0.0, -1.0, 0.0), (-1.0, 0.0, 0.0)),
+    ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)),
+    ((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, -1.0, 0.0)),
+    ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
+]
+
 _FULLSCREEN_QUAD_VERT = """
 #version 460 core
 in vec2 in_position;
@@ -441,7 +450,7 @@ class DynamicCubemaps(Component):
             return
 
         for face in range(6):
-            fwd, up = _FACE_DIRS[face]
+            fx, fy, fz = _FACE_BASIS[face]
             fbo = self._irradiance_face_fbos[face]
             if fbo is None:
                 continue
@@ -449,10 +458,9 @@ class DynamicCubemaps(Component):
             fbo.viewport = (0, 0, irr_res, irr_res)
             ctx.clear(0.0, 0.0, 0.0, 1.0)
             try:
-                prog["u_face_x"].value = (float(fwd.x), float(fwd.y), float(fwd.z))
-                prog["u_face_y"].value = (float(up.x), float(up.y), float(up.z))
-                cross_fwd = fwd.cross(up).normalized()
-                prog["u_face_z"].value = (float(cross_fwd.x), float(cross_fwd.y), float(cross_fwd.z))
+                prog["u_face_x"].value = fx
+                prog["u_face_y"].value = fy
+                prog["u_face_z"].value = fz
             except Exception:
                 continue
             vao.render(moderngl.TRIANGLES)
@@ -486,16 +494,15 @@ class DynamicCubemaps(Component):
         for mip_idx, (mip_fbo, mip_tex, mip_res, mip_level) in enumerate(self._prefilter_fbos):
             roughness = mip_level / max(1, len(self._prefilter_fbos) - 1)
             for face in range(6):
-                fwd, up = _FACE_DIRS[face]
+                fx, fy, fz = _FACE_BASIS[face]
                 mip_fbo.use()
                 mip_fbo.viewport = (0, 0, mip_res, mip_res)
                 ctx.clear(0.0, 0.0, 0.0, 1.0)
                 try:
                     prog["u_roughness"].value = roughness
-                    prog["u_face_x"].value = (float(fwd.x), float(fwd.y), float(fwd.z))
-                    prog["u_face_y"].value = (float(up.x), float(up.y), float(up.z))
-                    cross_fwd = fwd.cross(up).normalized()
-                    prog["u_face_z"].value = (float(cross_fwd.x), float(cross_fwd.y), float(cross_fwd.z))
+                    prog["u_face_x"].value = fx
+                    prog["u_face_y"].value = fy
+                    prog["u_face_z"].value = fz
                 except Exception:
                     continue
                 vao.render(moderngl.TRIANGLES)

@@ -15,6 +15,26 @@ _INITIAL_INST_VBO_CAPACITY = 4096
 _MAX_VAO_CACHE = 512
 
 
+def resolve_normal_matrix(cache: dict, ent_id: int, model_d) -> np.ndarray:
+    try:
+        key = model_d[:3, :3].tobytes()
+    except Exception:
+        key = None
+    if key is not None:
+        cached = cache.get(ent_id)
+        if cached is not None:
+            old_key, nm = cached
+            if old_key == key:
+                return nm
+    from core.math_helpers import mat4_normal_matrix
+    try:
+        nm = mat4_normal_matrix(model_d)
+    except Exception:
+        nm = np.eye(3, dtype=np.float32).T
+    cache[ent_id] = (key, nm)
+    return nm
+
+
 def _supports_instancing(prog: moderngl.Program) -> bool:
     try:
         locs = prog._attribute_locations
@@ -228,7 +248,7 @@ class RenderBatcher:
                       disable_shadows: bool, set_scene_uniforms_fn,
                       apply_material_fn, normal_cache: dict,
                       selected_entities: set, outline_queue: list,
-                      gpu_storage=None, dynamic_cubemaps=None):
+                      gpu_storage=None, dynamic_cubemaps=None, sky_ibl=None):
         self.reset_stats()
         scene_done = set()
         frustum_planes = self._get_frustum_planes(view_f32, proj_f32)
@@ -245,6 +265,8 @@ class RenderBatcher:
                 scene_done.add(scene_key)
             if dyn_ref and dynamic_cubemaps is not None:
                 dynamic_cubemaps.bind_ibl(prog)
+            elif sky_ibl is not None and sky_ibl.ready:
+                sky_ibl.bind(prog)
             elif not dyn_ref:
                 names = self._uniform_names(prog)
                 try:
@@ -378,14 +400,7 @@ class RenderBatcher:
         model_f32 = model.to_f32()
         if "u_model" in names:
             prog["u_model"].write(model_f32)
-        nm = normal_cache.get(ent._id)
-        if nm is None:
-            try:
-                from core.math_helpers import mat4_normal_matrix
-                nm = mat4_normal_matrix(model._d)
-                normal_cache[ent._id] = nm
-            except Exception:
-                nm = np.eye(3, dtype=np.float32).T
+        nm = resolve_normal_matrix(normal_cache, ent._id, model._d)
         if "u_normal_matrix" in names:
             prog["u_normal_matrix"].write(nm.tobytes())
         if mesh.is_error_mesh:
