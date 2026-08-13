@@ -12,7 +12,7 @@ from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 from core.maths.math3d import Mat4
 from core.components.lighting.light import Light
-from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache
+from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache, get_procedural_sky_ibl
 
 _ENV_TEX_CACHE: dict[str, tuple[float, object]] = {}
 
@@ -222,8 +222,32 @@ class Sky(Component):
                 prog["_SunSize"].value = 0.0008
             if "_SunConvergence" in prog:
                 prog["_SunConvergence"].value = 0.5
+        else:
+            if "_SunDirection" in prog:
+                prog["_SunDirection"].write(np.array([0.0, -0.3, -1.0], dtype=np.float32).tobytes())
+            if "_SunColor" in prog:
+                prog["_SunColor"].write(np.array([1.0, 0.95, 0.85], dtype=np.float32).tobytes())
+            if "_SunIntensity" in prog:
+                prog["_SunIntensity"].value = 1.0
+            if "_SunSize" in prog:
+                prog["_SunSize"].value = 0.0008
+            if "_SunConvergence" in prog:
+                prog["_SunConvergence"].value = 0.5
         env_tex = _get_env_texture(ctx, self.environment_path) if self.environment_path else None
-        self._sky_ibl = get_sky_ibl(ctx, self.environment_path, env_tex) if self.environment_path else None
+        if self.environment_path:
+            self._sky_ibl = get_sky_ibl(ctx, self.environment_path, env_tex)
+        else:
+            sun_dir = None
+            sun_color = None
+            sun_intensity = None
+            if dir_light:
+                dl, dt = dir_light
+                sky_c, sky_i = Light.shader_radiance(dl, dt)
+                sun_dir = (-dt.forward.x, -dt.forward.y, -dt.forward.z)
+                sun_color = sky_c
+                sun_intensity = sky_i
+            self._sky_ibl = get_procedural_sky_ibl(ctx, prog, self.material_path,
+                                                   sun_dir, sun_color, sun_intensity)
         if "u_env_tex" in prog:
             if env_tex is not None:
                 env_tex.use(0)

@@ -308,12 +308,9 @@ def _render_prefilter(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res
     return pref
 
 
-def _generate_ibl(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int = 128) -> Optional[SkyIbl]:
+def _generate_ibl_from_cube(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res: int = 128) -> Optional[SkyIbl]:
     ibl = SkyIbl()
-    src_cube = None
     try:
-        src_cube = _render_cubemap_from_equirect(ctx, env_tex, res)
-        src_cube.build_mipmaps()
         ibl._prefilter_tex = _render_prefilter(ctx, src_cube, res)
         ibl._irradiance_tex = _render_irradiance(ctx, src_cube, res)
         ibl._brdf_lut_tex = _render_brdf_lut(ctx)
@@ -321,12 +318,128 @@ def _generate_ibl(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int = 1
     except Exception:
         ibl.release()
         return None
+    return ibl
+
+
+def _generate_ibl(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int = 128) -> Optional[SkyIbl]:
+    src_cube = None
+    try:
+        src_cube = _render_cubemap_from_equirect(ctx, env_tex, res)
+        src_cube.build_mipmaps()
+        return _generate_ibl_from_cube(ctx, src_cube, res)
+    except Exception:
+        return None
     finally:
         if src_cube is not None:
             try:
                 src_cube.release()
             except Exception:
                 pass
+
+
+def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
+                             sun_dir, sun_color, sun_intensity, res: int = 128) -> moderngl.TextureCube:
+    cube_tex = ctx.texture_cube((res, res), 4, dtype="f4")
+    cube_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+    cube_tex.repeat_x = False
+    cube_tex.repeat_y = False
+    quad = np.array([[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]], dtype=np.float32)
+    sun_dir = np.asarray(sun_dir, dtype=np.float32).reshape(3)
+    sun_color = np.asarray(sun_color, dtype=np.float32).reshape(-1)[:3]
+    ctx.disable(moderngl.DEPTH_TEST)
+    ctx.disable(moderngl.CULL_FACE)
+    try:
+        for face in range(6):
+            fx, fy, fz = _FACE_BASIS[face]
+            fxa = np.array(fx, dtype=np.float32)
+            fya = np.array(fy, dtype=np.float32)
+            fza = np.array(fz, dtype=np.float32)
+            dirs = fxa[None, :] * quad[:, 0:1] + fya[None, :] * quad[:, 1:2] + fza[None, :]
+            dirs /= np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12
+            vbo = ctx.buffer(dirs.astype(np.float32).tobytes())
+            vao = ctx.vertex_array(sky_prog, [(vbo, "3f", "in_position")])
+            face_tex = ctx.texture((res, res), 4, dtype="f4")
+            fbo = ctx.framebuffer(color_attachments=[face_tex])
+            fbo.use()
+            fbo.viewport = (0, 0, res, res)
+            ctx.clear(0.0, 0.0, 0.0, 1.0)
+            sky_prog["u_mvp"].write(np.eye(4, dtype=np.float32).tobytes())
+            try:
+                sky_prog["u_use_env"].value = 0.0
+            except Exception:
+                pass
+            try:
+                sky_prog["_SunDirection"].write(sun_dir.tobytes())
+                sky_prog["_SunColor"].write(sun_color.tobytes())
+                sky_prog["_SunIntensity"].value = float(sun_intensity)
+            except Exception:
+                pass
+            vao.render(moderngl.TRIANGLES)
+            cube_tex.write(face, face_tex.read())
+            fbo.release()
+            face_tex.release()
+            vao.release()
+            vbo.release()
+    finally:
+        ctx.enable(moderngl.DEPTH_TEST)
+        ctx.enable(moderngl.CULL_FACE)
+    return cube_tex
+
+
+_PROC_SKY_IBL_CACHE: dict[str, tuple[int, Optional[SkyIbl]]] = {}
+
+_PROC_SUN_DEFAULT_DIR = np.array([0.0, -0.3, -1.0], dtype=np.float32)
+_PROC_SUN_DEFAULT_COLOR = np.array([1.0, 0.95, 0.85], dtype=np.float32)
+_PROC_SUN_DEFAULT_INTENSITY = 1.0
+
+
+def _quant(v, ndig: int):
+    return tuple(round(float(x), ndig) for x in np.asarray(v).ravel())
+
+
+def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
+                           material_path: str, sun_dir=None, sun_color=None,
+                           sun_intensity=None, res: int = 128) -> Optional[SkyIbl]:
+    if sun_dir is None:
+        sun_dir = _PROC_SUN_DEFAULT_DIR
+    if sun_color is None:
+        sun_color = _PROC_SUN_DEFAULT_COLOR
+    if sun_intensity is None:
+        sun_intensity = _PROC_SUN_DEFAULT_INTENSITY
+    key = "|".join([
+        material_path or "",
+        repr(_quant(sun_dir, 2)),
+        repr(_quant(sun_color, 2)),
+        str(round(float(sun_intensity), 2)),
+    ])
+    cached = _PROC_SKY_IBL_CACHE.get(key)
+    if cached is not None:
+        cctx, ibl = cached
+        if cctx == id(ctx) and ibl is not None:
+            return ibl
+    src_cube = None
+    ibl = None
+    try:
+        src_cube = _render_cubemap_from_sky(ctx, sky_prog, sun_dir, sun_color, sun_intensity, res)
+        src_cube.build_mipmaps()
+        ibl = _generate_ibl_from_cube(ctx, src_cube, res)
+    except Exception:
+        ibl = None
+    finally:
+        if src_cube is not None:
+            try:
+                src_cube.release()
+            except Exception:
+                pass
+    if ibl is not None:
+        for _k, (_c, _old) in list(_PROC_SKY_IBL_CACHE.items()):
+            if _old is not None and _old is not ibl:
+                try:
+                    _old.release()
+                except Exception:
+                    pass
+        _PROC_SKY_IBL_CACHE.clear()
+        _PROC_SKY_IBL_CACHE[key] = (id(ctx), ibl)
     return ibl
 
 
@@ -360,3 +473,10 @@ def release_sky_ibl_cache():
             except Exception:
                 pass
     _SKY_IBL_CACHE.clear()
+    for _c, ibl in _PROC_SKY_IBL_CACHE.values():
+        if ibl is not None:
+            try:
+                ibl.release()
+            except Exception:
+                pass
+    _PROC_SKY_IBL_CACHE.clear()
