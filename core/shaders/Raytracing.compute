@@ -430,9 +430,8 @@ ComputeShader "Zarin/Raytracing"
                 vec3 to_light = lpos - pos;
                 float dist = length(to_light);
                 light_dir = to_light / dist;
-                float att = 1.0 - dist / lrange;
-                if (att <= 0.0) continue;
-                attenuation = att * att;
+                float range_fade = clamp(1.0 - pow(dist / max(lrange, 1e-4), 4.0), 0.0, 1.0);
+                attenuation = range_fade * range_fade / (dist * dist + 1.0);
                 if (lt == 2) {
                     float theta = dot(light_dir, normalize(-ldir));
                     attenuation *= clamp((theta - linner_cos) / (lspot_cos - linner_cos), 0.0, 1.0);

@@ -81,15 +81,10 @@ class Cloud(Component):
             if "_SunDirection" in cloud_prog:
                 cloud_prog["_SunDirection"].write(np.array([sun_dir_obj.x, sun_dir_obj.y, sun_dir_obj.z], dtype=np.float32).tobytes())
             if "_SunColor" in cloud_prog:
-                if dl.procedural_sky_lighting:
-                    sc, si = Light.compute_sun_light(-dt.forward)
-                    cloud_prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in cloud_prog:
-                        cloud_prog["_SunIntensity"].value = si
-                else:
-                    cloud_prog["_SunColor"].write(np.array(dl.color, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in cloud_prog:
-                        cloud_prog["_SunIntensity"].value = dl.intensity
+                sc, si = Light.shader_radiance(dl, dt)
+                cloud_prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
+                if "_SunIntensity" in cloud_prog:
+                    cloud_prog["_SunIntensity"].value = si
         if "u_time" in cloud_prog:
             cloud_prog["u_time"].value = time.time() - self._time_origin
         if "u_cam_pos" in cloud_prog:
@@ -165,15 +160,10 @@ class Cloud(Component):
             if "_SunDirection" in cloud_prog:
                 cloud_prog["_SunDirection"].write(np.array([sun_dir_obj.x, sun_dir_obj.y, sun_dir_obj.z], dtype=np.float32).tobytes())
             if "_SunColor" in cloud_prog:
-                if dl.procedural_sky_lighting:
-                    sc, si = Light.compute_sun_light(-dt.forward)
-                    cloud_prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in cloud_prog:
-                        cloud_prog["_SunIntensity"].value = si
-                else:
-                    cloud_prog["_SunColor"].write(np.array(dl.color, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in cloud_prog:
-                        cloud_prog["_SunIntensity"].value = dl.intensity
+                sc, si = Light.shader_radiance(dl, dt)
+                cloud_prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
+                if "_SunIntensity" in cloud_prog:
+                    cloud_prog["_SunIntensity"].value = si
         if "u_time" in cloud_prog:
             cloud_prog["u_time"].value = time.time() - self._time_origin
         if "u_cam_pos" in cloud_prog:

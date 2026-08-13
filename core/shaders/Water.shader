@@ -719,8 +719,8 @@ Shader "Zarin/Water"
                     if (d < 1e-3) continue;
                     vec3 Ll = Lv / d;
                     float range = max(_LightRange[i], 0.001);
-                    float att = clamp(1.0 - d / range, 0.0, 1.0);
-                    att *= att;
+                    float range_fade = clamp(1.0 - pow(d / range, 4.0), 0.0, 1.0);
+                    float att = range_fade * range_fade / (d * d + 1.0);
                     float spot = 1.0;
                     if (_LightSpotCos[i] > -0.999) {
                         spot = smoothstep(_LightSpotCos[i], mix(_LightSpotCos[i], 1.0, 0.15), dot(-Ll, normalize(_LightDir[i])));

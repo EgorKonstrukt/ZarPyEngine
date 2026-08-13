@@ -27,13 +27,25 @@ class Light(Component):
     _gizmo_cache_attrs = ("light_type", "range", "spot_angle", "area_width", "area_height",
                           "area_type", "area_double_sided", "color")
 
+    LUX_TO_RADIANCE = 1e-5
+    CANDELA_TO_RADIANCE = 1e-2
+    AREA_TO_RADIANCE = 1e-2
+    LEGACY_DIRECTIONAL_MULT = 100000.0
+    LEGACY_POINT_MULT = 2000.0
+    LEGACY_AREA_MULT = 100.0
+    _LIGHT_SCALE = 1.0
+
+    @classmethod
+    def set_light_scale(cls, scale: float) -> None:
+        cls._LIGHT_SCALE = max(float(scale), 0.0)
+
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
             InspectorField("light_type", "Type", FieldType.ENUM, enum_class=LightType),
             InspectorField("procedural_sky_lighting", "Procedural Sky Lighting", FieldType.BOOL),
             InspectorField("color", "Color", FieldType.COLOR),
-            InspectorField("intensity", "Intensity", FieldType.FLOAT, min_val=0.0, max_val=1000.0, step=0.1, decimals=3),
+            InspectorField("intensity", "Intensity (lux / lumens / nits)", FieldType.FLOAT, min_val=0.0, max_val=200000.0, step=10.0, decimals=1),
             InspectorField("range", "Range", FieldType.FLOAT, min_val=0.0, max_val=10000.0, step=0.5, decimals=2),
             InspectorField("spot_angle", "Spot Angle", FieldType.FLOAT, min_val=1.0, max_val=179.0, step=1.0, decimals=1),
             InspectorField("cast_shadows", "Cast Shadows", FieldType.BOOL),
@@ -49,7 +61,7 @@ class Light(Component):
         super().__init__()
         self.light_type: LightType = LightType.DIRECTIONAL
         self.color: list[float] = [1.0, 1.0, 1.0]
-        self.intensity: float = 1.0
+        self.intensity: float = 100000.0
         self.procedural_sky_lighting: bool = False
         self.range: float = 10.0
         self.spot_angle: float = 30.0
@@ -181,10 +193,23 @@ class Light(Component):
         intensity = 1.2 * (1.0 - math.exp(-t * 4.0))
         return sun_color, intensity
 
+    @staticmethod
+    def shader_radiance(light: Light, transform) -> tuple[list[float], float]:
+        sc = Light._LIGHT_SCALE
+        if light.light_type == LightType.DIRECTIONAL:
+            if light.procedural_sky_lighting:
+                c, i = Light.compute_sun_light(-transform.forward)
+                return [c[0], c[1], c[2]], i * sc
+            return list(light.color), light.intensity * Light.LUX_TO_RADIANCE * sc
+        if light.light_type == LightType.AREA:
+            return list(light.color), light.intensity * Light.AREA_TO_RADIANCE * sc
+        candela = max(float(light.intensity), 0.0) / (4.0 * math.pi)
+        return list(light.color), candela * Light.CANDELA_TO_RADIANCE * sc
+
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
-            "light_type": self.light_type.value, "color": self.color,
+            "light_version": 2, "light_type": self.light_type.value, "color": self.color,
             "intensity": self.intensity, "range": self.range,
             "spot_angle": self.spot_angle, "spot_inner_angle": self.spot_inner_angle,
             "cast_shadows": self.cast_shadows,
@@ -201,6 +226,13 @@ class Light(Component):
         l.light_type = LightType(data.get("light_type", "directional"))
         l.color = data.get("color", [1.0,1.0,1.0])
         l.intensity = data.get("intensity", 1.0)
+        if data.get("light_version", 1) < 2:
+            if l.light_type == LightType.DIRECTIONAL:
+                l.intensity = l.intensity * Light.LEGACY_DIRECTIONAL_MULT
+            elif l.light_type in (LightType.POINT, LightType.SPOT):
+                l.intensity = l.intensity * Light.LEGACY_POINT_MULT
+            else:
+                l.intensity = l.intensity * Light.LEGACY_AREA_MULT
         l.procedural_sky_lighting = data.get("procedural_sky_lighting", False)
         l.range = data.get("range", 10.0)
         l.spot_angle = data.get("spot_angle", 30.0)

@@ -235,15 +235,10 @@ class Water(Component):
             if "_SunDirection" in prog:
                 prog["_SunDirection"].write(np.array([sun_dir.x, sun_dir.y, sun_dir.z], dtype=np.float32).tobytes())
             if "_SunColor" in prog:
-                if dl.procedural_sky_lighting:
-                    sc, si = Light.compute_sun_light(-dt.forward)
-                    prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in prog:
-                        prog["_SunIntensity"].value = si
-                else:
-                    prog["_SunColor"].write(np.array(dl.color, dtype=np.float32).tobytes())
-                    if "_SunIntensity" in prog:
-                        prog["_SunIntensity"].value = dl.intensity
+                sc, si = Light.shader_radiance(dl, dt)
+                prog["_SunColor"].write(np.array(sc, dtype=np.float32).tobytes())
+                if "_SunIntensity" in prog:
+                    prog["_SunIntensity"].value = si
 
         t = time.time() - self._time_origin
         if "u_time" in prog:
@@ -329,7 +324,7 @@ class Water(Component):
                     lpos[count] = [pos.x, pos.y, pos.z]
                     col = l.color if isinstance(l.color, (list, tuple)) else [1.0, 1.0, 1.0]
                     lcol[count] = [float(col[0]), float(col[1]), float(col[2])]
-                    lint[count] = float(l.intensity)
+                    lint[count] = Light.shader_radiance(l, lt)[1]
                     lrange[count] = max(float(l.range), 0.001)
                     if l.light_type == LightType.SPOT:
                         fwd = lt.forward

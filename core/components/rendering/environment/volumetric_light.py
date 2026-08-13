@@ -284,7 +284,7 @@ class VolumetricLight(GraphicsEffect):
             positions[i] = [pos.x, pos.y, pos.z]
             dirs[i] = [fwd.x, fwd.y, fwd.z]
             colors[i] = lc.color[:3]
-            intens[i] = float(lc.intensity)
+            intens[i] = Light.shader_radiance(lc, lt)[1]
             ranges[i] = float(lc.range)
             spot_outer[i] = float(lc.spot_angle)
             spot_inner[i] = float(getattr(lc, 'spot_inner_angle', lc.spot_angle * 0.8))

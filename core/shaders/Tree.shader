@@ -287,9 +287,9 @@ Shader "Zarin/Tree"
                 } else {
                     vec3 to_light = light.position - v_world_pos;
                     float dist = length(to_light);
-                    light_dir = normalize(to_light);
-                    attenuation = clamp(1.0 - dist / light.range, 0.0, 1.0);
-                    attenuation *= attenuation;
+                    light_dir = to_light / dist;
+                    float range_fade = clamp(1.0 - pow(dist / max(light.range, 1e-4), 4.0), 0.0, 1.0);
+                    attenuation = range_fade * range_fade / (dist * dist + 1.0);
                     if (light.type == 2) {
                         float theta = dot(light_dir, normalize(-light.direction));
                         float inner = cos(radians(light.spot_inner_angle));
@@ -322,9 +322,9 @@ Shader "Zarin/Tree"
                 } else {
                     vec3 to_light = light.position - v_world_pos;
                     float dist = length(to_light);
-                    light_dir = normalize(to_light);
-                    attenuation = clamp(1.0 - dist / light.range, 0.0, 1.0);
-                    attenuation *= attenuation;
+                    light_dir = to_light / dist;
+                    float range_fade = clamp(1.0 - pow(dist / max(light.range, 1e-4), 4.0), 0.0, 1.0);
+                    attenuation = range_fade * range_fade / (dist * dist + 1.0);
                     if (light.type == 2) {
                         float theta = dot(light_dir, normalize(-light.direction));
                         float inner = cos(radians(light.spot_inner_angle));

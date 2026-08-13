@@ -10,6 +10,7 @@ msgpack
 cython
 setuptools
 pillow
+imageio
 qtawesome
 xxhash
 psutil

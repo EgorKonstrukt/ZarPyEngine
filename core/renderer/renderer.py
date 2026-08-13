@@ -43,7 +43,7 @@ from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_me
 from core.renderer.grid import GridRenderer
 from core.renderer.gizmo import GizmoRenderer, FATLINE_VERT, FATLINE_FRAG
 from core.renderer.shadows import ShadowRenderer
-from core.components.rendering.environment.sky import Sky
+from core.components.rendering.environment.sky import Sky, release_env_cache
 from core.components.rendering.environment.clouds import Cloud
 from core.components.rendering.environment.water import Water
 from core.components.rendering.environment.dynamic_cubemap import DynamicCubemaps
@@ -370,6 +370,7 @@ class Renderer:
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
         self._render_scale = config.get("rendering.render_scale", self._render_scale)
         self._exposure = config.get("rendering.exposure", self._exposure)
+        Light.set_light_scale(config.get("rendering.light_scale", 1.0))
         self._line_width = config.get("gizmo.line_width", self._line_width)
 
     def initialize(self):
@@ -1725,11 +1726,7 @@ out vec4 frag_color;
                 buf = self._vec3_buf_b
                 buf[0] = fwd.x; buf[1] = fwd.y; buf[2] = fwd.z
                 prog[unames["direction"]].write(buf.tobytes())
-            if l.procedural_sky_lighting and l.light_type == LightType.DIRECTIONAL:
-                effective_color, effective_intensity = Light.compute_sun_light(-fwd)
-            else:
-                effective_color = l.color
-                effective_intensity = l.intensity
+            effective_color, effective_intensity = Light.shader_radiance(l, lt)
             if unames["color"] in prog:
                 buf = self._vec3_buf_c
                 ec = effective_color
@@ -2651,13 +2648,7 @@ out vec4 frag_color;
             if dir_light:
                 dl, dt = dir_light
                 csun_dir = -dt.forward
-                if dl.procedural_sky_lighting:
-                    sc, si = Light.compute_sun_light(-dt.forward)
-                    csun_color = sc
-                    csun_intensity = si
-                else:
-                    csun_color = dl.color
-                    csun_intensity = dl.intensity
+                csun_color, csun_intensity = Light.shader_radiance(dl, dt)
             c_tint = getattr(caustic_water, "sss_color", [0.0, 0.55, 0.45])
             c_strength = float(getattr(caustic_water, "caustics", 0.0))
             c_surface_y = caustic_best_y
@@ -2720,13 +2711,7 @@ out vec4 frag_color;
             if dir_light:
                 dl, dt = dir_light
                 sun_dir = -dt.forward
-                if dl.procedural_sky_lighting:
-                    sc, si = Light.compute_sun_light(-dt.forward)
-                    sun_color = sc
-                    sun_intensity = si
-                else:
-                    sun_color = dl.color
-                    sun_intensity = dl.intensity
+                sun_color, sun_intensity = Light.shader_radiance(dl, dt)
             fog_color = getattr(underwater_water, "deep_color", [0.02, 0.18, 0.28])
             caustic_color = getattr(underwater_water, "sss_color", [0.0, 0.55, 0.45])
             try:
@@ -3341,6 +3326,7 @@ out vec4 frag_color;
         self._snap_scene = None
         if self._materials:
             self._materials.clear_caches()
+        release_env_cache()
         if self._mesh_loader:
             self._mesh_loader.clear_scene_data()
 

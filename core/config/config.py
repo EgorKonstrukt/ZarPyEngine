@@ -190,7 +190,8 @@ def get_global_config() -> Config:
                 "selection_outline_thickness": 0.03,
                 "tick_rate": 120.0,
                 "fixed_tick_rate": 60.0,
-                "max_lights": 8
+                "max_lights": 8,
+                "light_scale": 1.0
             },
             "gizmo": {
                 "handle_size": 0.1,

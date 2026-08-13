@@ -413,9 +413,9 @@ Shader "Zarin/PBR"
                 } else {
                     vec3 to_light = light.position - v_world_pos;
                     float dist = length(to_light);
-                    light_dir = normalize(to_light);
-                    attenuation = clamp(1.0 - dist / light.range, 0.0, 1.0);
-                    attenuation *= attenuation;
+                    light_dir = to_light / dist;
+                    float range_fade = clamp(1.0 - pow(dist / max(light.range, 1e-4), 4.0), 0.0, 1.0);
+                    attenuation = range_fade * range_fade / (dist * dist + 1.0);
                     if (light.type == 2) {
                         float theta = dot(light_dir, normalize(-light.direction));
                         float inner = cos(radians(light.spot_inner_angle));
@@ -521,8 +521,8 @@ Shader "Zarin/PBR"
                         } else {
                             NdL = abs(NdL);
                         }
-                        float att = clamp(1.0 - dist / light.range, 0.0, 1.0);
-                        att *= att;
+                        float range_fade = clamp(1.0 - pow(dist / max(light.range, 1e-4), 4.0), 0.0, 1.0);
+                        float att = range_fade * range_fade / (dist * dist + 1.0);
                         vec3 radiance = light.color * light.intensity * att * inv_n;
                         vec3 H = normalize(V + ld);
                         vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
@@ -688,9 +688,9 @@ Shader "Zarin/PBR"
                         } else {
                             vec3 to_light = u_lights[i].position - v_world_pos;
                             float dist = length(to_light);
-                            light_dir = normalize(to_light);
-                            attenuation = clamp(1.0 - dist / u_lights[i].range, 0.0, 1.0);
-                            attenuation *= attenuation;
+                            light_dir = to_light / dist;
+                            float range_fade = clamp(1.0 - pow(dist / max(u_lights[i].range, 1e-4), 4.0), 0.0, 1.0);
+                            attenuation = range_fade * range_fade / (dist * dist + 1.0);
                             if (u_lights[i].type == 2) {
                                 float theta = dot(light_dir, normalize(-u_lights[i].direction));
                                 float inner = cos(radians(u_lights[i].spot_inner_angle));

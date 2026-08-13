@@ -470,11 +470,12 @@ class RaytracingRenderer(Component):
             c = l.color
             spot_cos = math.cos(math.radians(l.spot_angle))
             inner_cos = math.cos(math.radians(l.spot_inner_angle))
+            _, eff_int = Light.shader_radiance(l, t)
             lights_list.append([
                 float(lt), t.position.x, t.position.y, t.position.z,
                 fwd.x, fwd.y, fwd.z,
                 c[0], c[1], c[2],
-                l.intensity, l.range, spot_cos, inner_cos,
+                eff_int, l.range, spot_cos, inner_cos,
             ])
         n_lights = min(len(lights_list), _MAX_LIGHTS)
         light_np = np.zeros((max(n_lights, 1), 14), dtype=np.float32)
@@ -562,10 +563,7 @@ class RaytracingRenderer(Component):
             t = ent.transform
             if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
                 sun_dir = -t.forward
-                if l.procedural_sky_lighting:
-                    sky_color, sky_intensity = Light.compute_sun_light(sun_dir)
-                else:
-                    sky_color, sky_intensity = l.color, l.intensity
+                sky_color, sky_intensity = Light.shader_radiance(l, t)
                 break
         try:
             self._sky_env_prog["u_sun_direction"] = (sun_dir.x, sun_dir.y, sun_dir.z)
