@@ -7,6 +7,7 @@
 from __future__ import annotations
 import ctypes
 import os
+from collections import OrderedDict
 import numpy as np
 import moderngl
 from ctypes import c_void_p
@@ -171,6 +172,14 @@ def _make_face_vao(ctx: moderngl.Context, prog: moderngl.Program):
     return vao, vbo
 
 
+def _restore_framebuffer(ctx: moderngl.Context, prev_fbo):
+    if prev_fbo is not None:
+        try:
+            prev_fbo.use()
+        except Exception:
+            pass
+
+
 def _render_cubemap_from_equirect(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int):
     cube_tex = ctx.texture_cube((res, res), 4, dtype="f4")
     cube_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
@@ -182,6 +191,7 @@ def _render_cubemap_from_equirect(ctx: moderngl.Context, env_tex: moderngl.Textu
     prog["u_equirect"].value = 0
     ctx.disable(moderngl.DEPTH_TEST)
     ctx.disable(moderngl.CULL_FACE)
+    prev_fbo = ctx.fbo
     try:
         for face in range(6):
             fx, fy, fz = _FACE_BASIS[face]
@@ -200,6 +210,7 @@ def _render_cubemap_from_equirect(ctx: moderngl.Context, env_tex: moderngl.Textu
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
         vao.release()
         vbo.release()
     return cube_tex
@@ -217,6 +228,7 @@ def _render_irradiance(ctx: moderngl.Context, src_tex: moderngl.TextureCube, res
     prog["u_cubemap"].value = 0
     ctx.disable(moderngl.DEPTH_TEST)
     ctx.disable(moderngl.CULL_FACE)
+    prev_fbo = ctx.fbo
     try:
         for face in range(6):
             fx, fy, fz = _FACE_BASIS[face]
@@ -235,6 +247,7 @@ def _render_irradiance(ctx: moderngl.Context, src_tex: moderngl.TextureCube, res
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
         vao.release()
         vbo.release()
     return irr_tex
@@ -248,6 +261,7 @@ def _render_brdf_lut(ctx: moderngl.Context):
     brdf_tex.repeat_y = False
     prog = ctx.program(vertex_shader=_FULLSCREEN_QUAD_VERT, fragment_shader=_BRDF_LUT_FRAG)
     vao, vbo = _make_face_vao(ctx, prog)
+    prev_fbo = ctx.fbo
     fbo = ctx.framebuffer(color_attachments=[brdf_tex])
     fbo.use()
     fbo.viewport = (0, 0, res, res)
@@ -259,6 +273,7 @@ def _render_brdf_lut(ctx: moderngl.Context):
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
         fbo.release()
         vao.release()
         vbo.release()
@@ -281,6 +296,7 @@ def _render_prefilter(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res
         pass
     ctx.disable(moderngl.DEPTH_TEST)
     ctx.disable(moderngl.CULL_FACE)
+    prev_fbo = ctx.fbo
     try:
         for level in range(_PREFILTER_MAX_LOD + 1):
             s = max(1, res >> level)
@@ -303,6 +319,7 @@ def _render_prefilter(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
         vao.release()
         vbo.release()
     return pref
@@ -348,6 +365,7 @@ def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
     sun_color = np.asarray(sun_color, dtype=np.float32).reshape(-1)[:3]
     ctx.disable(moderngl.DEPTH_TEST)
     ctx.disable(moderngl.CULL_FACE)
+    prev_fbo = ctx.fbo
     try:
         for face in range(6):
             fx, fy, fz = _FACE_BASIS[face]
@@ -383,14 +401,31 @@ def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
     return cube_tex
 
 
-_PROC_SKY_IBL_CACHE: dict[str, tuple[int, Optional[SkyIbl]]] = {}
+_PROC_SKY_IBL_CACHE: "OrderedDict[str, SkyIbl]" = OrderedDict()
+_PROC_SKY_IBL_CACHE_MAX = 8
 
 _PROC_SUN_DEFAULT_DIR = np.array([0.0, -0.3, -1.0], dtype=np.float32)
 _PROC_SUN_DEFAULT_COLOR = np.array([1.0, 0.95, 0.85], dtype=np.float32)
 _PROC_SUN_DEFAULT_INTENSITY = 1.0
+
+_SUN_DIR_GRID = 16.0
+
+
+def _snap_sun_dir(v):
+    a = np.asarray(v, dtype=np.float64).reshape(3)
+    n = np.linalg.norm(a)
+    if n <= 1e-9:
+        return _PROC_SUN_DEFAULT_DIR.copy()
+    a = a / n
+    a = np.round(a * _SUN_DIR_GRID) / _SUN_DIR_GRID
+    n2 = np.linalg.norm(a)
+    if n2 <= 1e-9:
+        return _PROC_SUN_DEFAULT_DIR.copy()
+    return (a / n2).astype(np.float32)
 
 
 def _quant(v, ndig: int):
@@ -406,17 +441,18 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
         sun_color = _PROC_SUN_DEFAULT_COLOR
     if sun_intensity is None:
         sun_intensity = _PROC_SUN_DEFAULT_INTENSITY
+    sun_dir = _snap_sun_dir(sun_dir)
     key = "|".join([
         material_path or "",
-        repr(_quant(sun_dir, 2)),
+        repr(_quant(sun_dir, 3)),
         repr(_quant(sun_color, 2)),
         str(round(float(sun_intensity), 2)),
     ])
-    cached = _PROC_SKY_IBL_CACHE.get(key)
-    if cached is not None:
-        cctx, ibl = cached
-        if cctx == id(ctx) and ibl is not None:
-            return ibl
+    key = f"{id(ctx)}|{key}"
+    if key in _PROC_SKY_IBL_CACHE:
+        ibl = _PROC_SKY_IBL_CACHE.pop(key)
+        _PROC_SKY_IBL_CACHE[key] = ibl
+        return ibl
     src_cube = None
     ibl = None
     try:
@@ -432,14 +468,13 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
             except Exception:
                 pass
     if ibl is not None:
-        for _k, (_c, _old) in list(_PROC_SKY_IBL_CACHE.items()):
-            if _old is not None and _old is not ibl:
-                try:
-                    _old.release()
-                except Exception:
-                    pass
-        _PROC_SKY_IBL_CACHE.clear()
-        _PROC_SKY_IBL_CACHE[key] = (id(ctx), ibl)
+        _PROC_SKY_IBL_CACHE[key] = ibl
+        while len(_PROC_SKY_IBL_CACHE) > _PROC_SKY_IBL_CACHE_MAX:
+            _old_key, _old = _PROC_SKY_IBL_CACHE.popitem(last=False)
+            try:
+                _old.release()
+            except Exception:
+                pass
     return ibl
 
 
@@ -473,7 +508,7 @@ def release_sky_ibl_cache():
             except Exception:
                 pass
     _SKY_IBL_CACHE.clear()
-    for _c, ibl in _PROC_SKY_IBL_CACHE.values():
+    for ibl in _PROC_SKY_IBL_CACHE.values():
         if ibl is not None:
             try:
                 ibl.release()
