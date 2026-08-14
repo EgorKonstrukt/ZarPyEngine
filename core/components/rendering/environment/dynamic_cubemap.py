@@ -5,14 +5,88 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import ctypes
 import time
 import numpy as np
 import moderngl
+from ctypes import c_void_p
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
 from core.foundation.logger import Logger
 from core.maths.math3d import Mat4, Vec3
+
+
+_GL_TEXTURE_CUBE_MAP = 0x8513
+_GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515
+_GL_RGBA16F = 0x881A
+_GL_RGBA = 0x1908
+_GL_FLOAT = 0x1406
+_GL_TEXTURE_MAX_LEVEL = 0x813D
+_GL_TEXTURE_MIN_FILTER = 0x2801
+_GL_TEXTURE_MAG_FILTER = 0x2800
+_GL_TEXTURE_WRAP_S = 0x2802
+_GL_TEXTURE_WRAP_T = 0x2803
+_GL_TEXTURE_WRAP_R = 0x8072
+_GL_LINEAR_MIPMAP_LINEAR = 0x2703
+_GL_LINEAR = 0x2601
+_GL_CLAMP_TO_EDGE = 0x812F
+
+_PREFILTER_MAX_LOD = 4
+
+_opengl32 = ctypes.windll.opengl32
+_opengl32.glGetError.restype = ctypes.c_uint
+_opengl32.glBindTexture.restype = None
+_opengl32.glBindTexture.argtypes = (ctypes.c_uint, ctypes.c_uint)
+_opengl32.glTexImage2D.restype = None
+_opengl32.glTexImage2D.argtypes = (
+    ctypes.c_uint, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ctypes.c_uint, ctypes.c_uint, c_void_p,
+)
+_opengl32.glTexSubImage2D.restype = None
+_opengl32.glTexSubImage2D.argtypes = (
+    ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint, c_void_p,
+)
+_opengl32.glTexParameteri.restype = None
+_opengl32.glTexParameteri.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
+
+
+def _allocate_cube_mip_levels(tex: moderngl.TextureCube, res: int, max_level: int):
+    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, tex.glo)
+    for level in range(max_level + 1):
+        s = max(1, res >> level)
+        for face in range(6):
+            _opengl32.glTexImage2D(
+                _GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, _GL_RGBA16F,
+                s, s, 0, _GL_RGBA, _GL_FLOAT, None,
+            )
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MAX_LEVEL, max_level)
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MIN_FILTER, _GL_LINEAR_MIPMAP_LINEAR)
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MAG_FILTER, _GL_LINEAR)
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_S, _GL_CLAMP_TO_EDGE)
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_T, _GL_CLAMP_TO_EDGE)
+    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_R, _GL_CLAMP_TO_EDGE)
+    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, 0)
+
+
+def _write_cube_face_mip(tex: moderngl.TextureCube, face: int, level: int, size: int, data: bytes):
+    buf = np.frombuffer(data, np.float32)
+    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, tex.glo)
+    _opengl32.glTexSubImage2D(
+        _GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, 0, 0,
+        size, size, _GL_RGBA, _GL_FLOAT, buf.ctypes.data_as(c_void_p),
+    )
+    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, 0)
+
+
+def _restore_framebuffer(ctx: moderngl.Context, prev_fbo):
+    if prev_fbo is not None:
+        try:
+            prev_fbo.use()
+        except Exception:
+            pass
 
 
 _FACE_DIRS = [
@@ -84,7 +158,6 @@ uniform vec3 u_face_x;
 uniform vec3 u_face_y;
 uniform vec3 u_face_z;
 uniform float u_roughness;
-uniform float u_resolution;
 const float PI = 3.14159265359;
 float distribution_ggx(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
@@ -326,9 +399,9 @@ class DynamicCubemaps(Component):
         self._prefilter_fbos = []
         try:
             self._prefilter_tex = ctx.texture_cube((res, res), 4, dtype="f4")
-            self._prefilter_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
             self._prefilter_tex.repeat_x = False
             self._prefilter_tex.repeat_y = False
+            _allocate_cube_mip_levels(self._prefilter_tex, res, _PREFILTER_MAX_LOD)
             for mip in range(prefilter_mip_count):
                 mip_res = max(1, res // (2 ** mip))
                 mip_tex = ctx.texture((mip_res, mip_res), 4, dtype="f4")
@@ -412,6 +485,12 @@ class DynamicCubemaps(Component):
         view_f32 = face_view.to_f32()
         proj_f32 = face_proj.to_f32()
 
+        prev_fbo = None
+        try:
+            prev_fbo = ctx.fbo
+        except Exception:
+            prev_fbo = None
+
         if main_snap is not None:
             snap = main_snap
         else:
@@ -422,6 +501,8 @@ class DynamicCubemaps(Component):
             renderer.render_cubemap_face(snap, fbo, res, view_f32, proj_f32, cam_pos, snap.lights, skip_entity=skip_entity)
         finally:
             renderer._rendering_cubemap_face = False
+
+        _restore_framebuffer(ctx, prev_fbo)
 
         face_tex = self._face_color_texs[face]
         if face_tex is not None and self._cubemap_tex is not None:
@@ -435,6 +516,12 @@ class DynamicCubemaps(Component):
         if self._irradiance_tex is None:
             return
 
+        prev_fbo = None
+        try:
+            prev_fbo = ctx.fbo
+        except Exception:
+            prev_fbo = None
+
         prog = self._irradiance_prog
         irr_res = max(32, self.resolution // 4)
 
@@ -447,6 +534,7 @@ class DynamicCubemaps(Component):
             prog["u_cubemap"].value = 0
         except Exception:
             vao.release()
+            _restore_framebuffer(ctx, prev_fbo)
             return
 
         for face in range(6):
@@ -463,6 +551,7 @@ class DynamicCubemaps(Component):
                 prog["u_face_z"].value = fz
             except Exception:
                 continue
+            self._cubemap_tex.use(0)
             vao.render(moderngl.TRIANGLES)
             try:
                 data = self._irradiance_face_texs[face].read()
@@ -473,10 +562,17 @@ class DynamicCubemaps(Component):
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
         vao.release()
+        _restore_framebuffer(ctx, prev_fbo)
 
     def generate_prefilter(self, ctx: moderngl.Context):
         if self._prefilter_prog is None or self._cubemap_tex is None:
             return
+
+        prev_fbo = None
+        try:
+            prev_fbo = ctx.fbo
+        except Exception:
+            prev_fbo = None
 
         prog = self._prefilter_prog
         ctx.disable(moderngl.DEPTH_TEST)
@@ -486,9 +582,11 @@ class DynamicCubemaps(Component):
         try:
             self._cubemap_tex.use(0)
             prog["u_cubemap"].value = 0
-            prog["u_resolution"].value = float(self.resolution)
         except Exception:
             vao.release()
+            ctx.enable(moderngl.DEPTH_TEST)
+            ctx.enable(moderngl.CULL_FACE)
+            _restore_framebuffer(ctx, prev_fbo)
             return
 
         for mip_idx, (mip_fbo, mip_tex, mip_res, mip_level) in enumerate(self._prefilter_fbos):
@@ -505,21 +603,29 @@ class DynamicCubemaps(Component):
                     prog["u_face_z"].value = fz
                 except Exception:
                     continue
+                self._cubemap_tex.use(0)
                 vao.render(moderngl.TRIANGLES)
 
                 try:
                     mip_data = mip_tex.read()
-                    self._prefilter_tex.write(face, mip_data)
+                    _write_cube_face_mip(self._prefilter_tex, face, mip_level, mip_res, mip_data)
                 except Exception:
                     pass
 
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
         vao.release()
+        _restore_framebuffer(ctx, prev_fbo)
 
     def generate_brdf_lut(self, ctx: moderngl.Context):
         if self._brdf_prog is None or self._brdf_lut_fbo is None:
             return
+
+        prev_fbo = None
+        try:
+            prev_fbo = ctx.fbo
+        except Exception:
+            prev_fbo = None
 
         brdf_res = 256
         self._brdf_lut_fbo.use()
@@ -534,6 +640,7 @@ class DynamicCubemaps(Component):
 
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
+        _restore_framebuffer(ctx, prev_fbo)
 
     def update(self, ctx: moderngl.Context, view_mat: Mat4, proj_mat: Mat4,
                cam_pos: Vec3, scene, renderer, main_snap=None, skip_entity=None) -> bool:

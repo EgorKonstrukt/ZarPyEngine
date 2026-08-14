@@ -5,83 +5,22 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-import ctypes
 import os
 from collections import OrderedDict
 import numpy as np
 import moderngl
-from ctypes import c_void_p
 from typing import Optional
 from core.components.rendering.environment.dynamic_cubemap import (
+    _allocate_cube_mip_levels,
     _BRDF_LUT_FRAG,
     _FACE_BASIS,
     _FULLSCREEN_QUAD_VERT,
     _IRRADIANCE_FRAG,
     _PREFILTER_FRAG,
+    _PREFILTER_MAX_LOD,
+    _restore_framebuffer,
+    _write_cube_face_mip,
 )
-
-_GL_TEXTURE_CUBE_MAP = 0x8513
-_GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515
-_GL_RGBA16F = 0x881A
-_GL_RGBA = 0x1908
-_GL_FLOAT = 0x1406
-_GL_TEXTURE_MAX_LEVEL = 0x813D
-_GL_TEXTURE_MIN_FILTER = 0x2801
-_GL_TEXTURE_MAG_FILTER = 0x2800
-_GL_TEXTURE_WRAP_S = 0x2802
-_GL_TEXTURE_WRAP_T = 0x2803
-_GL_TEXTURE_WRAP_R = 0x8072
-_GL_LINEAR_MIPMAP_LINEAR = 0x2703
-_GL_LINEAR = 0x2601
-_GL_CLAMP_TO_EDGE = 0x812F
-
-_PREFILTER_MAX_LOD = 4
-
-_opengl32 = ctypes.windll.opengl32
-_opengl32.glGetError.restype = ctypes.c_uint
-_opengl32.glBindTexture.restype = None
-_opengl32.glBindTexture.argtypes = (ctypes.c_uint, ctypes.c_uint)
-_opengl32.glTexImage2D.restype = None
-_opengl32.glTexImage2D.argtypes = (
-    ctypes.c_uint, ctypes.c_int, ctypes.c_int,
-    ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    ctypes.c_uint, ctypes.c_uint, c_void_p,
-)
-_opengl32.glTexSubImage2D.restype = None
-_opengl32.glTexSubImage2D.argtypes = (
-    ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint, c_void_p,
-)
-_opengl32.glTexParameteri.restype = None
-_opengl32.glTexParameteri.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
-
-
-def _allocate_cube_mip_levels(tex: moderngl.TextureCube, res: int, max_level: int):
-    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, tex.glo)
-    for level in range(max_level + 1):
-        s = max(1, res >> level)
-        for face in range(6):
-            _opengl32.glTexImage2D(
-                _GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, _GL_RGBA16F,
-                s, s, 0, _GL_RGBA, _GL_FLOAT, None,
-            )
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MAX_LEVEL, max_level)
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MIN_FILTER, _GL_LINEAR_MIPMAP_LINEAR)
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_MAG_FILTER, _GL_LINEAR)
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_S, _GL_CLAMP_TO_EDGE)
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_T, _GL_CLAMP_TO_EDGE)
-    _opengl32.glTexParameteri(_GL_TEXTURE_CUBE_MAP, _GL_TEXTURE_WRAP_R, _GL_CLAMP_TO_EDGE)
-    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, 0)
-
-
-def _write_cube_face_mip(tex: moderngl.TextureCube, face: int, level: int, size: int, data: bytes):
-    buf = np.frombuffer(data, np.float32)
-    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, tex.glo)
-    _opengl32.glTexSubImage2D(
-        _GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, level, 0, 0,
-        size, size, _GL_RGBA, _GL_FLOAT, buf.ctypes.data_as(c_void_p),
-    )
-    _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, 0)
 
 _EQUIRECT_TO_CUBE_FRAG = """
 #version 460 core
@@ -240,6 +179,7 @@ def _render_irradiance(ctx: moderngl.Context, src_tex: moderngl.TextureCube, res
             prog["u_face_x"].value = fx
             prog["u_face_y"].value = fy
             prog["u_face_z"].value = fz
+            src_tex.use(0)
             vao.render(moderngl.TRIANGLES)
             irr_tex.write(face, face_tex.read())
             fbo.release()
@@ -290,10 +230,6 @@ def _render_prefilter(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res
     vao, vbo = _make_face_vao(ctx, prog)
     src_cube.use(0)
     prog["u_cubemap"].value = 0
-    try:
-        prog["u_resolution"].value = float(res)
-    except Exception:
-        pass
     ctx.disable(moderngl.DEPTH_TEST)
     ctx.disable(moderngl.CULL_FACE)
     prev_fbo = ctx.fbo
@@ -312,6 +248,7 @@ def _render_prefilter(ctx: moderngl.Context, src_cube: moderngl.TextureCube, res
                 prog["u_face_x"].value = fx
                 prog["u_face_y"].value = fy
                 prog["u_face_z"].value = fz
+                src_cube.use(0)
                 vao.render(moderngl.TRIANGLES)
                 _write_cube_face_mip(pref, face, level, s, face_tex.read())
                 fbo.release()

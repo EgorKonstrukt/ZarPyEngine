@@ -2430,6 +2430,15 @@ out vec4 frag_color;
                                 prog["u_prefilter_map_Active"].value = 0
                             if "u_brdf_lut_Active" in names:
                                 prog["u_brdf_lut_Active"].value = 0
+                            # Keep the IBL samplers off unit 0: unit 0 may hold
+                            # a cubemap left by dynamic-cubemap generation, which
+                            # makes the driver reject draws referencing unit 0.
+                            if "u_irradiance_map" in names:
+                                prog["u_irradiance_map"].value = 14
+                            if "u_prefilter_map" in names:
+                                prog["u_prefilter_map"].value = 15
+                            if "u_brdf_lut" in names:
+                                prog["u_brdf_lut"].value = 16
                         except Exception:
                             pass
                     model = wm
