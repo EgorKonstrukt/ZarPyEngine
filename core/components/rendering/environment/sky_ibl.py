@@ -14,6 +14,7 @@ from core.components.rendering.environment.dynamic_cubemap import (
     _allocate_cube_mip_levels,
     _BRDF_LUT_FRAG,
     _FACE_BASIS,
+    _FACE_DIRS,
     _FULLSCREEN_QUAD_VERT,
     _IRRADIANCE_FRAG,
     _PREFILTER_FRAG,
@@ -109,14 +110,6 @@ def _make_face_vao(ctx: moderngl.Context, prog: moderngl.Program):
     vbo = ctx.buffer(verts.tobytes())
     vao = ctx.vertex_array(prog, [(vbo, "2f 2f", "in_position", "in_uv")])
     return vao, vbo
-
-
-def _restore_framebuffer(ctx: moderngl.Context, prev_fbo):
-    if prev_fbo is not None:
-        try:
-            prev_fbo.use()
-        except Exception:
-            pass
 
 
 def _render_cubemap_from_equirect(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int):
@@ -293,11 +286,17 @@ def _generate_ibl(ctx: moderngl.Context, env_tex: moderngl.Texture, res: int = 1
 
 def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
                              sun_dir, sun_color, sun_intensity, res: int = 128) -> moderngl.TextureCube:
+    from core.maths.math3d import Mat4, Vec3
+    from core.renderer.meshes import make_cube_mesh
+
     cube_tex = ctx.texture_cube((res, res), 4, dtype="f4")
     cube_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
     cube_tex.repeat_x = False
     cube_tex.repeat_y = False
-    quad = np.array([[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]], dtype=np.float32)
+    mesh = make_cube_mesh()
+    vbo = ctx.buffer(mesh.vertices.tobytes())
+    ibo = ctx.buffer(mesh.indices.astype(np.uint32).tobytes())
+    vao = ctx.vertex_array(sky_prog, [(vbo, "3f", "in_position")], ibo)
     sun_dir = np.asarray(sun_dir, dtype=np.float32).reshape(3)
     sun_color = np.asarray(sun_color, dtype=np.float32).reshape(-1)[:3]
     ctx.disable(moderngl.DEPTH_TEST)
@@ -305,20 +304,18 @@ def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
     prev_fbo = ctx.fbo
     try:
         for face in range(6):
-            fx, fy, fz = _FACE_BASIS[face]
-            fxa = np.array(fx, dtype=np.float32)
-            fya = np.array(fy, dtype=np.float32)
-            fza = np.array(fz, dtype=np.float32)
-            dirs = fxa[None, :] * quad[:, 0:1] + fya[None, :] * quad[:, 1:2] + fza[None, :]
-            dirs /= np.linalg.norm(dirs, axis=1, keepdims=True) + 1e-12
-            vbo = ctx.buffer(dirs.astype(np.float32).tobytes())
-            vao = ctx.vertex_array(sky_prog, [(vbo, "3f", "in_position")])
+            fwd, up = _FACE_DIRS[face]
+            face_view = Mat4.look_at(Vec3(0.0, 0.0, 0.0),
+                                     Vec3(fwd.x, fwd.y, fwd.z),
+                                     Vec3(up.x, up.y, up.z))
+            face_proj = Mat4.perspective(90.0, 1.0, 0.1, 100.0)
+            mvp = face_view * face_proj
             face_tex = ctx.texture((res, res), 4, dtype="f4")
             fbo = ctx.framebuffer(color_attachments=[face_tex])
             fbo.use()
             fbo.viewport = (0, 0, res, res)
             ctx.clear(0.0, 0.0, 0.0, 1.0)
-            sky_prog["u_mvp"].write(np.eye(4, dtype=np.float32).tobytes())
+            sky_prog["u_mvp"].write(mvp.to_f32().tobytes())
             try:
                 sky_prog["u_use_env"].value = 0.0
             except Exception:
@@ -329,16 +326,17 @@ def _render_cubemap_from_sky(ctx: moderngl.Context, sky_prog: moderngl.Program,
                 sky_prog["_SunIntensity"].value = float(sun_intensity)
             except Exception:
                 pass
-            vao.render(moderngl.TRIANGLES)
+            vao.render(moderngl.TRIANGLES, vertices=mesh.indices.size)
             cube_tex.write(face, face_tex.read())
             fbo.release()
             face_tex.release()
-            vao.release()
-            vbo.release()
     finally:
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
         _restore_framebuffer(ctx, prev_fbo)
+        vao.release()
+        vbo.release()
+        ibo.release()
     return cube_tex
 
 
