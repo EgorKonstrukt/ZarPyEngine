@@ -11,8 +11,9 @@ ComputeShader "Zarin/SkyEnv"
         _SunDirection("Sun Direction", Vector) = (0, -0.3, -1, 0)
         _SunColor("Sun Color", Color) = (1, 0.95, 0.85, 1)
         _SunIntensity("Sun Intensity", Float) = 1
-        _SunSize("Sun Size", Float) = 0.0008
-        _SunConvergence("Sun Convergence", Range(0, 1)) = 0.5
+        _SunAngularRadius("Sun Angular Radius (deg)", Float) = 0.27
+        _SunLimbDarkening("Sun Limb Darkening", Range(0, 1)) = 0.7
+        _SunConvergence("Sun Edge Softness", Range(0, 1)) = 0.5
     }
 
     GLSLPROGRAM
@@ -26,8 +27,28 @@ ComputeShader "Zarin/SkyEnv"
     uniform vec3 u_sun_direction;
     uniform vec3 u_sun_color;
     uniform float u_sun_intensity;
-    uniform float u_sun_size;
+    uniform float u_sun_angular_radius;
+    uniform float u_sun_limb_darkening;
     uniform float u_sun_convergence;
+
+    float sun_disk_factor(vec3 dir, vec3 sun_dir) {
+        float radius = radians(max(u_sun_angular_radius, 0.01));
+        float ry = radius * mix(1.0, 0.35, smoothstep(0.0, -0.08, sun_dir.y));
+        vec3 u = sun_dir;
+        vec3 v = cross(vec3(0.0, 1.0, 0.0), u);
+        float vl = length(v);
+        v = (vl > 1e-5) ? (v / vl) : vec3(1.0, 0.0, 0.0);
+        vec3 w = cross(v, u);
+        float elev = asin(clamp(dot(dir, w), -1.0, 1.0));
+        float az = asin(clamp(dot(dir, v), -1.0, 1.0));
+        float dist = length(vec2(elev / ry, az / radius));
+        float soft = u_sun_convergence * 0.35;
+        float disk = 1.0 - smoothstep(1.0 - soft, 1.0 + soft * 1.5, dist);
+        float rn = clamp(dist, 0.0, 1.0);
+        float limb = sqrt(max(1.0 - rn * rn, 0.0));
+        disk = disk * mix(1.0 - u_sun_limb_darkening, 1.0, limb);
+        return disk;
+    }
 
     vec3 compute_sky(vec3 dir) {
         vec3 sun_dir = normalize(u_sun_direction);
@@ -49,10 +70,9 @@ ComputeShader "Zarin/SkyEnv"
         float height_gradient = 1.0 - pow(1.0 - cos_theta, 4.0);
         vec3 base_sky = mix(horizon_color, sky_top, height_gradient);
         sky = max(sky + base_sky * 0.85 + vec3(0.015, 0.025, 0.04), 0.0);
-        float sun_start = 1.0 - u_sun_size * 3.0;
-        float sun_end = 1.0 - u_sun_size * (1.0 - u_sun_convergence * 0.8);
-        float sun_disk = smoothstep(sun_start, sun_end, cos_gamma);
-        sky += u_sun_color * u_sun_intensity * sun_disk;
+        float below_horizon = smoothstep(0.0, -0.12, sun_height);
+        sky += u_sun_color * u_sun_intensity * sun_disk_factor(dir, sun_dir)
+             * (1.0 - below_horizon);
         float night = smoothstep(0.05, -0.4, sun_height);
         sky *= (1.0 - night * 0.72);
         return sky;

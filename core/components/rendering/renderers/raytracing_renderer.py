@@ -569,7 +569,8 @@ class RaytracingRenderer(Component):
             self._sky_env_prog["u_sun_direction"] = (sun_dir.x, sun_dir.y, sun_dir.z)
             self._sky_env_prog["u_sun_color"] = (sky_color[0], sky_color[1], sky_color[2])
             self._sky_env_prog["u_sun_intensity"] = sky_intensity
-            self._sky_env_prog["u_sun_size"] = 0.0008
+            self._sky_env_prog["u_sun_angular_radius"] = 0.27
+            self._sky_env_prog["u_sun_limb_darkening"] = 0.7
             self._sky_env_prog["u_sun_convergence"] = 0.5
         except KeyError as e:
             Logger.warning(f"SkyEnv uniform missing: {e}")

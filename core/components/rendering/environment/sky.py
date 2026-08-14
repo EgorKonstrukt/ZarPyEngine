@@ -209,6 +209,15 @@ class Sky(Component):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
+
+        def set_sun_disk_defaults(p):
+            if "_SunAngularRadius" in p:
+                p["_SunAngularRadius"].value = 0.27
+            if "_SunLimbDarkening" in p:
+                p["_SunLimbDarkening"].value = 0.7
+            if "_SunConvergence" in p:
+                p["_SunConvergence"].value = 0.5
+
         sun_world = None
         sun_color = None
         sun_intensity = None
@@ -222,10 +231,7 @@ class Sky(Component):
                 prog["_SunColor"].write(np.array(sky_color, dtype=np.float32).tobytes())
             if "_SunIntensity" in prog:
                 prog["_SunIntensity"].value = sky_intensity
-            if "_SunSize" in prog:
-                prog["_SunSize"].value = 0.0008
-            if "_SunConvergence" in prog:
-                prog["_SunConvergence"].value = 0.5
+            set_sun_disk_defaults(prog)
             sun_world = (-dt.forward.x, -dt.forward.y, -dt.forward.z)
             sun_color = sky_color
             sun_intensity = sky_intensity
@@ -236,10 +242,7 @@ class Sky(Component):
                 prog["_SunColor"].write(np.array([1.0, 0.95, 0.85], dtype=np.float32).tobytes())
             if "_SunIntensity" in prog:
                 prog["_SunIntensity"].value = 1.0
-            if "_SunSize" in prog:
-                prog["_SunSize"].value = 0.0008
-            if "_SunConvergence" in prog:
-                prog["_SunConvergence"].value = 0.5
+            set_sun_disk_defaults(prog)
             sun_world = (0.0, -0.3, -1.0)
             sun_color = [1.0, 0.95, 0.85]
             sun_intensity = 1.0

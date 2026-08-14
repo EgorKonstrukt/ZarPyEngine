@@ -58,6 +58,12 @@ class Atmosphere(Component):
             InspectorField("_intensity", "Intensity", FieldType.SLIDER, min_val=1.0, max_val=200.0, step=1.0, decimals=0),
             InspectorField("_sun_intensity", "Sun Intensity", FieldType.SLIDER, min_val=0.0, max_val=10.0, step=0.1, decimals=1),
             InspectorField("_resolution_scale", "LUT Resolution", FieldType.SLIDER, min_val=0.25, max_val=1.0, step=0.25, decimals=2),
+            InspectorField("_ozone_factor", "Ozone Factor", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.1, decimals=1),
+            InspectorField("_aerosol_scale", "Aerosol Scale", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.1, decimals=1),
+            InspectorField("_sun_angular_radius", "Sun Angular Radius (deg)", FieldType.SLIDER, min_val=0.05, max_val=1.0, step=0.01, decimals=2),
+            InspectorField("_sun_limb_darkening", "Sun Limb Darkening", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.05, decimals=2),
+            InspectorField("_sun_convergence", "Sun Edge Softness", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.05, decimals=2),
+            InspectorField("_color_temperature", "Sun Color Temp (K)", FieldType.SLIDER, min_val=2000, max_val=20000, step=100, decimals=0),
         ]
 
     def __init__(self):
@@ -65,6 +71,12 @@ class Atmosphere(Component):
         self._intensity: float = 40.0
         self._sun_intensity: float = 1.0
         self._resolution_scale: float = 1.0
+        self._ozone_factor: float = 1.0
+        self._aerosol_scale: float = 1.0
+        self._sun_angular_radius: float = 0.27
+        self._sun_limb_darkening: float = 0.7
+        self._sun_convergence: float = 0.5
+        self._color_temperature: float = 5778.0
 
         self._ctx: Optional[moderngl.Context] = None
         self._program: Optional[moderngl.ComputeShader] = None
@@ -79,6 +91,12 @@ class Atmosphere(Component):
             "_intensity": self._intensity,
             "_sun_intensity": self._sun_intensity,
             "_resolution_scale": self._resolution_scale,
+            "_ozone_factor": self._ozone_factor,
+            "_aerosol_scale": self._aerosol_scale,
+            "_sun_angular_radius": self._sun_angular_radius,
+            "_sun_limb_darkening": self._sun_limb_darkening,
+            "_sun_convergence": self._sun_convergence,
+            "_color_temperature": self._color_temperature,
         })
         return d
 
@@ -88,6 +106,12 @@ class Atmosphere(Component):
         inst._intensity = float(data.get("_intensity", 40.0))
         inst._sun_intensity = float(data.get("_sun_intensity", 1.0))
         inst._resolution_scale = float(data.get("_resolution_scale", 1.0))
+        inst._ozone_factor = float(data.get("_ozone_factor", 1.0))
+        inst._aerosol_scale = float(data.get("_aerosol_scale", 1.0))
+        inst._sun_angular_radius = float(data.get("_sun_angular_radius", 0.27))
+        inst._sun_limb_darkening = float(data.get("_sun_limb_darkening", 0.7))
+        inst._sun_convergence = float(data.get("_sun_convergence", 0.5))
+        inst._color_temperature = float(data.get("_color_temperature", 5778.0))
         inst._ctx = None
         inst._program = None
         inst._transmittance_tex = None
@@ -142,6 +166,8 @@ class Atmosphere(Component):
         prog["u_sun_direction"].write(np.array(sun_dir, dtype=np.float32).tobytes())
         prog["u_sun_color"].write(np.array(sun_color, dtype=np.float32).tobytes())
         prog["u_sun_intensity"].value = sun_intensity
+        prog["u_ozone_factor"].value = float(self._ozone_factor)
+        prog["u_aerosol_scale"].value = float(self._aerosol_scale)
 
         prog["u_pass"].value = 0
         self._transmittance_tex.bind_to_image(0, read=True, write=True)
@@ -162,7 +188,8 @@ class Atmosphere(Component):
         self._ensure_textures(ctx)
         key = (tuple(float(v) for v in sun_dir),
                tuple(float(v) for v in sun_color),
-               float(sun_intensity), self._lut_sizes)
+               float(sun_intensity), float(self._ozone_factor),
+               float(self._aerosol_scale), self._lut_sizes)
         if key != self._cache_key:
             self._cache_key = key
             try:
@@ -189,6 +216,12 @@ class Atmosphere(Component):
                 prog["u_use_atmosphere"].value = 1
             if "u_atmosphere_intensity" in prog:
                 prog["u_atmosphere_intensity"].value = self._intensity
+            if "_SunAngularRadius" in prog:
+                prog["_SunAngularRadius"].value = float(self._sun_angular_radius)
+            if "_SunLimbDarkening" in prog:
+                prog["_SunLimbDarkening"].value = float(self._sun_limb_darkening)
+            if "_SunConvergence" in prog:
+                prog["_SunConvergence"].value = float(self._sun_convergence)
         except Exception as e:
             Logger.error(f"Atmosphere.bind_sky error: {e}")
 

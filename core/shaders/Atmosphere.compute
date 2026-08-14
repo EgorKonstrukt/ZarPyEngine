@@ -11,6 +11,8 @@ ComputeShader "Zarin/Atmosphere"
         _SunDirection("Sun Direction", Vector) = (0, 1, 0.5, 0)
         _SunColor("Sun Color", Color) = (1, 0.95, 0.85, 1)
         _SunIntensity("Sun Intensity", Float) = 1
+        _OzoneFactor("Ozone Factor", Float) = 1
+        _AerosolScale("Aerosol Scale", Float) = 1
     }
 
     GLSLPROGRAM
@@ -27,6 +29,9 @@ ComputeShader "Zarin/Atmosphere"
     const float M_KM = 1000.0;        // meters per km
     const vec3 betaR = vec3(5.802e-6, 13.558e-6, 33.1e-6);   // rayleigh scattering (1/m)
     const vec3 betaM = vec3(3.996e-6, 3.996e-6, 3.996e-6);   // mie scattering (1/m)
+    // Ozone absorption in the Chappuis band (Bruneton 2017 constants). Ozone
+    // absorbs but does not scatter, so it only contributes to extinction.
+    const vec3 betaO = vec3(0.650e-6, 1.881e-6, 0.085e-6);   // ozone absorption (1/m)
     const float g = 0.8;
     const float CAM_HEIGHT_KM = 0.02; // camera altitude above ground (km)
 
@@ -37,6 +42,8 @@ ComputeShader "Zarin/Atmosphere"
     uniform vec3 u_sun_direction;
     uniform vec3 u_sun_color;
     uniform float u_sun_intensity;
+    uniform float u_ozone_factor;
+    uniform float u_aerosol_scale;
 
     bool intersect_sphere(vec3 o, vec3 d, float radius, out float tmin, out float tmax) {
         float b = dot(o, d);
@@ -49,8 +56,16 @@ ComputeShader "Zarin/Atmosphere"
         return true;
     }
 
+    // Ozone density: concentration peaks around 25 km altitude.
+    float ozone_density(float h_km) {
+        float x = (h_km - 25.0) / 15.0;
+        return u_ozone_factor * exp(-x * x);
+    }
+
     vec3 extinction_at(float h_km) {
-        return betaR * exp(-h_km / Hr) + betaM * exp(-h_km / Hm);
+        return betaR * exp(-h_km / Hr)
+             + betaM * u_aerosol_scale * exp(-h_km / Hm)
+             + betaO * ozone_density(h_km) * 0.55;
     }
 
     // ---- Transmittance LUT ----
@@ -140,7 +155,7 @@ ComputeShader "Zarin/Atmosphere"
             float mu_sun = dot(normalize(p), sun_dir);
             vec3 sun_trans = sample_transmittance(length(p), mu_sun);
             vec3 scatter = u_sun_color * u_sun_intensity * sun_trans
-                         * (betaR * rayleigh_phase + betaM * mie_phase);
+                         * (betaR * rayleigh_phase + betaM * u_aerosol_scale * mie_phase);
             in_scatter += transmittance * scatter * dt;
             transmittance *= exp(-beta * dt);
         }

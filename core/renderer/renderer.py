@@ -1687,6 +1687,12 @@ out vec4 frag_color;
             prog["u_time"].value = time.time()
         n_lights = min(len(lights), self._max_lights)
         abuf = self._ambient_buf
+        proc_sun = None
+        for i in range(n_lights):
+            l, lt = lights[i]
+            if l.light_type == LightType.DIRECTIONAL and getattr(l, "procedural_sky_lighting", False):
+                proc_sun = (l, lt)
+                break
         if self._render_mode == RenderMode.FLAT:
             if "u_ambient" in prog:
                 abuf[0] = 1.0; abuf[1] = 1.0; abuf[2] = 1.0
@@ -1697,7 +1703,21 @@ out vec4 frag_color;
         else:
             if "u_ambient" in prog:
                 amb = self._ambient
-                abuf[0] = amb[0]; abuf[1] = amb[1]; abuf[2] = amb[2]
+                if proc_sun is not None:
+                    try:
+                        p_l, p_t = proc_sun
+                        p_c, p_i = Light.shader_radiance(p_l, p_t)
+                        e = -p_t.forward.y
+                        day = max(0.0, min(1.0, float(e) * 2.0 + 0.2))
+                        scale = 0.3 + 0.7 * day
+                        tint = [0.3 + 0.5 * p_c[0], 0.35 + 0.5 * p_c[1], 0.55 + 0.5 * p_c[2]]
+                        abuf[0] = amb[0] * tint[0] * scale
+                        abuf[1] = amb[1] * tint[1] * scale
+                        abuf[2] = amb[2] * tint[2] * scale
+                    except Exception:
+                        abuf[0] = amb[0]; abuf[1] = amb[1]; abuf[2] = amb[2]
+                else:
+                    abuf[0] = amb[0]; abuf[1] = amb[1]; abuf[2] = amb[2]
                 prog["u_ambient"].write(abuf.tobytes())
             if "u_light_count" in prog:
                 prog["u_light_count"].value = n_lights

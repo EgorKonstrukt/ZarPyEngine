@@ -177,28 +177,75 @@ class Light(Component):
         return [GizmoPrimitive.from_lines(lines)]
 
     @staticmethod
-    def compute_sun_light(sun_dir: Vec3) -> tuple[list[float], float]:
-        elevation = sun_dir.y
+    def _planck_white(color_temp: float) -> list[float]:
+        """Approximate black-body white point (Tanner Helland formula)."""
+        t = max(float(color_temp), 1000.0) / 100.0
+        if t <= 66.0:
+            r = 255.0
+            g = 99.4708025861 * math.log(t) - 161.1195681661
+            b = 138.5177312231 * math.log(t - 10.0) - 305.0447927307 if t > 19.0 else 0.0
+        else:
+            r = 329.698727446 * math.pow(t - 60.0, -0.1332047592)
+            g = 288.1221695283 * math.pow(t - 60.0, -0.0755148492)
+            b = 255.0
+        r = max(0.0, min(255.0, r))
+        g = max(0.0, min(255.0, g))
+        b = max(0.0, min(255.0, b))
+        m = max(r, g, b)
+        if m <= 0.0:
+            return [1.0, 1.0, 1.0]
+        return [r / m, g / m, b / m]
+
+    @staticmethod
+    def compute_sun_light(sun_dir: Vec3, color_temp: float = 5778.0,
+                          aerosol_scale: float = 1.0,
+                          use_atmosphere: bool = True) -> tuple[list[float], float]:
+        elevation = float(sun_dir.y)
         if elevation <= 0.0:
             night = max(0.0, min(1.0, -elevation * 2.0))
             moonlight = 0.02 * (1.0 - night * 0.75)
             return [0.3, 0.35, 0.55], moonlight
-        t = elevation
-        warm = pow(1.0 - t, 4.0)
-        sun_color = [
-            1.0,
-            0.95 * (1.0 - warm) + 0.3 * warm,
-            0.85 * (1.0 - warm) + 0.05 * warm,
-        ]
-        intensity = 1.2 * (1.0 - math.exp(-t * 4.0))
-        return sun_color, intensity
+        # Kasten-Young air mass: how much atmosphere the sunlight crosses.
+        e = max(elevation, 1e-4)
+        e_deg = math.degrees(e)
+        airmass = 1.0 / (e + 0.50572 * math.pow(e_deg + 6.07995, -1.6364))
+        if not use_atmosphere:
+            airmass = 1.0
+        # Vertical optical depths at sea level, using the engine's atmosphere
+        # constants (Hr = 8 km, Hm = 1.2 km). Aerosol scales the Mie term.
+        wp = Light._planck_white(color_temp)
+        tau_r = [5.802e-6 * 8000.0 * airmass,
+                 13.558e-6 * 8000.0 * airmass,
+                 33.1e-6 * 8000.0 * airmass]
+        tau_m = 3.996e-6 * 1200.0 * max(float(aerosol_scale), 0.0) * airmass
+        color = [wp[i] * math.exp(-(tau_r[i] + tau_m)) for i in range(3)]
+        luma = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
+        if luma > 1e-6:
+            color = [c / luma for c in color]
+        else:
+            color = [1.0, 0.7, 0.4]
+        intensity = 1.2 * (1.0 - math.exp(-elevation * 4.0))
+        tau_luma = 0.2126 * tau_r[0] + 0.7152 * tau_r[1] + 0.0722 * tau_r[2] + tau_m
+        intensity *= (0.5 + 0.5 * math.exp(-tau_luma))
+        return color, intensity
 
     @staticmethod
     def shader_radiance(light: Light, transform) -> tuple[list[float], float]:
         sc = Light._LIGHT_SCALE
         if light.light_type == LightType.DIRECTIONAL:
             if light.procedural_sky_lighting:
-                c, i = Light.compute_sun_light(-transform.forward)
+                color_temp = 5778.0
+                aerosol = 1.0
+                try:
+                    from core.components.rendering.environment.atmosphere import Atmosphere
+                    atmos = next((a for a in Atmosphere._registry
+                                  if a.enabled and a.entity and a.entity.active), None)
+                    if atmos is not None:
+                        color_temp = float(getattr(atmos, "_color_temperature", 5778.0))
+                        aerosol = float(getattr(atmos, "_aerosol_scale", 1.0))
+                except Exception:
+                    pass
+                c, i = Light.compute_sun_light(-transform.forward, color_temp, aerosol)
                 return [c[0], c[1], c[2]], i * sc
             return list(light.color), light.intensity * Light.LUX_TO_RADIANCE * sc
         if light.light_type == LightType.AREA:
