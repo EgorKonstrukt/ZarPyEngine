@@ -1,0 +1,158 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+//
+// Copyright (c) 2026 Zarrakun
+
+ComputeShader "Zarin/Atmosphere"
+{
+    Properties
+    {
+        _SunDirection("Sun Direction", Vector) = (0, 1, 0.5, 0)
+        _SunColor("Sun Color", Color) = (1, 0.95, 0.85, 1)
+        _SunIntensity("Sun Intensity", Float) = 1
+    }
+
+    GLSLPROGRAM
+    #version 460 core
+    layout(local_size_x = 8, local_size_y = 8) in;
+
+    #define PI 3.14159265359
+
+    // Physical atmosphere parameters (Bruneton-style)
+    const float Rg = 6360.0;          // ground radius (km)
+    const float Rt = 6420.0;          // atmosphere top radius (km)
+    const float Hr = 8.0;             // rayleigh scale height (km)
+    const float Hm = 1.2;             // mie scale height (km)
+    const float M_KM = 1000.0;        // meters per km
+    const vec3 betaR = vec3(5.802e-6, 13.558e-6, 33.1e-6);   // rayleigh scattering (1/m)
+    const vec3 betaM = vec3(3.996e-6, 3.996e-6, 3.996e-6);   // mie scattering (1/m)
+    const float g = 0.8;
+    const float CAM_HEIGHT_KM = 0.02; // camera altitude above ground (km)
+
+    layout(rgba32f, binding = 0) uniform image2D transmittance_lut;
+    layout(rgba32f, binding = 1) uniform image2D sky_lut;
+    uniform sampler2D u_transmittance_lut;
+    uniform int u_pass;
+    uniform vec3 u_sun_direction;
+    uniform vec3 u_sun_color;
+    uniform float u_sun_intensity;
+
+    bool intersect_sphere(vec3 o, vec3 d, float radius, out float tmin, out float tmax) {
+        float b = dot(o, d);
+        float c = dot(o, o) - radius * radius;
+        float disc = b * b - c;
+        if (disc < 0.0) return false;
+        disc = sqrt(disc);
+        tmin = -b - disc;
+        tmax = -b + disc;
+        return true;
+    }
+
+    vec3 extinction_at(float h_km) {
+        return betaR * exp(-h_km / Hr) + betaM * exp(-h_km / Hm);
+    }
+
+    // ---- Transmittance LUT ----
+    // Texel u: r = Rg + (Rt - Rg) * u ; texel v: mu = 2v - 1
+    vec2 transmittance_to_uv(float r, float mu) {
+        float u = clamp((r - Rg) / (Rt - Rg), 0.0, 1.0);
+        float v = mu * 0.5 + 0.5;
+        return vec2(u, v);
+    }
+
+    vec3 sample_transmittance(float r, float mu) {
+        vec2 uv = transmittance_to_uv(r, mu);
+        return texture(u_transmittance_lut, uv).rgb;
+    }
+
+    void compute_transmittance() {
+        ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 size = imageSize(transmittance_lut);
+        if (pix.x >= size.x || pix.y >= size.y) return;
+        vec2 uv = (vec2(pix) + 0.5) / vec2(size);
+        float r = mix(Rg, Rt, uv.x);
+        float mu = uv.y * 2.0 - 1.0;
+        vec3 o = vec3(0.0, r, 0.0);
+        vec3 d = normalize(vec3(sqrt(max(1.0 - mu * mu, 0.0)), mu, 0.0));
+
+        float tEnter, tExit, tGroundMin, tGroundMax;
+        intersect_sphere(o, d, Rt, tEnter, tExit);
+        if (intersect_sphere(o, d, Rg, tGroundMin, tGroundMax) && tGroundMin > 0.0) {
+            if (tGroundMin < tExit) {
+                imageStore(transmittance_lut, pix, vec4(0.0));
+                return;
+            }
+        }
+
+        const int STEPS = 32;
+        vec3 optical = vec3(0.0);
+        float dt_km = tExit / float(STEPS);
+        float dt_m = dt_km * M_KM;
+        for (int i = 0; i < STEPS; i++) {
+            vec3 p = o + d * (float(i) + 0.5) * dt_km;
+            float h = length(p) - Rg;
+            vec3 beta = extinction_at(h);
+            optical += beta * dt_m;
+        }
+        imageStore(transmittance_lut, pix, vec4(exp(-optical), 1.0));
+    }
+
+    void compute_sky() {
+        ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+        ivec2 size = imageSize(sky_lut);
+        if (pix.x >= size.x || pix.y >= size.y) return;
+
+        vec2 uv = (vec2(pix) + 0.5) / vec2(size);
+        float theta = uv.y * (PI * 0.5);
+        float phi = uv.x * 2.0 * PI - PI;
+        vec3 dir = vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+
+        vec3 o = vec3(0.0, Rg + CAM_HEIGHT_KM, 0.0);
+        float tEnter, tExit;
+        if (!intersect_sphere(o, dir, Rt, tEnter, tExit)) {
+            imageStore(sky_lut, pix, vec4(0.0));
+            return;
+        }
+        float tEnd = tExit;
+        float tGroundMin, tGroundMax;
+        if (dir.y < 0.0 && intersect_sphere(o, dir, Rg, tGroundMin, tGroundMax) && tGroundMin > 0.0) {
+            tEnd = min(tEnd, tGroundMin);
+        }
+
+        const int STEPS = 24;
+        vec3 sun_dir = normalize(u_sun_direction);
+        vec3 in_scatter = vec3(0.0);
+        vec3 transmittance = vec3(1.0);
+        float cos_theta = dot(dir, sun_dir);
+        float rayleigh_phase = 3.0 / (16.0 * PI) * (1.0 + cos_theta * cos_theta);
+        float gg = g * g;
+        float mie_phase = (1.0 - gg) / max(pow(1.0 + gg - 2.0 * g * cos_theta, 1.5), 1e-4) / (4.0 * PI);
+
+        for (int i = 0; i < STEPS; i++) {
+            float frac = pow(float(i + 1) / float(STEPS), 1.5);
+            float t = tEnd * frac;
+            vec3 p = o + dir * t;
+            float h = length(p) - Rg;
+            if (h < 0.0) break;
+            vec3 beta = extinction_at(h);
+            float dt = tEnd * (pow(float(i + 1) / float(STEPS), 1.5) - pow(float(i) / float(STEPS), 1.5)) * M_KM;
+            float mu_sun = dot(normalize(p), sun_dir);
+            vec3 sun_trans = sample_transmittance(length(p), mu_sun);
+            vec3 scatter = u_sun_color * u_sun_intensity * sun_trans
+                         * (betaR * rayleigh_phase + betaM * mie_phase);
+            in_scatter += transmittance * scatter * dt;
+            transmittance *= exp(-beta * dt);
+        }
+        imageStore(sky_lut, pix, vec4(in_scatter, 1.0));
+    }
+
+    void main() {
+        if (u_pass == 0) {
+            compute_transmittance();
+        } else {
+            compute_sky();
+        }
+    }
+    ENDGLSL
+}

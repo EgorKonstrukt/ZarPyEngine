@@ -69,7 +69,7 @@ Shader "Zarin/PBR"
             out vec4 v_color;
             void main() {
                 mat4 inst_model = mat4(in_model0, in_model1, in_model2, in_model3);
-                mat4 _model = (u_use_instancing == 1) ? inst_model : ((u_use_instancing == 2) ? _ssbo_models[_ssbo_indices[gl_InstanceID]] : u_model);
+                mat4 _model = (u_use_instancing == 1) ? inst_model : ((u_use_instancing == 2 || u_use_instancing == 3) ? _ssbo_models[_ssbo_indices[gl_InstanceID]] : u_model);
                 mat3 _normal_matrix = (u_use_instancing >= 1) ? transpose(inverse(mat3(_model))) : u_normal_matrix;
                 vec4 world_pos = _model * vec4(in_position, 1.0);
                 v_world_pos = world_pos.xyz;

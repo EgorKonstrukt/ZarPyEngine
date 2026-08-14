@@ -3,13 +3,12 @@ import os
 import time
 import numpy as np
 import moderngl
-from typing import Any, Optional
+from typing import Optional
 from collections import defaultdict, OrderedDict
 from core.maths.math3d import Mat4
+from core.renderer.gpu_culling import WORLD_MATRIX_BINDING, INDEX_BINDING
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
-
-from core.renderer.gpu_culling import WORLD_MATRIX_BINDING, INDEX_BINDING
 
 _INITIAL_INST_VBO_CAPACITY = 4096
 _MAX_VAO_CACHE = 512
@@ -119,7 +118,8 @@ def _frustum_cull_instances(group, planes, mesh_radius):
 class RenderBatcher:
     """Groups renderables by mesh+material+shader and renders instanced."""
 
-    def __init__(self, ctx: moderngl.Context, default_prog: moderngl.Program):
+    def __init__(self, ctx: moderngl.Context, default_prog: moderngl.Program,
+                 gpu_driven_min_instances: int = 8):
         self._ctx = ctx
         self._default_prog = self._ensure_instancing_prog(default_prog)
         self._vao_cache: OrderedDict[tuple[int, int], moderngl.VertexArray] = OrderedDict()
@@ -128,6 +128,10 @@ class RenderBatcher:
         self._shared_inst_vbo = ctx.buffer(reserve=_INITIAL_INST_VBO_CAPACITY * 64)
         self._index_buf: Optional[moderngl.Buffer] = None
         self._index_buf_capacity: int = 0
+        self._indirect_buf: Optional[moderngl.Buffer] = None
+        self._indirect_buf_capacity: int = 0
+        self._gpu_driven_min_instances: int = gpu_driven_min_instances
+        self._gpu_version: int = 0
         self._stats_batches: int = 0
         self._stats_draw_calls: int = 0
         self._stats_instanced: int = 0
@@ -300,25 +304,30 @@ class RenderBatcher:
                                     selected_entities, outline_queue,
                                     set_scene=False)
             elif _supports_instancing(prog):
-                visible = _frustum_cull_instances(group, frustum_planes,
-                                                  mesh.bounding_radius)
-                if len(visible) == 0:
-                    self._stats_draw_calls += 1
-                    continue
-                if len(visible) == 1:
-                    self._render_single(visible[0], prog, mesh, mat,
-                                        view_f32, proj_f32, cam_pos, lights,
-                                        group_disable_shadows, set_scene_uniforms_fn,
-                                        apply_material_fn, normal_cache,
-                                        selected_entities, outline_queue,
-                                        set_scene=False)
-                else:
-                    self._render_instanced(visible, prog, mesh, mat,
-                                           view_f32, proj_f32, cam_pos, lights,
-                                           group_disable_shadows, set_scene_uniforms_fn,
-                                           apply_material_fn,
-                                           selected_entities, outline_queue,
-                                           gpu_storage=gpu_storage, set_scene=False)
+                gpu_eligible = (gpu_storage is not None
+                                and gpu_storage.is_gpu_driven()
+                                and len(group) >= self._gpu_driven_min_instances)
+                if not gpu_eligible:
+                    visible = _frustum_cull_instances(group, frustum_planes,
+                                                      mesh.bounding_radius)
+                    if len(visible) == 0:
+                        self._stats_draw_calls += 1
+                        continue
+                    if len(visible) == 1:
+                        self._render_single(visible[0], prog, mesh, mat,
+                                            view_f32, proj_f32, cam_pos, lights,
+                                            group_disable_shadows, set_scene_uniforms_fn,
+                                            apply_material_fn, normal_cache,
+                                            selected_entities, outline_queue,
+                                            set_scene=False)
+                        continue
+                    group = visible
+                self._render_instanced(group, prog, mesh, mat,
+                                       view_f32, proj_f32, cam_pos, lights,
+                                       group_disable_shadows, set_scene_uniforms_fn,
+                                       apply_material_fn,
+                                       selected_entities, outline_queue,
+                                       gpu_storage=gpu_storage, set_scene=False)
             else:
                 for item in group:
                     self._render_single(item, prog, mesh, mat,
@@ -334,11 +343,30 @@ class RenderBatcher:
                           apply_material_fn,
                           selected_entities, outline_queue,
                           gpu_storage=None, set_scene=True):
-        world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
         names = self._uniform_names(prog)
+        if (gpu_storage is not None and gpu_storage.is_gpu_driven()
+                and len(group) >= self._gpu_driven_min_instances
+                and self._try_render_gpu_driven(
+                    group, prog, mesh, mat, view_f32, proj_f32, cam_pos,
+                    lights, disable_shadows, set_scene_uniforms_fn,
+                    apply_material_fn, gpu_storage, set_scene=set_scene)):
+            return
+        if gpu_storage is not None and gpu_storage.is_gpu_driven():
+            frustum_planes = self._get_frustum_planes(view_f32, proj_f32)
+            group = _frustum_cull_instances(group, frustum_planes,
+                                            mesh.bounding_radius)
+            if len(group) == 0:
+                self._stats_draw_calls += 1
+                return
+        world_ssbo = gpu_storage.get_world_matrix_ssbo() if gpu_storage else None
 
         if world_ssbo is not None:
-            indices = np.array(range(len(group)), dtype=np.uint32)
+            model_mats = [item[6] for item in group]
+            bounding_radii = np.full(len(model_mats), mesh.bounding_radius,
+                                     dtype=np.float64)
+            gpu_storage.upload_world_matrices(model_mats, bounding_radii,
+                                              self._gpu_version)
+            indices = np.arange(len(model_mats), dtype=np.uint32)
             idx_buf = self._ensure_index_buffer(len(indices))
             idx_buf.write(indices.tobytes())
             world_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
@@ -394,6 +422,94 @@ class RenderBatcher:
                 ent, tr, _, _, _, _, wm, _ = item
                 if ent in selected_entities:
                     outline_queue.append((mesh, wm))
+
+    def _write_indirect_command(self, count: int, instance_count: int,
+                                first_index: int):
+        if self._indirect_buf is None or self._indirect_buf_capacity < 32:
+            if self._indirect_buf:
+                try:
+                    self._indirect_buf.release()
+                except Exception:
+                    pass
+            self._indirect_buf = self._ctx.buffer(reserve=64)
+            self._indirect_buf_capacity = 64
+        cmd = np.array([count, instance_count, first_index, 0, 0],
+                       dtype=np.uint32)
+        self._indirect_buf.write(cmd.tobytes())
+
+    def _try_render_gpu_driven(self, group, prog, mesh, mat,
+                               view_f32, proj_f32, cam_pos, lights,
+                               disable_shadows, set_scene_uniforms_fn,
+                               apply_material_fn, gpu_storage,
+                               set_scene=True) -> bool:
+        """Frustum-cull on the GPU and draw via glDrawElementsIndirect.
+
+        Returns True when the GPU-driven path fully handled the draw (this
+        includes the "nothing visible" case), False to fall back to the CPU
+        instancing path.
+        """
+        try:
+            model_mats = [item[6] for item in group]
+            n = len(model_mats)
+            bounding_radii = np.full(n, mesh.bounding_radius, dtype=np.float64)
+            self._gpu_version += 1
+            gpu_storage.upload_world_matrices(model_mats, bounding_radii,
+                                              self._gpu_version)
+            world_ssbo = gpu_storage.get_world_matrix_ssbo()
+            if world_ssbo is None:
+                return False
+            indices_ssbo = gpu_storage.cull_and_get_indices(
+                view_f32, proj_f32, world_ssbo, self._gpu_version)
+            if indices_ssbo is None:
+                return False
+            visible = gpu_storage.last_visible_count
+            if visible <= 0:
+                self._stats_draw_calls += 1
+                return True
+
+            names = self._uniform_names(prog)
+            world_ssbo.bind_to_storage_buffer(WORLD_MATRIX_BINDING)
+            indices_ssbo.bind_to_storage_buffer(INDEX_BINDING)
+            if "u_use_instancing" in names:
+                prog["u_use_instancing"].value = 3
+            if "u_use_skinning" in names:
+                prog["u_use_skinning"].value = 0
+            ds = bool(mat.properties.get("double_sided") or mat.properties.get("_double_sided")) if mat else False
+            cull_on = bool(self._ctx.cull_face)
+            if ds and cull_on:
+                self._ctx.disable(moderngl.CULL_FACE)
+            if "u_double_sided" in names:
+                try:
+                    prog["u_double_sided"].value = 1 if ds else 0
+                except Exception:
+                    pass
+            try:
+                if set_scene:
+                    set_scene_uniforms_fn(prog, view_f32, proj_f32, cam_pos,
+                                          lights, disable_shadows=disable_shadows)
+                apply_material_fn(mat, prog)
+
+                ranges = mesh.sub_mesh_ranges
+                sub_idx = group[0][7]
+                if ranges and sub_idx >= 0 and sub_idx < len(ranges):
+                    start, count = ranges[sub_idx]
+                else:
+                    start, count = 0, (len(mesh.indices) if hasattr(mesh, "indices") else 0)
+                if count <= 0:
+                    return False
+                self._write_indirect_command(count, visible, start)
+
+                vao = self._get_vao(prog, mesh)
+                vao.render_indirect(self._indirect_buf, moderngl.TRIANGLES, 1, 0)
+                self._stats_draw_calls += 1
+                self._stats_instanced += visible
+                return True
+            finally:
+                if ds and cull_on:
+                    self._ctx.enable(moderngl.CULL_FACE)
+        except Exception as e:
+            print(f"[batcher] gpu-driven draw failed, falling back to CPU: {e!r}")
+            return False
 
     def _render_single(self, item, prog, mesh, mat,
                         view_f32, proj_f32, cam_pos, lights,
@@ -478,3 +594,9 @@ class RenderBatcher:
             except Exception:
                 pass
             self._index_buf = None
+        if self._indirect_buf:
+            try:
+                self._indirect_buf.release()
+            except Exception:
+                pass
+            self._indirect_buf = None

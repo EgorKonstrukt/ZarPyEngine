@@ -12,7 +12,11 @@ INDEX_BINDING = 5
 
 def _supports_compute(ctx: moderngl.Context) -> bool:
     try:
-        ctx.compute_shader('')
+        ctx.compute_shader(
+            "#version 460 core\n"
+            "layout(local_size_x = 1) in;\n"
+            "void main() {}\n"
+        )
         return True
     except Exception:
         return False
@@ -23,11 +27,13 @@ class GpuStorage:
 
     - World matrix SSBO (binding 4): ALL world matrices, updated when dirty
     - Optional compute culling resources
+    - GPU-driven rendering flag (opt-in via ``set_gpu_driven``)
     """
 
     __slots__ = (
         '_ctx', '_world_mat_ssbo', '_culling',
-        '_capacity', '_version', '_last_upload_version',
+        '_capacity', '_last_upload_version',
+        '_gpu_driven',
     )
 
     def __init__(self, ctx: moderngl.Context):
@@ -35,8 +41,16 @@ class GpuStorage:
         self._world_mat_ssbo: Optional[moderngl.Buffer] = None
         self._culling: Optional[GpuCulling] = None
         self._capacity: int = 0
-        self._version: int = 0
         self._last_upload_version: int = -1
+        self._gpu_driven: bool = False
+
+    def set_gpu_driven(self, enabled: bool):
+        self._gpu_driven = bool(enabled)
+        if self._gpu_driven:
+            self.get_or_create_culling()
+
+    def is_gpu_driven(self) -> bool:
+        return self._gpu_driven and self._culling is not None and self._culling.is_ready()
 
     def ensure_capacity(self, n: int):
         if n <= self._capacity:
@@ -50,7 +64,7 @@ class GpuStorage:
 
     def upload_world_matrices(self, matrices: list[Mat4],
                               bounding_radii: np.ndarray, version: int):
-        if version == self._last_upload_version or len(matrices) == 0:
+        if len(matrices) == 0:
             return
         self._last_upload_version = version
         self.ensure_capacity(len(matrices))
@@ -70,6 +84,28 @@ class GpuStorage:
             self._culling = GpuCulling(self._ctx)
         return self._culling
 
+    def cull_and_get_indices(self, view_f32, proj_f32,
+                             world_mat_ssbo: moderngl.Buffer,
+                             version: int) -> Optional[moderngl.Buffer]:
+        """Run the compute culler and return the compacted index SSBO.
+
+        Returns None only when culling is unavailable. When nothing is
+        visible the (empty) index SSBO is still returned so the caller can
+        detect a fully-culled group via ``last_visible_count``.
+        """
+        culling = self.get_or_create_culling()
+        if culling is None or not culling.is_ready():
+            return None
+        if not culling.cull_f32(view_f32, proj_f32, world_mat_ssbo):
+            return None
+        return culling.get_instance_indices_ssbo()
+
+    @property
+    def last_visible_count(self) -> int:
+        if self._culling is None:
+            return 0
+        return self._culling.read_visible_count()
+
     def _release_ssbo(self):
         if self._world_mat_ssbo:
             try:
@@ -87,12 +123,12 @@ class GpuStorage:
 
 
 class GpuCulling:
-    """Compute-shader-based frustum culling.
+    """Compute-shader-based frustum culling + index compaction.
 
     Uses 4 SSBOs:
       0: WorldMatrices (readonly) - mat4[]
       1: BoundingData   (readonly) - vec4[] (xyz=center, w=radius)
-      2: InstanceVBO    (writeonly) - mat4[] (output, used as instance VBO)
+      2: OutIndices     (writeonly) - uint[] compacted instance indices
       3: CounterBuf     - uint count
     """
 
@@ -111,11 +147,15 @@ class GpuCulling:
         self._capacity: int = 0
         self._count: int = 0
 
+    def is_ready(self) -> bool:
+        return self._compute_shader is not None
+
     def ensure_resources(self, max_instances: int):
         if max_instances <= self._capacity:
             return
         self.release()
         self._capacity = max_instances
+        self._count = max_instances
         sphere_size = max_instances * 16
         output_size = max_instances * 64
         self._bounding_ssbo = self._ctx.buffer(reserve=sphere_size)
@@ -164,13 +204,37 @@ class GpuCulling:
             return False
         vp = proj_mat._d.T @ view_mat._d.T
         planes = extract_frustum_planes(vp)
+        return self._cull_impl(planes, n, world_mat_ssbo)
 
+    def cull_f32(self, view_f32, proj_f32,
+                 world_mat_ssbo: moderngl.Buffer) -> bool:
+        if not self._compute_shader:
+            return False
+        n = self._count
+        if n <= 0:
+            return False
+        from core.renderer.batcher import _extract_frustum_planes_f32
+        planes = _extract_frustum_planes_f32(view_f32, proj_f32)
+        return self._cull_impl(planes, n, world_mat_ssbo)
+
+    def _cull_impl(self, planes, n: int, world_mat_ssbo: moderngl.Buffer) -> bool:
+        if not self._compute_shader:
+            return False
         self._counter_ssbo.clear()
         self._instance_output_ssbo.clear()
 
         cs = self._compute_shader
-        cs["u_frustum_planes[0]"].write(planes.astype(np.float32).tobytes())
-        cs["u_total"].value = n
+        try:
+            if "u_frustum_planes" in cs._members:
+                cs["u_frustum_planes"].write(planes.astype(np.float32).tobytes())
+            elif "u_frustum_planes[0]" in cs._members:
+                cs["u_frustum_planes[0]"].write(planes.astype(np.float32).tobytes())
+            else:
+                return False
+            cs["u_total"].value = n
+        except Exception as e:
+            print(f"[gpu_culling] cull failed, falling back to CPU: {e!r}")
+            return False
 
         world_mat_ssbo.bind_to_storage_buffer(0)
         self._bounding_ssbo.bind_to_storage_buffer(1)
@@ -185,10 +249,13 @@ class GpuCulling:
     def get_instance_vbo(self) -> Optional[moderngl.Buffer]:
         return self._instance_output_ssbo
 
+    def get_instance_indices_ssbo(self) -> Optional[moderngl.Buffer]:
+        return self._instance_output_ssbo
+
     def read_visible_count(self) -> int:
         if self._counter_ssbo is None:
             return -1
-        data = self._counter_ssbo.read(0, 4)
+        data = self._counter_ssbo.read(4, 0)
         return int(np.frombuffer(data, dtype=np.uint32)[0])
 
     def release(self):

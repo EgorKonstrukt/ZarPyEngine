@@ -112,7 +112,7 @@ Shader "Zarin/Tree"
 
             void main() {
                 mat4 inst_model = mat4(in_model0, in_model1, in_model2, in_model3);
-                mat4 _model = (u_use_instancing == 1) ? inst_model : ((u_use_instancing == 2) ? _ssbo_models[_ssbo_indices[gl_InstanceID]] : u_model);
+                mat4 _model = (u_use_instancing == 1) ? inst_model : ((u_use_instancing == 2 || u_use_instancing == 3) ? _ssbo_models[_ssbo_indices[gl_InstanceID]] : u_model);
                 mat3 _normal_matrix = (u_use_instancing >= 1) ? transpose(inverse(mat3(_model))) : u_normal_matrix;
                 vec3 local_pos = in_position;
                 vec3 local_nrm = in_normal;

@@ -1,3 +1,15 @@
+// Frustum culling of bounding spheres + index compaction for
+// GPU-driven rendering (glDrawElementsIndirect).
+//
+// SSBO bindings (matched in core/renderer/gpu_culling.py):
+//   0: WorldMatrices (readonly)  - mat4[] per instance
+//   1: BoundingData   (readonly) - vec4[] (xyz = world center, w = radius)
+//   2: OutIndices     (writeonly) - uint[] compacted instance indices
+//   3: Counter        - uint visible count (atomic, cleared before dispatch)
+//
+// Frustum planes are world-space, normalized (same extraction as the
+// CPU path in core/renderer/culling.py). An instance survives when its
+// bounding sphere lies at least partially inside all six planes.
 #version 460 core
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
