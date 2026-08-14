@@ -30,7 +30,6 @@ Shader "Zarin/Sky"
         _MoonSize("Moon Angular Radius (deg)", Float) = 0.27
         _MoonIntensity("Moon Intensity", Float) = 1
         _MoonPhase("Moon Phase", Range(0, 1)) = 1
-        _MoonOrbitSpeed("Moon Orbit Speed (deg/s)", Float) = 2
         _NightExposure("Night Exposure", Float) = 1
     }
 
@@ -85,7 +84,6 @@ Shader "Zarin/Sky"
             uniform float _MoonSize;
             uniform float _MoonIntensity;
             uniform float _MoonPhase;
-            uniform float _MoonOrbitSpeed;
             uniform sampler2D u_moon_tex;
             uniform float u_use_moon_tex;
             uniform float _NightExposure;
@@ -232,11 +230,7 @@ Shader "Zarin/Sky"
             }
 
     vec3 procedural_moon(vec3 dir, vec3 sun_dir) {
-        vec3 u0 = normalize(_MoonDirection);
-        float orbit = radians(_MoonOrbitSpeed) * u_time;
-        float ca = cos(orbit);
-        float sa = sin(orbit);
-        vec3 u = normalize(vec3(u0.x * ca + u0.z * sa, u0.y, -u0.x * sa + u0.z * ca));
+        vec3 u = normalize(_MoonDirection);
         vec3 v = cross(vec3(0.0, 1.0, 0.0), u);
         float vl = length(v);
         v = (vl > 1e-5) ? (v / vl) : vec3(1.0, 0.0, 0.0);

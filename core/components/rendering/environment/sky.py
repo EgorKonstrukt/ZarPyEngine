@@ -5,14 +5,14 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import math
 import os
-import time
 import numpy as np
 import moderngl
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
-from core.maths.math3d import Mat4, Vec3
-from core.components.lighting.light import Light
+from core.maths.math3d import Mat4, Quat, Vec3
+from core.components.lighting.light import Light, LightType
 from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache, get_procedural_sky_ibl
 from core.components.rendering.environment.atmosphere import Atmosphere
 
@@ -236,6 +236,104 @@ def _get_white_tex(ctx: moderngl.Context):
     return _WHITE_TEX
 
 
+_DEFAULT_YEAR = 2024
+_DEFAULT_MONTH = 6
+_DEFAULT_DAY = 21
+_DEFAULT_HOUR = 12
+_DEFAULT_MINUTE = 0
+_DEFAULT_SECOND = 0
+_DEFAULT_LATITUDE = 55.75
+_DEFAULT_LONGITUDE = 37.62
+_DEFAULT_UTC_OFFSET = 3.0
+
+_J2000_JD = 2451545.0
+_SYNODIC_MONTH = 29.530588853
+_NEW_MOON_J2000_JD = 2451550.258
+
+
+def _julian_day(year: int, month: int, day: int) -> float:
+    y = year
+    m = month
+    if m <= 2:
+        y -= 1
+        m += 12
+    a = y // 100
+    b = 2 - a + a // 4
+    return int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + day + b - 1524.5
+
+
+def _sun_ecliptic_longitude(d: float) -> float:
+    g = (357.5291 + 0.98560028 * d) % 360.0
+    q = (280.459 + 0.98564736 * d) % 360.0
+    return q + 1.915 * math.sin(math.radians(g)) + 0.020 * math.sin(math.radians(2.0 * g))
+
+
+def _obliquity(d: float) -> float:
+    return 23.439 - 0.0000004 * d
+
+
+def _equatorial(lon_deg: float, lat_deg: float, ecl_deg: float):
+    ln = math.radians(lon_deg)
+    bt = math.radians(lat_deg)
+    ep = math.radians(ecl_deg)
+    ra = math.atan2(math.sin(ln) * math.cos(ep) - math.tan(bt) * math.sin(ep), math.cos(ln))
+    dec = math.asin(math.sin(bt) * math.cos(ep) + math.cos(bt) * math.sin(ep) * math.sin(ln))
+    return math.degrees(ra) % 360.0, math.degrees(dec)
+
+
+def _solar_equatorial(d: float):
+    ecl = _obliquity(d)
+    return _equatorial(_sun_ecliptic_longitude(d), 0.0, ecl)
+
+
+def _moon_equatorial(d: float):
+    lp = (218.316 + 13.176396 * d) % 360.0
+    mp = (134.963 + 13.064993 * d) % 360.0
+    ms = (357.5291 + 0.98560028 * d) % 360.0
+    dm = (297.850 + 12.190749 * d) % 360.0
+    f = (93.272 + 13.229350 * d) % 360.0
+    lon = lp + 6.289 * math.sin(math.radians(mp)) \
+          - 1.274 * math.sin(math.radians(2.0 * dm - mp)) \
+          + 0.658 * math.sin(math.radians(2.0 * dm)) \
+          - 0.186 * math.sin(math.radians(ms)) \
+          - 0.060 * math.sin(math.radians(2.0 * mp - 2.0 * dm))
+    lat = 5.128 * math.sin(math.radians(f)) \
+          + 0.280 * math.sin(math.radians(mp + f)) \
+          + 0.277 * math.sin(math.radians(mp - f)) \
+          - 0.017 * math.sin(math.radians(2.0 * dm - f))
+    return _equatorial(lon, lat, _obliquity(d))
+
+
+def _local_sidereal_hours(d: float, longitude_deg: float) -> float:
+    gmst = (18.697374558 + 24.06570982441908 * d) % 24.0
+    return (gmst + longitude_deg / 15.0) % 24.0
+
+
+def _alt_az_from_equatorial(ra_deg: float, dec_deg: float, lst_hours: float, latitude_deg: float):
+    h = math.radians((lst_hours - ra_deg / 15.0) * 15.0)
+    lat = math.radians(latitude_deg)
+    dec = math.radians(dec_deg)
+    sin_alt = math.sin(lat) * math.sin(dec) + math.cos(lat) * math.cos(dec) * math.cos(h)
+    alt = math.asin(max(-1.0, min(1.0, sin_alt)))
+    cos_az = (math.sin(dec) - math.sin(alt) * math.sin(lat)) / (math.cos(alt) * math.cos(lat) + 1e-9)
+    cos_az = max(-1.0, min(1.0, cos_az))
+    az = math.degrees(math.acos(cos_az))
+    if math.sin(h) > 0.0:
+        az = 360.0 - az
+    return alt, az
+
+
+def _dir_from_alt_az(alt_deg: float, az_deg: float) -> Vec3:
+    a = math.radians(alt_deg)
+    z = math.radians(az_deg)
+    return Vec3(math.sin(z) * math.cos(a), math.sin(a), -math.cos(z) * math.cos(a))
+
+
+def _moon_phase_from_days(d: float) -> float:
+    age = (d - _NEW_MOON_J2000_JD) % _SYNODIC_MONTH
+    return age / _SYNODIC_MONTH
+
+
 def release_env_cache():
     for _m, tex in _ENV_TEX_CACHE.values():
         if tex is not None:
@@ -283,13 +381,22 @@ class Sky(Component):
             InspectorField("milky_way_enabled", "Milky Way", FieldType.BOOL),
             InspectorField("milky_way_intensity", "Intensity", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.1, decimals=1),
             InspectorField("milky_way_pole", "Band Pole", FieldType.VEC3),
+            InspectorField("", "Time Controller", FieldType.HEADER),
+            InspectorField("year", "Year", FieldType.INT, min_val=1, max_val=9999, step=1),
+            InspectorField("month", "Month", FieldType.INT, min_val=1, max_val=12, step=1),
+            InspectorField("day", "Day", FieldType.INT, min_val=1, max_val=31, step=1),
+            InspectorField("hour", "Hour", FieldType.INT, min_val=0, max_val=23, step=1),
+            InspectorField("minute", "Minute", FieldType.INT, min_val=0, max_val=59, step=1),
+            InspectorField("second", "Second", FieldType.INT, min_val=0, max_val=59, step=1),
+            InspectorField("latitude", "Latitude (deg)", FieldType.SLIDER, min_val=-90.0, max_val=90.0, step=0.1, decimals=2),
+            InspectorField("longitude", "Longitude (deg)", FieldType.SLIDER, min_val=-180.0, max_val=180.0, step=0.1, decimals=2),
+            InspectorField("utc_offset", "UTC Offset (h)", FieldType.SLIDER, min_val=-12.0, max_val=14.0, step=0.5, decimals=1),
+            InspectorField("", "Sun Light", FieldType.HEADER),
+            InspectorField("sun_light_entity_id", "Sun Light", FieldType.GAMEOBJECT),
             InspectorField("", "Moon", FieldType.HEADER),
             InspectorField("moon_enabled", "Moon", FieldType.BOOL),
-            InspectorField("moon_direction", "Direction", FieldType.VEC3),
             InspectorField("moon_size", "Angular Radius (deg)", FieldType.SLIDER, min_val=0.05, max_val=1.5, step=0.01, decimals=2),
             InspectorField("moon_intensity", "Intensity", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.1, decimals=1),
-            InspectorField("moon_phase", "Phase", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=2),
-            InspectorField("moon_orbit_speed", "Orbit Speed (deg/s)", FieldType.SLIDER, min_val=0.0, max_val=20.0, step=0.1, decimals=1),
             InspectorField("moon_texture_path", "Texture", FieldType.RESOURCE_PATH, file_filter="Images (*.png *.jpg *.jpeg *.tga *.bmp)"),
         ]
 
@@ -309,16 +416,141 @@ class Sky(Component):
         self.milky_way_enabled: bool = True
         self.milky_way_intensity: float = 0.6
         self.milky_way_pole: Vec3 = Vec3(0.4, 0.3, 0.85)
+        self.year: int = _DEFAULT_YEAR
+        self.month: int = _DEFAULT_MONTH
+        self.day: int = _DEFAULT_DAY
+        self.hour: int = _DEFAULT_HOUR
+        self.minute: int = _DEFAULT_MINUTE
+        self.second: int = _DEFAULT_SECOND
+        self.latitude: float = _DEFAULT_LATITUDE
+        self.longitude: float = _DEFAULT_LONGITUDE
+        self.utc_offset: float = _DEFAULT_UTC_OFFSET
+        self.sun_light_entity_id: str = ""
         self.moon_enabled: bool = True
-        self.moon_direction: Vec3 = Vec3(0.25, 0.6, 0.75)
         self.moon_size: float = 0.27
         self.moon_intensity: float = 1.0
-        self.moon_phase: float = 1.0
-        self.moon_orbit_speed: float = 2.0
         self.moon_texture_path: str = "core/textures/moon.tga"
         self._sky_ibl = None
+        self._time_cache_key = None
+        self._sun_dir: Vec3 = Vec3(0.0, 0.3, 1.0)
+        self._moon_dir: Vec3 = Vec3(0.25, 0.6, 0.75)
+        self._moon_phase: float = 1.0
+        self._day_seconds: float = 0.0
+        self._sim_seconds: float = 0.0
+
+    def set_time(self, year=None, month=None, day=None,
+                 hour=None, minute=None, second=None):
+        if year is not None:
+            self.year = int(year)
+        if month is not None:
+            self.month = int(month)
+        if day is not None:
+            self.day = int(day)
+        if hour is not None:
+            self.hour = int(hour)
+        if minute is not None:
+            self.minute = int(minute)
+        if second is not None:
+            self.second = int(second)
+        self._invalidate_time()
+
+    def set_sun_light(self, entity) -> bool:
+        if entity is None or entity.transform is None:
+            return False
+        self.sun_light_entity_id = entity.id
+        return True
+
+    def _invalidate_time(self):
+        self._time_cache_key = None
+
+    def _time_fields_key(self):
+        return (self.year, self.month, self.day, self.hour, self.minute,
+                self.second, self.latitude, self.longitude, self.utc_offset)
+
+    def _update_time_cache(self):
+        key = self._time_fields_key()
+        if key == self._time_cache_key:
+            return
+        self._time_cache_key = key
+        jd = _julian_day(self.year, self.month, self.day)
+        civil = self.hour + self.minute / 60.0 + self.second / 3600.0
+        utc = civil - self.utc_offset
+        d = jd - _J2000_JD + utc / 24.0
+        self._day_seconds = civil * 3600.0
+        self._sim_seconds = (jd - _J2000_JD) * 86400.0 + utc * 3600.0
+        lst = _local_sidereal_hours(d, self.longitude)
+        sun_ra, sun_dec = _solar_equatorial(d)
+        sal, saz = _alt_az_from_equatorial(sun_ra, sun_dec, lst, self.latitude)
+        self._sun_dir = _dir_from_alt_az(sal, saz)
+        moon_ra, moon_dec = _moon_equatorial(d)
+        mal, maz = _alt_az_from_equatorial(moon_ra, moon_dec, lst, self.latitude)
+        self._moon_dir = _dir_from_alt_az(mal, maz)
+        self._moon_phase = _moon_phase_from_days(d)
+
+    @property
+    def sun_direction(self) -> Vec3:
+        self._update_time_cache()
+        return self._sun_dir
+
+    @property
+    def moon_direction(self) -> Vec3:
+        self._update_time_cache()
+        return self._moon_dir
+
+    @property
+    def moon_phase(self) -> float:
+        self._update_time_cache()
+        return self._moon_phase
+
+    @property
+    def day_seconds(self) -> float:
+        self._update_time_cache()
+        return self._day_seconds
+
+    @property
+    def sim_seconds(self) -> float:
+        self._update_time_cache()
+        return self._sim_seconds
+
+    def get_sun_light(self):
+        scene = self._entity._scene if self._entity else None
+        ent = None
+        if self.sun_light_entity_id and scene:
+            ent = scene.get_entity(self.sun_light_entity_id)
+        if ent is not None:
+            l = ent.get_component(Light)
+            t = ent.transform
+            if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
+                return (l, t)
+        if scene:
+            for e in scene.get_entities_with_component(Light):
+                l = e.get_component(Light)
+                t = e.transform
+                if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
+                    return (l, t)
+        return None
+
+    def _sync_sun_light(self):
+        if not self.enabled:
+            return
+        self._update_time_cache()
+        sl = self.get_sun_light()
+        if sl is None:
+            return
+        _l, tr = sl
+        q = Quat.look_rotation(-self._sun_dir, Vec3.up())
+        m = q.to_matrix4()
+        pos = tr.position
+        m._d[3, 0] = pos.x
+        m._d[3, 1] = pos.y
+        m._d[3, 2] = pos.z
+        tr.world_matrix = m
+
+    def on_update(self, dt: float):
+        self._sync_sun_light()
 
     def _night_settings_key(self) -> tuple:
+        self._update_time_cache()
         return (
             self.night_sky_enabled, self.night_exposure,
             self.star_enabled, self.star_density, self.star_intensity,
@@ -326,12 +558,13 @@ class Sky(Component):
             tuple(self.star_color),
             self.milky_way_enabled, self.milky_way_intensity,
             tuple(self.milky_way_pole),
-            self.moon_enabled, tuple(self.moon_direction),
+            self.moon_enabled, tuple(self._moon_dir),
             self.moon_size, self.moon_intensity,
-            self.moon_phase, self.moon_orbit_speed, self.moon_texture_path,
+            self._moon_phase, self.moon_texture_path,
         )
 
     def _apply_night_sky(self, prog, ctx=None):
+        self._sync_sun_light()
         def f(name, val):
             if name in prog:
                 prog[name].value = float(val)
@@ -355,11 +588,10 @@ class Sky(Component):
         f("_MilkyWayIntensity", self.milky_way_intensity)
         v3("_MilkyWayPole", self.milky_way_pole)
         f("_MoonEnabled", 1.0 if self.moon_enabled else 0.0)
-        v3("_MoonDirection", self.moon_direction)
+        v3("_MoonDirection", self._moon_dir)
         f("_MoonSize", self.moon_size)
         f("_MoonIntensity", self.moon_intensity)
-        f("_MoonPhase", self.moon_phase)
-        f("_MoonOrbitSpeed", self.moon_orbit_speed)
+        f("_MoonPhase", self._moon_phase)
         if ctx is not None and "u_moon_tex" in prog:
             moon_tex = _get_moon_texture(ctx, self.moon_texture_path)
             if moon_tex is None:
@@ -368,7 +600,7 @@ class Sky(Component):
             prog["u_moon_tex"].value = 4
             prog["u_use_moon_tex"].value = 1.0 if self.moon_texture_path else 0.0
         if "u_time" in prog:
-            prog["u_time"].value = time.time()
+            prog["u_time"].value = self._day_seconds
 
     def render_sky(self, ctx, shaders, view_mat, proj_mat, dir_light, cube_mesh):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
@@ -384,6 +616,9 @@ class Sky(Component):
             if "_SunConvergence" in p:
                 p["_SunConvergence"].value = 0.5
 
+        sl = self.get_sun_light()
+        if sl is not None:
+            dir_light = sl
         sun_world = None
         sun_color = None
         sun_intensity = None
@@ -473,12 +708,19 @@ class Sky(Component):
         d["milky_way_enabled"] = self.milky_way_enabled
         d["milky_way_intensity"] = self.milky_way_intensity
         d["milky_way_pole"] = self.milky_way_pole.to_list()
+        d["year"] = self.year
+        d["month"] = self.month
+        d["day"] = self.day
+        d["hour"] = self.hour
+        d["minute"] = self.minute
+        d["second"] = self.second
+        d["latitude"] = self.latitude
+        d["longitude"] = self.longitude
+        d["utc_offset"] = self.utc_offset
+        d["sun_light_entity_id"] = self.sun_light_entity_id
         d["moon_enabled"] = self.moon_enabled
-        d["moon_direction"] = self.moon_direction.to_list()
         d["moon_size"] = self.moon_size
         d["moon_intensity"] = self.moon_intensity
-        d["moon_phase"] = self.moon_phase
-        d["moon_orbit_speed"] = self.moon_orbit_speed
         d["moon_texture_path"] = self.moon_texture_path
         return d
 
@@ -500,11 +742,18 @@ class Sky(Component):
         c.milky_way_enabled = data.get("milky_way_enabled", True)
         c.milky_way_intensity = data.get("milky_way_intensity", 0.6)
         c.milky_way_pole = Vec3(*data.get("milky_way_pole", [0.4, 0.3, 0.85]))
+        c.year = data.get("year", _DEFAULT_YEAR)
+        c.month = data.get("month", _DEFAULT_MONTH)
+        c.day = data.get("day", _DEFAULT_DAY)
+        c.hour = data.get("hour", _DEFAULT_HOUR)
+        c.minute = data.get("minute", _DEFAULT_MINUTE)
+        c.second = data.get("second", _DEFAULT_SECOND)
+        c.latitude = data.get("latitude", _DEFAULT_LATITUDE)
+        c.longitude = data.get("longitude", _DEFAULT_LONGITUDE)
+        c.utc_offset = data.get("utc_offset", _DEFAULT_UTC_OFFSET)
+        c.sun_light_entity_id = data.get("sun_light_entity_id", "")
         c.moon_enabled = data.get("moon_enabled", True)
-        c.moon_direction = Vec3(*data.get("moon_direction", [0.25, 0.6, 0.75]))
         c.moon_size = data.get("moon_size", 0.27)
         c.moon_intensity = data.get("moon_intensity", 1.0)
-        c.moon_phase = data.get("moon_phase", 1.0)
-        c.moon_orbit_speed = data.get("moon_orbit_speed", 2.0)
         c.moon_texture_path = data.get("moon_texture_path", "core/textures/moon.tga")
         return c

@@ -18,7 +18,6 @@ from core.components.lighting.light import Light, LightType
 from core.maths.math3d import Mat4, Vec3
 from core.foundation.logger import Logger
 import math
-import time
 
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
@@ -557,15 +556,34 @@ class RaytracingRenderer(Component):
             Logger.warning(f"Raytracing uniform missing: {e}")
             return False
 
+        sky_comp = None
+        try:
+            from core.components.rendering.environment.sky import Sky, _get_moon_texture, _get_white_tex
+            for ent in scene.get_entities_with_component(Sky):
+                sc = ent.get_component(Sky)
+                if sc and sc.enabled:
+                    sky_comp = sc
+                    break
+            if sky_comp is not None:
+                sky_comp._sync_sun_light()
+        except Exception:
+            sky_comp = None
+
         sun_dir = Vec3(0, -0.3, -1)
         sky_color, sky_intensity = [1.0, 0.95, 0.85], 1.0
-        for ent in scene.get_entities_with_component(Light):
-            l = ent.get_component(Light)
-            t = ent.transform
-            if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
-                sun_dir = -t.forward
-                sky_color, sky_intensity = Light.shader_radiance(l, t)
-                break
+        sl = sky_comp.get_sun_light() if sky_comp is not None else None
+        if sl is not None:
+            l, t = sl
+            sun_dir = -t.forward
+            sky_color, sky_intensity = Light.shader_radiance(l, t)
+        else:
+            for ent in scene.get_entities_with_component(Light):
+                l = ent.get_component(Light)
+                t = ent.transform
+                if l and l.enabled and t and l.light_type == LightType.DIRECTIONAL:
+                    sun_dir = -t.forward
+                    sky_color, sky_intensity = Light.shader_radiance(l, t)
+                    break
         # Honour the Atmosphere component's sun-disc settings and intensity
         # multiplier on the procedural SkyEnv as well.
         sun_radius = 0.27
@@ -591,15 +609,8 @@ class RaytracingRenderer(Component):
             self._sky_env_prog["u_sun_convergence"] = sun_conv
         except KeyError as e:
             Logger.warning(f"SkyEnv uniform missing: {e}")
-        try:
-            from core.components.rendering.environment.sky import Sky, _get_moon_texture, _get_white_tex
-            sky_comp = None
-            for ent in scene.get_entities_with_component(Sky):
-                sc = ent.get_component(Sky)
-                if sc and sc.enabled:
-                    sky_comp = sc
-                    break
-            if sky_comp is not None:
+        if sky_comp is not None:
+            try:
                 self._sky_env_prog["u_night_sky_enabled"] = 1.0 if sky_comp.night_sky_enabled else 0.0
                 self._sky_env_prog["u_night_exposure"] = sky_comp.night_exposure
                 self._sky_env_prog["u_star_enabled"] = 1.0 if sky_comp.star_enabled else 0.0
@@ -617,18 +628,17 @@ class RaytracingRenderer(Component):
                 self._sky_env_prog["u_moon_size"] = sky_comp.moon_size
                 self._sky_env_prog["u_moon_intensity"] = sky_comp.moon_intensity
                 self._sky_env_prog["u_moon_phase"] = sky_comp.moon_phase
-                self._sky_env_prog["u_moon_orbit_speed"] = sky_comp.moon_orbit_speed
-                self._sky_env_prog["u_time"] = time.time()
+                self._sky_env_prog["u_time"] = sky_comp.day_seconds
                 moon_tex = _get_moon_texture(ctx, sky_comp.moon_texture_path)
                 if moon_tex is None:
                     moon_tex = _get_white_tex(ctx)
                 moon_tex.use(7)
                 self._sky_env_prog["u_moon_tex"] = 7
                 self._sky_env_prog["u_use_moon_tex"] = 1.0 if sky_comp.moon_texture_path else 0.0
-        except KeyError as e:
-            Logger.warning(f"SkyEnv night uniform missing: {e}")
-        except Exception as e:
-            Logger.warning(f"Failed to apply night sky: {e}")
+            except KeyError as e:
+                Logger.warning(f"SkyEnv night uniform missing: {e}")
+            except Exception as e:
+                Logger.warning(f"Failed to apply night sky: {e}")
         self._sky_env_tex.bind_to_image(0, read=False, write=True)
         self._sky_env_prog.run(group_x=(256 + 7) // 8, group_y=(128 + 7) // 8, group_z=1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)

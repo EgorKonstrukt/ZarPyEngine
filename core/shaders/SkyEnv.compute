@@ -47,7 +47,6 @@ ComputeShader "Zarin/SkyEnv"
     uniform float u_moon_size;
     uniform float u_moon_intensity;
     uniform float u_moon_phase;
-    uniform float u_moon_orbit_speed;
     uniform sampler2D u_moon_tex;
     uniform float u_use_moon_tex;
     uniform float u_night_exposure;
@@ -182,11 +181,7 @@ ComputeShader "Zarin/SkyEnv"
     }
 
     vec3 procedural_moon(vec3 dir, vec3 sun_dir) {
-        vec3 u0 = normalize(u_moon_direction);
-        float orbit = radians(u_moon_orbit_speed) * u_time;
-        float ca = cos(orbit);
-        float sa = sin(orbit);
-        vec3 u = normalize(vec3(u0.x * ca + u0.z * sa, u0.y, -u0.x * sa + u0.z * ca));
+        vec3 u = normalize(u_moon_direction);
         vec3 v = cross(vec3(0.0, 1.0, 0.0), u);
         float vl = length(v);
         v = (vl > 1e-5) ? (v / vl) : vec3(1.0, 0.0, 0.0);
