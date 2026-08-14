@@ -31,6 +31,97 @@ ComputeShader "Zarin/SkyEnv"
     uniform float u_sun_limb_darkening;
     uniform float u_sun_convergence;
 
+    uniform float u_night_sky_enabled;
+    uniform float u_star_enabled;
+    uniform float u_star_density;
+    uniform float u_star_intensity;
+    uniform float u_star_scale;
+    uniform float u_star_twinkle;
+    uniform float u_star_seed;
+    uniform vec3 u_star_color;
+    uniform float u_milkyway_enabled;
+    uniform float u_milkyway_intensity;
+    uniform vec3 u_milkyway_pole;
+    uniform float u_moon_enabled;
+    uniform vec3 u_moon_direction;
+    uniform float u_moon_size;
+    uniform float u_moon_intensity;
+    uniform float u_moon_phase;
+    uniform float u_moon_orbit_speed;
+    uniform sampler2D u_moon_tex;
+    uniform float u_use_moon_tex;
+    uniform float u_night_exposure;
+    uniform float u_time;
+
+    float hash12(vec2 p) {
+        vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    float hash13(vec3 p3) {
+        p3 = fract(p3 * 0.1031);
+        p3 += dot(p3, p3.zyx + 31.32);
+        return fract((p3.x + p3.y) * p3.z);
+    }
+
+    vec3 hash33(vec3 p3) {
+        p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+        p3 += dot(p3, p3.yxz + 33.33);
+        return fract((p3.xxy + p3.yxx) * p3.zyx);
+    }
+
+    float vnoise3(vec3 p) {
+        vec3 i = floor(p);
+        vec3 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float n000 = hash13(i);
+        float n100 = hash13(i + vec3(1.0, 0.0, 0.0));
+        float n010 = hash13(i + vec3(0.0, 1.0, 0.0));
+        float n110 = hash13(i + vec3(1.0, 1.0, 0.0));
+        float n001 = hash13(i + vec3(0.0, 0.0, 1.0));
+        float n101 = hash13(i + vec3(1.0, 0.0, 1.0));
+        float n011 = hash13(i + vec3(0.0, 1.0, 1.0));
+        float n111 = hash13(i + vec3(1.0, 1.0, 1.0));
+        return mix(
+            mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+            mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+            f.z);
+    }
+
+    float fbm3(vec3 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+            v += a * vnoise3(p);
+            p = p * 2.03 + vec3(17.3, 9.1, 4.7);
+            a *= 0.5;
+        }
+        return v;
+    }
+
+    float vnoise2(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash12(i);
+        float b = hash12(i + vec2(1.0, 0.0));
+        float c = hash12(i + vec2(0.0, 1.0));
+        float d = hash12(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    float fbm2(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 5; i++) {
+            v += a * vnoise2(p);
+            p = p * 2.03 + vec2(9.2, 3.7);
+            a *= 0.5;
+        }
+        return v;
+    }
+
     float sun_disk_factor(vec3 dir, vec3 sun_dir) {
         float radius = radians(max(u_sun_angular_radius, 0.01));
         float ry = radius * mix(1.0, 0.35, smoothstep(0.0, -0.08, sun_dir.y));
@@ -50,6 +141,82 @@ ComputeShader "Zarin/SkyEnv"
         return disk;
     }
 
+    vec3 procedural_stars(vec3 dir) {
+        vec3 g = dir * u_star_scale + vec3(u_star_seed * 137.31);
+        vec3 id = floor(g);
+        vec3 f = fract(g);
+        vec3 acc = vec3(0.0);
+        for (int x = -1; x <= 1; x++)
+        for (int y = -1; y <= 1; y++)
+        for (int z = -1; z <= 1; z++) {
+            vec3 o = vec3(float(x), float(y), float(z));
+            vec3 cell = id + o;
+            float h = hash13(cell);
+            if (h >= u_star_density) continue;
+            vec3 star_pos = o + hash33(cell + vec3(7.31, 11.7, 13.13));
+            vec3 d = f - star_pos;
+            float r2 = dot(d, d);
+            float radius = 0.06 + 0.14 * hash13(cell + 1.71);
+            if (r2 > radius * radius) continue;
+            float brightness = hash13(cell + 2.23);
+            float glow = exp(-r2 / (0.02 + 0.20 * brightness));
+            float twinkle = 1.0;
+            if (u_star_twinkle > 0.01) {
+                twinkle = 0.7 + 0.3 * sin(u_time * (0.6 + brightness * 3.0) + hash13(cell + 3.37) * 6.28318);
+            }
+            float tint_mix = hash13(cell + 4.17);
+            vec3 tint = mix(vec3(1.0, 0.96, 0.88), vec3(0.58, 0.70, 1.0), smoothstep(0.35, 0.85, tint_mix));
+            acc += u_star_color * tint * glow * (0.25 + 0.75 * brightness) * (1.0 + twinkle * u_star_twinkle);
+        }
+        return acc * u_star_intensity;
+    }
+
+    vec3 milky_way(vec3 dir) {
+        vec3 pole = normalize(u_milkyway_pole);
+        float band = pow(1.0 - abs(dot(dir, pole)), 3.0);
+        vec3 p = dir * 6.0 + vec3(u_star_seed * 13.7);
+        float n = pow(fbm3(p), 2.5);
+        float streak = smoothstep(0.25, 0.7, fbm3(p * vec3(3.0, 9.0, 3.0)));
+        vec3 tint = mix(vec3(0.75, 0.82, 0.95), vec3(0.9, 0.72, 0.88), 0.35);
+        return tint * band * n * (0.4 + 0.6 * streak) * u_milkyway_intensity;
+    }
+
+    vec3 procedural_moon(vec3 dir, vec3 sun_dir) {
+        vec3 u0 = normalize(u_moon_direction);
+        float orbit = radians(u_moon_orbit_speed) * u_time;
+        float ca = cos(orbit);
+        float sa = sin(orbit);
+        vec3 u = normalize(vec3(u0.x * ca + u0.z * sa, u0.y, -u0.x * sa + u0.z * ca));
+        vec3 v = cross(vec3(0.0, 1.0, 0.0), u);
+        float vl = length(v);
+        v = (vl > 1e-5) ? (v / vl) : vec3(1.0, 0.0, 0.0);
+        vec3 w = cross(v, u);
+        vec3 lp = vec3(dot(dir, v), dot(dir, w), dot(dir, u));
+        float radius = radians(max(u_moon_size, 0.05));
+        float dist = length(lp.xy);
+        float disk = 1.0 - smoothstep(radius * 0.92, radius * 1.06, dist);
+        if (disk <= 0.0) return vec3(0.0);
+        float az = asin(clamp(lp.x, -1.0, 1.0));
+        float elev = asin(clamp(lp.y, -1.0, 1.0));
+        float maria = pow(fbm2(vec2(az, elev) * 8.0 + u_star_seed * 13.0), 1.5);
+        float craters = fbm2(vec2(az, elev) * 44.0 + u_star_seed * 7.0);
+        vec3 albedo = mix(vec3(0.33, 0.33, 0.35), vec3(0.55, 0.55, 0.58), maria);
+        float shade = 0.42 + 0.58 * pow(craters, 1.5);
+        float limb = sqrt(max(1.0 - clamp(dist / radius, 0.0, 1.0) * clamp(dist / radius, 0.0, 1.0), 0.0));
+        vec3 surface = albedo * shade * (0.5 + 0.5 * limb);
+        vec2 tex_uv = vec2(0.5 + 0.5 * az / radius, 0.5 - 0.5 * elev / radius);
+        surface = mix(surface, texture(u_moon_tex, tex_uv).rgb * (0.5 + 0.5 * limb), u_use_moon_tex);
+        vec3 sun_local = normalize(vec3(dot(sun_dir, v), dot(sun_dir, w), dot(sun_dir, u)));
+        vec3 phase_axis = vec3(sun_local.x, sun_local.y, 0.0);
+        float pa_len = length(phase_axis);
+        phase_axis = (pa_len > 1e-4) ? (phase_axis / pa_len) : vec3(1.0, 0.0, 0.0);
+        float pix_z = sqrt(max(1.0 - dot(lp.xy, lp.xy), 0.0));
+        vec3 pixel_local = normalize(vec3(lp.xy, pix_z));
+        float term = mix(1.5, -1.5, clamp(u_moon_phase, 0.0, 1.0));
+        float lit = smoothstep(term - 0.25, term + 0.25, dot(pixel_local, phase_axis));
+        return surface * disk * lit * u_moon_intensity;
+    }
+
     vec3 compute_sky(vec3 dir) {
         vec3 sun_dir = normalize(u_sun_direction);
         float cos_theta = max(dir.y, 0.0);
@@ -66,15 +233,30 @@ ComputeShader "Zarin/SkyEnv"
         vec3 sky_horizon = vec3(0.78, 0.88, 1.0);
         vec3 sky_sunset = vec3(1.0, 0.58, 0.25);
         float sun_height = sun_dir.y;
-        vec3 horizon_color = mix(sky_sunset, sky_horizon, smoothstep(0.0, 0.3, sun_height));
+        float night = smoothstep(0.05, -0.4, sun_height);
+        vec3 night_top = vec3(0.012, 0.022, 0.06);
+        vec3 night_horizon = vec3(0.045, 0.055, 0.11);
+        vec3 horizon_color = mix(mix(sky_sunset, sky_horizon, smoothstep(0.0, 0.3, sun_height)), night_horizon, night);
         float height_gradient = 1.0 - pow(1.0 - cos_theta, 4.0);
-        vec3 base_sky = mix(horizon_color, sky_top, height_gradient);
+        vec3 base_sky = mix(horizon_color, mix(sky_top, night_top, night), height_gradient);
         sky = max(sky + base_sky * 0.85 + vec3(0.015, 0.025, 0.04), 0.0);
         float below_horizon = smoothstep(0.0, -0.12, sun_height);
         sky += u_sun_color * u_sun_intensity * sun_disk_factor(dir, sun_dir)
              * (1.0 - below_horizon);
-        float night = smoothstep(0.05, -0.4, sun_height);
         sky *= (1.0 - night * 0.72);
+        if (u_night_sky_enabled > 0.5) {
+            vec3 night_c = vec3(0.0);
+            if (u_star_enabled > 0.5 && night > 0.001) {
+                night_c += procedural_stars(dir) * night;
+            }
+            if (u_milkyway_enabled > 0.5 && night > 0.001) {
+                night_c += milky_way(dir) * night;
+            }
+            if (u_moon_enabled > 0.5 && night > 0.001) {
+                night_c += procedural_moon(dir, sun_dir) * night;
+            }
+            sky += night_c * u_night_exposure;
+        }
         return sky;
     }
 

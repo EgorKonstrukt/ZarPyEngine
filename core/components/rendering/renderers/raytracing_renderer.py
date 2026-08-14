@@ -18,6 +18,7 @@ from core.components.lighting.light import Light, LightType
 from core.maths.math3d import Mat4, Vec3
 from core.foundation.logger import Logger
 import math
+import time
 
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
@@ -590,6 +591,44 @@ class RaytracingRenderer(Component):
             self._sky_env_prog["u_sun_convergence"] = sun_conv
         except KeyError as e:
             Logger.warning(f"SkyEnv uniform missing: {e}")
+        try:
+            from core.components.rendering.environment.sky import Sky, _get_moon_texture, _get_white_tex
+            sky_comp = None
+            for ent in scene.get_entities_with_component(Sky):
+                sc = ent.get_component(Sky)
+                if sc and sc.enabled:
+                    sky_comp = sc
+                    break
+            if sky_comp is not None:
+                self._sky_env_prog["u_night_sky_enabled"] = 1.0 if sky_comp.night_sky_enabled else 0.0
+                self._sky_env_prog["u_night_exposure"] = sky_comp.night_exposure
+                self._sky_env_prog["u_star_enabled"] = 1.0 if sky_comp.star_enabled else 0.0
+                self._sky_env_prog["u_star_density"] = sky_comp.star_density
+                self._sky_env_prog["u_star_intensity"] = sky_comp.star_intensity
+                self._sky_env_prog["u_star_scale"] = sky_comp.star_scale
+                self._sky_env_prog["u_star_twinkle"] = sky_comp.star_twinkle
+                self._sky_env_prog["u_star_seed"] = sky_comp.star_seed
+                self._sky_env_prog["u_star_color"] = (sky_comp.star_color[0], sky_comp.star_color[1], sky_comp.star_color[2])
+                self._sky_env_prog["u_milkyway_enabled"] = 1.0 if sky_comp.milky_way_enabled else 0.0
+                self._sky_env_prog["u_milkyway_intensity"] = sky_comp.milky_way_intensity
+                self._sky_env_prog["u_milkyway_pole"] = (sky_comp.milky_way_pole[0], sky_comp.milky_way_pole[1], sky_comp.milky_way_pole[2])
+                self._sky_env_prog["u_moon_enabled"] = 1.0 if sky_comp.moon_enabled else 0.0
+                self._sky_env_prog["u_moon_direction"] = (sky_comp.moon_direction[0], sky_comp.moon_direction[1], sky_comp.moon_direction[2])
+                self._sky_env_prog["u_moon_size"] = sky_comp.moon_size
+                self._sky_env_prog["u_moon_intensity"] = sky_comp.moon_intensity
+                self._sky_env_prog["u_moon_phase"] = sky_comp.moon_phase
+                self._sky_env_prog["u_moon_orbit_speed"] = sky_comp.moon_orbit_speed
+                self._sky_env_prog["u_time"] = time.time()
+                moon_tex = _get_moon_texture(ctx, sky_comp.moon_texture_path)
+                if moon_tex is None:
+                    moon_tex = _get_white_tex(ctx)
+                moon_tex.use(7)
+                self._sky_env_prog["u_moon_tex"] = 7
+                self._sky_env_prog["u_use_moon_tex"] = 1.0 if sky_comp.moon_texture_path else 0.0
+        except KeyError as e:
+            Logger.warning(f"SkyEnv night uniform missing: {e}")
+        except Exception as e:
+            Logger.warning(f"Failed to apply night sky: {e}")
         self._sky_env_tex.bind_to_image(0, read=False, write=True)
         self._sky_env_prog.run(group_x=(256 + 7) // 8, group_y=(128 + 7) // 8, group_z=1)
         ctx.memory_barrier(moderngl.ALL_BARRIER_BITS)

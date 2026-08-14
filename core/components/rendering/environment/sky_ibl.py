@@ -369,7 +369,8 @@ def _quant(v, ndig: int):
 
 def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
                            material_path: str, sun_dir=None, sun_color=None,
-                           sun_intensity=None, res: int = 128) -> Optional[SkyIbl]:
+                           sun_intensity=None, res: int = 128,
+                           settings_key=None) -> Optional[SkyIbl]:
     if sun_dir is None:
         sun_dir = _PROC_SUN_DEFAULT_DIR
     if sun_color is None:
@@ -383,6 +384,8 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
         repr(_quant(sun_color, 2)),
         str(round(float(sun_intensity), 2)),
     ])
+    if settings_key is not None:
+        key += "|" + repr(settings_key)
     key = f"{id(ctx)}|{key}"
     if key in _PROC_SKY_IBL_CACHE:
         ibl = _PROC_SKY_IBL_CACHE.pop(key)
