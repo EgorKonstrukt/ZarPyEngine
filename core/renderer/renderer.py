@@ -1607,6 +1607,21 @@ out vec4 frag_color;
             self._ctx.enable(moderngl.CULL_FACE)
             self._ctx.cull_face = 'back'
             self._ctx.disable(moderngl.BLEND)
+            # Capture the sky into the cubemap face so reflections show the
+            # environment instead of black (like BeamNG's reflection cubemaps).
+            sky_component = getattr(snap, 'sky_component', None)
+            if (sky_component and getattr(sky_component, 'enabled', False)
+                    and self._skybox_cube and self._skybox_enabled):
+                try:
+                    # view_f32/proj_f32 are _d.T flattened column-major; reshaping
+                    # row-major recovers the original _d exactly (no transpose).
+                    face_view = Mat4(np.asarray(view_f32, dtype=np.float64).reshape(4, 4))
+                    face_proj = Mat4(np.asarray(proj_f32, dtype=np.float64).reshape(4, 4))
+                    sky_component.render_sky(self._ctx, self._shaders, face_view, face_proj,
+                                             snap.dir_light, self._skybox_cube)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
             renderable = snap.renderable
             if skip_entity is not None and renderable:
                 renderable = [e for e in renderable if e[0] is not skip_entity]
@@ -2337,7 +2352,7 @@ out vec4 frag_color;
         if dynamic_cubemaps is not None and not self._rendering_cubemap_face:
             if prof:
                 prof.start("update_dynamic_cubemaps")
-            probe_pos = snap.dynamic_cubemaps_pos if snap.dynamic_cubemaps_pos is not None else cam_pos
+            probe_pos = snap.dynamic_cubemaps_pos if (snap.dynamic_cubemaps_pos is not None and not getattr(dynamic_cubemaps, 'follow_camera', True)) else cam_pos
             dynamic_cubemaps.update(self._ctx, view_mat, proj_mat, probe_pos, scene, self,
                                     main_snap=snap, skip_entity=snap.dynamic_cubemaps_entity)
             self._scene_fbo.use()

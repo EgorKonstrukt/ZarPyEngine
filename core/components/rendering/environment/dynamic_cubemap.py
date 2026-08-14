@@ -293,6 +293,7 @@ class DynamicCubemaps(Component):
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
+            InspectorField("follow_camera", "Follow Camera", FieldType.BOOL),
             InspectorField("resolution", "Resolution", FieldType.INT_SLIDER, 32, 512),
             InspectorField("update_interval", "Update Interval (s)", FieldType.FLOAT, 0.05, 2.0),
             InspectorField("near_plane", "Near Plane", FieldType.FLOAT, 0.01, 10.0),
@@ -302,6 +303,7 @@ class DynamicCubemaps(Component):
 
     def __init__(self):
         super().__init__()
+        self.follow_camera: bool = True
         self.resolution: int = 128
         self.update_interval: float = 0.33
         self.near_plane: float = 0.1
@@ -330,6 +332,7 @@ class DynamicCubemaps(Component):
     def serialize(self) -> dict:
         d = super().serialize()
         d.update({
+            "follow_camera": self.follow_camera,
             "resolution": self.resolution,
             "update_interval": self.update_interval,
             "near_plane": self.near_plane,
@@ -342,6 +345,7 @@ class DynamicCubemaps(Component):
     def deserialize(cls, data: dict) -> DynamicCubemaps:
         c = cls()
         c.enabled = data.get("enabled", True)
+        c.follow_camera = bool(data.get("follow_camera", True))
         c.resolution = int(data.get("resolution", 128))
         c.update_interval = float(data.get("update_interval", 0.33))
         c.near_plane = float(data.get("near_plane", 0.1))
