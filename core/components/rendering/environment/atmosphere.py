@@ -165,7 +165,7 @@ class Atmosphere(Component):
         prog = self._program
         prog["u_sun_direction"].write(np.array(sun_dir, dtype=np.float32).tobytes())
         prog["u_sun_color"].write(np.array(sun_color, dtype=np.float32).tobytes())
-        prog["u_sun_intensity"].value = sun_intensity
+        prog["u_sun_intensity"].value = float(sun_intensity) * float(self._sun_intensity)
         prog["u_ozone_factor"].value = float(self._ozone_factor)
         prog["u_aerosol_scale"].value = float(self._aerosol_scale)
 
@@ -188,7 +188,8 @@ class Atmosphere(Component):
         self._ensure_textures(ctx)
         key = (tuple(float(v) for v in sun_dir),
                tuple(float(v) for v in sun_color),
-               float(sun_intensity), float(self._ozone_factor),
+               float(sun_intensity), float(self._sun_intensity),
+               float(self._ozone_factor),
                float(self._aerosol_scale), self._lut_sizes)
         if key != self._cache_key:
             self._cache_key = key
@@ -216,6 +217,10 @@ class Atmosphere(Component):
                 prog["u_use_atmosphere"].value = 1
             if "u_atmosphere_intensity" in prog:
                 prog["u_atmosphere_intensity"].value = self._intensity
+            if "_SunIntensity" in prog:
+                # Sun disc shares the same intensity multiplier as the sky LUT
+                # in-scatter so the whole sun scales together.
+                prog["_SunIntensity"].value = float(prog["_SunIntensity"].value) * self._sun_intensity
             if "_SunAngularRadius" in prog:
                 prog["_SunAngularRadius"].value = float(self._sun_angular_radius)
             if "_SunLimbDarkening" in prog:

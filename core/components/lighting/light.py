@@ -197,36 +197,56 @@ class Light(Component):
         return [r / m, g / m, b / m]
 
     @staticmethod
+    def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+        t = max(0.0, min(1.0, (x - edge0) / (edge1 - edge0)))
+        return t * t * (3.0 - 2.0 * t)
+
+    @staticmethod
     def compute_sun_light(sun_dir: Vec3, color_temp: float = 5778.0,
                           aerosol_scale: float = 1.0,
                           use_atmosphere: bool = True) -> tuple[list[float], float]:
         elevation = float(sun_dir.y)
-        if elevation <= 0.0:
-            night = max(0.0, min(1.0, -elevation * 2.0))
-            moonlight = 0.02 * (1.0 - night * 0.75)
-            return [0.3, 0.35, 0.55], moonlight
-        # Kasten-Young air mass: how much atmosphere the sunlight crosses.
-        e = max(elevation, 1e-4)
-        e_deg = math.degrees(e)
-        airmass = 1.0 / (e + 0.50572 * math.pow(e_deg + 6.07995, -1.6364))
-        if not use_atmosphere:
-            airmass = 1.0
-        # Vertical optical depths at sea level, using the engine's atmosphere
-        # constants (Hr = 8 km, Hm = 1.2 km). Aerosol scales the Mie term.
-        wp = Light._planck_white(color_temp)
-        tau_r = [5.802e-6 * 8000.0 * airmass,
-                 13.558e-6 * 8000.0 * airmass,
-                 33.1e-6 * 8000.0 * airmass]
-        tau_m = 3.996e-6 * 1200.0 * max(float(aerosol_scale), 0.0) * airmass
-        color = [wp[i] * math.exp(-(tau_r[i] + tau_m)) for i in range(3)]
-        luma = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
-        if luma > 1e-6:
-            color = [c / luma for c in color]
+        # Sun-disc visibility: full a few degrees above the horizon, a smooth
+        # fade through the horizon and off near the end of civil twilight
+        # (~ -8 deg), so the light keeps glowing through sunrise/sunset
+        # instead of snapping off the instant the sun dips below the horizon.
+        vis = Light._smoothstep(-0.14, 0.05, elevation)
+
+        if use_atmosphere:
+            # Kasten-Young air mass; clamped so it stays finite right at the
+            # horizon while still growing below it (ever-redder twilight light).
+            eff = max(elevation, 1e-4)
+            airmass = 1.0 / (eff + 0.50572 * math.pow(math.degrees(eff) + 6.07995, -1.6364))
+            wp = Light._planck_white(color_temp)
+            tau_r = [5.802e-6 * 8000.0 * airmass,
+                     13.558e-6 * 8000.0 * airmass,
+                     33.1e-6 * 8000.0 * airmass]
+            tau_m = 3.996e-6 * 1200.0 * max(float(aerosol_scale), 0.0) * airmass
+            color = [wp[i] * math.exp(-(tau_r[i] + tau_m)) for i in range(3)]
+            luma = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
+            if luma > 1e-6:
+                color = [c / luma for c in color]
+            else:
+                color = [1.0, 0.7, 0.4]
+            tau_luma = (0.2126 * tau_r[0] + 0.7152 * tau_r[1]
+                        + 0.0722 * tau_r[2] + tau_m)
         else:
-            color = [1.0, 0.7, 0.4]
-        intensity = 1.2 * (1.0 - math.exp(-elevation * 4.0))
-        tau_luma = 0.2126 * tau_r[0] + 0.7152 * tau_r[1] + 0.0722 * tau_r[2] + tau_m
-        intensity *= (0.5 + 0.5 * math.exp(-tau_luma))
+            color = list(Light._planck_white(color_temp))
+            tau_luma = 0.0
+
+        # Brightness: ~1.2 at noon, kept high through low sun angles so the
+        # warm red light reads clearly during golden hour, then dimmed by the
+        # same optical depth that reddens the colour.
+        intensity = 1.2 * vis * (0.55 + 0.45 * (1.0 - math.exp(-max(elevation, 0.0) * 4.0)))
+        if use_atmosphere:
+            intensity *= (0.5 + 0.5 * math.exp(-tau_luma))
+
+        # Blend toward blue moonlight as the solar term fades out at night.
+        night = 1.0 - vis
+        moon_c = [0.3, 0.35, 0.55]
+        k = 1.0 - night
+        color = [moon_c[i] + (color[i] - moon_c[i]) * k for i in range(3)]
+        intensity = max(intensity, 0.02 * (1.0 - night * 0.75))
         return color, intensity
 
     @staticmethod

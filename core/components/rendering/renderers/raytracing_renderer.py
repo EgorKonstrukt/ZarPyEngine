@@ -565,13 +565,29 @@ class RaytracingRenderer(Component):
                 sun_dir = -t.forward
                 sky_color, sky_intensity = Light.shader_radiance(l, t)
                 break
+        # Honour the Atmosphere component's sun-disc settings and intensity
+        # multiplier on the procedural SkyEnv as well.
+        sun_radius = 0.27
+        sun_limb = 0.7
+        sun_conv = 0.5
+        try:
+            from core.components.rendering.environment.atmosphere import Atmosphere
+            atmos = next((a for a in Atmosphere._registry
+                          if a.enabled and a.entity and a.entity.active), None)
+            if atmos is not None:
+                sky_intensity = sky_intensity * float(getattr(atmos, "_sun_intensity", 1.0))
+                sun_radius = float(getattr(atmos, "_sun_angular_radius", 0.27))
+                sun_limb = float(getattr(atmos, "_sun_limb_darkening", 0.7))
+                sun_conv = float(getattr(atmos, "_sun_convergence", 0.5))
+        except Exception:
+            pass
         try:
             self._sky_env_prog["u_sun_direction"] = (sun_dir.x, sun_dir.y, sun_dir.z)
             self._sky_env_prog["u_sun_color"] = (sky_color[0], sky_color[1], sky_color[2])
             self._sky_env_prog["u_sun_intensity"] = sky_intensity
-            self._sky_env_prog["u_sun_angular_radius"] = 0.27
-            self._sky_env_prog["u_sun_limb_darkening"] = 0.7
-            self._sky_env_prog["u_sun_convergence"] = 0.5
+            self._sky_env_prog["u_sun_angular_radius"] = sun_radius
+            self._sky_env_prog["u_sun_limb_darkening"] = sun_limb
+            self._sky_env_prog["u_sun_convergence"] = sun_conv
         except KeyError as e:
             Logger.warning(f"SkyEnv uniform missing: {e}")
         self._sky_env_tex.bind_to_image(0, read=False, write=True)

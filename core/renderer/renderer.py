@@ -1708,7 +1708,10 @@ out vec4 frag_color;
                         p_l, p_t = proc_sun
                         p_c, p_i = Light.shader_radiance(p_l, p_t)
                         e = -p_t.forward.y
-                        day = max(0.0, min(1.0, float(e) * 2.0 + 0.2))
+                        # Same smooth twilight curve as the directional light:
+                        # ambient stays up through the horizon and fades during
+                        # civil twilight instead of dropping out early.
+                        day = Light._smoothstep(-0.14, 0.05, float(e))
                         scale = 0.3 + 0.7 * day
                         tint = [0.3 + 0.5 * p_c[0], 0.35 + 0.5 * p_c[1], 0.55 + 0.5 * p_c[2]]
                         abuf[0] = amb[0] * tint[0] * scale
