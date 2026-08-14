@@ -44,17 +44,36 @@ Shader "Zarin/Sky"
             uniform float _SunConvergence;
             uniform sampler2D u_env_tex;
             uniform float u_use_env;
+            uniform sampler2D u_transmittance_lut;
+            uniform sampler2D u_sky_lut;
+            uniform float u_use_atmosphere;
+            uniform float u_atmosphere_intensity;
             void main() {
                 vec3 dir = normalize(v_uv);
                 vec3 sun_dir = normalize(_SunDirection);
                 float cos_gamma = dot(dir, sun_dir);
+                float sun_height = sun_dir.y;
+                float sun_start = 1.0 - _SunSize * 3.0;
+                float sun_end = 1.0 - _SunSize * (1.0 - _SunConvergence * 0.8);
+                float sun_disk = smoothstep(sun_start, sun_end, cos_gamma);
+                float night = smoothstep(0.05, -0.4, sun_height);
                 vec3 color;
-                if (u_use_env > 0.5) {
+                if (u_use_atmosphere > 0.5) {
+                    // Sample the precomputed sky-view radiance LUT. The LUT was
+                    // generated for the full sky dome (zenith -> horizon), so
+                    // directions below the horizon clamp to the horizon colour.
+                    float theta = acos(clamp(dir.y, 0.0, 1.0));
+                    float phi = atan(dir.z, dir.x);
+                    vec2 sky_uv = vec2(phi / 6.28318530718 + 0.5, theta / 1.57079632679);
+                    color = texture(u_sky_lut, sky_uv).rgb * u_atmosphere_intensity;
+                    color = max(color, vec3(0.0));
+                    color += _SunColor * _SunIntensity * sun_disk;
+                    color *= (1.0 - night * 0.72);
+                } else if (u_use_env > 0.5) {
                     vec2 uv = vec2(0.5 + atan(dir.z, dir.x) / 6.28318530718, acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265359);
                     color = texture(u_env_tex, uv).rgb;
                 } else {
                     float cos_theta = max(dir.y, 0.0);
-                    float sun_height = sun_dir.y;
                     float optical_depth = 1.0 / max(cos_theta, 0.005);
                     float rayleigh_phase = 0.75 * (1.0 + cos_gamma * cos_gamma);
                     vec3 rayleigh = vec3(0.55, 0.65, 0.90) * rayleigh_phase;
@@ -70,11 +89,7 @@ Shader "Zarin/Sky"
                     float height_gradient = 1.0 - pow(1.0 - cos_theta, 4.0);
                     vec3 base_sky = mix(horizon_color, sky_top, height_gradient);
                     color = max(color + base_sky * 0.85 + vec3(0.015, 0.025, 0.04), 0.0);
-                    float sun_start = 1.0 - _SunSize * 3.0;
-                    float sun_end = 1.0 - _SunSize * (1.0 - _SunConvergence * 0.8);
-                    float sun_disk = smoothstep(sun_start, sun_end, cos_gamma);
                     color += _SunColor * _SunIntensity * sun_disk;
-                    float night = smoothstep(0.05, -0.4, sun_height);
                     color *= (1.0 - night * 0.72);
                 }
                 frag_color = vec4(color, 1.0);

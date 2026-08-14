@@ -13,6 +13,7 @@ from core.components.inspector_meta import FieldType, InspectorField
 from core.maths.math3d import Mat4
 from core.components.lighting.light import Light
 from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache, get_procedural_sky_ibl
+from core.components.rendering.environment.atmosphere import Atmosphere
 
 _ENV_TEX_CACHE: dict[str, tuple[float, object]] = {}
 
@@ -208,6 +209,9 @@ class Sky(Component):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
         if not prog:
             return
+        sun_world = None
+        sun_color = None
+        sun_intensity = None
         if dir_light:
             dl, dt = dir_light
             sky_color, sky_intensity = Light.shader_radiance(dl, dt)
@@ -222,6 +226,9 @@ class Sky(Component):
                 prog["_SunSize"].value = 0.0008
             if "_SunConvergence" in prog:
                 prog["_SunConvergence"].value = 0.5
+            sun_world = (-dt.forward.x, -dt.forward.y, -dt.forward.z)
+            sun_color = sky_color
+            sun_intensity = sky_intensity
         else:
             if "_SunDirection" in prog:
                 prog["_SunDirection"].write(np.array([0.0, -0.3, -1.0], dtype=np.float32).tobytes())
@@ -233,6 +240,18 @@ class Sky(Component):
                 prog["_SunSize"].value = 0.0008
             if "_SunConvergence" in prog:
                 prog["_SunConvergence"].value = 0.5
+            sun_world = (0.0, -0.3, -1.0)
+            sun_color = [1.0, 0.95, 0.85]
+            sun_intensity = 1.0
+        atmos = next((a for a in Atmosphere._registry
+                      if a.enabled and a.entity and a.entity.active), None)
+        if atmos is not None and "u_use_atmosphere" in prog:
+            if atmos.ensure_luts(ctx, sun_world, sun_color, sun_intensity):
+                atmos.bind_sky(prog)
+            else:
+                prog["u_use_atmosphere"].value = 0
+        elif "u_use_atmosphere" in prog:
+            prog["u_use_atmosphere"].value = 0
         env_tex = _get_env_texture(ctx, self.environment_path) if self.environment_path else None
         if self.environment_path:
             self._sky_ibl = get_sky_ibl(ctx, self.environment_path, env_tex)
