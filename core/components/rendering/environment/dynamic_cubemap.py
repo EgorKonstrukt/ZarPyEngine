@@ -52,6 +52,58 @@ _opengl32.glTexSubImage2D.argtypes = (
 _opengl32.glTexParameteri.restype = None
 _opengl32.glTexParameteri.argtypes = (ctypes.c_uint, ctypes.c_uint, ctypes.c_int)
 
+_wglGetProcAddress = _opengl32.wglGetProcAddress
+_wglGetProcAddress.restype = ctypes.c_void_p
+_wglGetProcAddress.argtypes = (ctypes.c_char_p,)
+
+_glFramebufferTexture2D_fn = None
+_glCheckFramebufferStatus_fn = None
+
+
+def _resolve_gl_function(name: bytes, restype, argtypes):
+    addr = _wglGetProcAddress(name)
+    if addr:
+        return ctypes.CFUNCTYPE(restype, *argtypes)(addr)
+    try:
+        return getattr(_opengl32, name.decode())
+    except AttributeError:
+        return None
+
+
+def _glFramebufferTexture2D(*args):
+    global _glFramebufferTexture2D_fn
+    if _glFramebufferTexture2D_fn is None:
+        _glFramebufferTexture2D_fn = _resolve_gl_function(
+            b"glFramebufferTexture2D", None,
+            (ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int),
+        )
+    if _glFramebufferTexture2D_fn is not None:
+        _glFramebufferTexture2D_fn(*args)
+
+
+def _glCheckFramebufferStatus(target):
+    global _glCheckFramebufferStatus_fn
+    if _glCheckFramebufferStatus_fn is None:
+        _glCheckFramebufferStatus_fn = _resolve_gl_function(
+            b"glCheckFramebufferStatus", ctypes.c_uint, (ctypes.c_uint,),
+        )
+    if _glCheckFramebufferStatus_fn is None:
+        return 0
+    return _glCheckFramebufferStatus_fn(target)
+
+_GL_TEXTURE_2D = 0x0DE1
+_GL_FRAMEBUFFER = 0x8D40
+_GL_COLOR_ATTACHMENT0 = 0x8CE0
+_GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+
+
+def _attach_cubemap_face(tex_glo: int, face: int, level: int = 0) -> bool:
+    _glFramebufferTexture2D(
+        _GL_FRAMEBUFFER, _GL_COLOR_ATTACHMENT0,
+        _GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, tex_glo, level,
+    )
+    return _glCheckFramebufferStatus(_GL_FRAMEBUFFER) == _GL_FRAMEBUFFER_COMPLETE
+
 
 def _allocate_cube_mip_levels(tex: moderngl.TextureCube, res: int, max_level: int):
     _opengl32.glBindTexture(_GL_TEXTURE_CUBE_MAP, tex.glo)
@@ -328,6 +380,10 @@ class DynamicCubemaps(Component):
         self._current_face: int = 0
         self._last_update_time: float = 0.0
         self._all_faces_updated: bool = False
+        self._quad_vaos: dict[int, moderngl.VertexArray] = {}
+        self._proj_cache_key: Optional[tuple] = None
+        self._proj_mat: Optional[Mat4] = None
+        self._proj_f32: Optional[np.ndarray] = None
 
     def serialize(self) -> dict:
         d = super().serialize()
@@ -469,6 +525,14 @@ class DynamicCubemaps(Component):
         vbo = ctx.buffer(verts.tobytes())
         return ctx.vertex_array(prog, [(vbo, "2f 2f", "in_position", "in_uv")])
 
+    def _get_quad_vao(self, ctx: moderngl.Context, prog: moderngl.Program) -> Optional[moderngl.VertexArray]:
+        key = id(prog)
+        vao = self._quad_vaos.get(key)
+        if vao is None:
+            vao = self._make_face_vao(ctx, prog)
+            self._quad_vaos[key] = vao
+        return vao
+
     def render_face(self, ctx: moderngl.Context, face: int,
                     view_mat: Mat4, proj_mat: Mat4, cam_pos: Vec3,
                     scene, renderer, main_snap=None, skip_entity=None) -> bool:
@@ -478,16 +542,23 @@ class DynamicCubemaps(Component):
             return False
 
         fbo = self._face_fbos[face]
-        if fbo is None:
+        cubemap = self._cubemap_tex
+        if fbo is None or cubemap is None:
             return False
 
         res = self.resolution
         fwd, up = _FACE_DIRS[face]
         target = cam_pos + fwd
         face_view = Mat4.look_at(cam_pos, target, up)
-        face_proj = Mat4.perspective(90.0, 1.0, self.near_plane, self.far_plane)
+        if self._proj_cache_key != (self.near_plane, self.far_plane):
+            face_proj = Mat4.perspective(90.0, 1.0, self.near_plane, self.far_plane)
+            self._proj_mat = face_proj
+            self._proj_f32 = face_proj.to_f32()
+            self._proj_cache_key = (self.near_plane, self.far_plane)
+        else:
+            face_proj = self._proj_mat
         view_f32 = face_view.to_f32()
-        proj_f32 = face_proj.to_f32()
+        proj_f32 = self._proj_f32
 
         prev_fbo = None
         try:
@@ -500,6 +571,11 @@ class DynamicCubemaps(Component):
         else:
             snap = renderer._collect_snapshot(scene, self.near_plane, self.far_plane, 90.0, face_view, face_proj, cam_pos)
 
+        fbo.use()
+        if not _attach_cubemap_face(cubemap.glo, face, 0):
+            _restore_framebuffer(ctx, prev_fbo)
+            return False
+
         renderer._rendering_cubemap_face = True
         try:
             renderer.render_cubemap_face(snap, fbo, res, view_f32, proj_f32, cam_pos, snap.lights, skip_entity=skip_entity)
@@ -507,11 +583,6 @@ class DynamicCubemaps(Component):
             renderer._rendering_cubemap_face = False
 
         _restore_framebuffer(ctx, prev_fbo)
-
-        face_tex = self._face_color_texs[face]
-        if face_tex is not None and self._cubemap_tex is not None:
-            data = face_tex.read()
-            self._cubemap_tex.write(face, data)
         return True
 
     def generate_irradiance(self, ctx: moderngl.Context):
@@ -532,12 +603,14 @@ class DynamicCubemaps(Component):
         ctx.disable(moderngl.DEPTH_TEST)
         ctx.disable(moderngl.CULL_FACE)
 
-        vao = self._make_face_vao(ctx, prog)
+        vao = self._get_quad_vao(ctx, prog)
+        if vao is None:
+            _restore_framebuffer(ctx, prev_fbo)
+            return
         try:
             self._cubemap_tex.use(0)
             prog["u_cubemap"].value = 0
         except Exception:
-            vao.release()
             _restore_framebuffer(ctx, prev_fbo)
             return
 
@@ -548,6 +621,8 @@ class DynamicCubemaps(Component):
                 continue
             fbo.use()
             fbo.viewport = (0, 0, irr_res, irr_res)
+            if not _attach_cubemap_face(self._irradiance_tex.glo, face, 0):
+                continue
             ctx.clear(0.0, 0.0, 0.0, 1.0)
             try:
                 prog["u_face_x"].value = fx
@@ -557,15 +632,9 @@ class DynamicCubemaps(Component):
                 continue
             self._cubemap_tex.use(0)
             vao.render(moderngl.TRIANGLES)
-            try:
-                data = self._irradiance_face_texs[face].read()
-                self._irradiance_tex.write(face, data)
-            except Exception:
-                pass
 
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
-        vao.release()
         _restore_framebuffer(ctx, prev_fbo)
 
     def generate_prefilter(self, ctx: moderngl.Context):
@@ -582,12 +651,16 @@ class DynamicCubemaps(Component):
         ctx.disable(moderngl.DEPTH_TEST)
         ctx.disable(moderngl.CULL_FACE)
 
-        vao = self._make_face_vao(ctx, prog)
+        vao = self._get_quad_vao(ctx, prog)
+        if vao is None:
+            ctx.enable(moderngl.DEPTH_TEST)
+            ctx.enable(moderngl.CULL_FACE)
+            _restore_framebuffer(ctx, prev_fbo)
+            return
         try:
             self._cubemap_tex.use(0)
             prog["u_cubemap"].value = 0
         except Exception:
-            vao.release()
             ctx.enable(moderngl.DEPTH_TEST)
             ctx.enable(moderngl.CULL_FACE)
             _restore_framebuffer(ctx, prev_fbo)
@@ -599,6 +672,8 @@ class DynamicCubemaps(Component):
                 fx, fy, fz = _FACE_BASIS[face]
                 mip_fbo.use()
                 mip_fbo.viewport = (0, 0, mip_res, mip_res)
+                if not _attach_cubemap_face(self._prefilter_tex.glo, face, mip_level):
+                    continue
                 ctx.clear(0.0, 0.0, 0.0, 1.0)
                 try:
                     prog["u_roughness"].value = roughness
@@ -610,15 +685,8 @@ class DynamicCubemaps(Component):
                 self._cubemap_tex.use(0)
                 vao.render(moderngl.TRIANGLES)
 
-                try:
-                    mip_data = mip_tex.read()
-                    _write_cube_face_mip(self._prefilter_tex, face, mip_level, mip_res, mip_data)
-                except Exception:
-                    pass
-
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
-        vao.release()
         _restore_framebuffer(ctx, prev_fbo)
 
     def generate_brdf_lut(self, ctx: moderngl.Context):
@@ -638,9 +706,9 @@ class DynamicCubemaps(Component):
         ctx.disable(moderngl.DEPTH_TEST)
         ctx.disable(moderngl.CULL_FACE)
 
-        vao = self._make_face_vao(ctx, self._brdf_prog)
-        vao.render(moderngl.TRIANGLES)
-        vao.release()
+        vao = self._get_quad_vao(ctx, self._brdf_prog)
+        if vao is not None:
+            vao.render(moderngl.TRIANGLES)
 
         ctx.enable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.CULL_FACE)
@@ -802,6 +870,17 @@ class DynamicCubemaps(Component):
         self._irradiance_prog = None
         self._prefilter_prog = None
         self._brdf_prog = None
+
+        for vao in self._quad_vaos.values():
+            if vao:
+                try:
+                    vao.release()
+                except Exception:
+                    pass
+        self._quad_vaos = {}
+        self._proj_cache_key = None
+        self._proj_mat = None
+        self._proj_f32 = None
 
         self._ctx_id = 0
         self._current_face = 0
