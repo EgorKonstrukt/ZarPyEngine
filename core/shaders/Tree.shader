@@ -444,6 +444,7 @@ Shader "Zarin/Tree"
                 roughness = max(roughness, 0.001);
 
                 vec3 result = vec3(0.0);
+                result += u_ambient * albedo;
                 float shadow_factor = compute_shadow();
 
                 if (is_leaf > 0.5) {

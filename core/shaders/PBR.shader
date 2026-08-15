@@ -650,13 +650,13 @@ Shader "Zarin/PBR"
                 float metallic = _Metallic;
                 vec3 F0 = mix(vec3(0.04), albedo, metallic);
                 vec3 V = normalize(u_camera_pos - v_world_pos);
-                float NdotV = max(dot(N, V), 0.0);
                 float occlusion = 1.0;
                 if (_OcclusionMap_Active == 1) {
                     occlusion = texture(_OcclusionMap, uv).r;
                     occlusion = mix(1.0, occlusion, _OcclusionStrength);
                 }
                 vec3 result = vec3(0.0);
+                result += u_ambient * albedo;
                 float aniso_rad = radians(_AnisotropyDirection);
                 vec3 aniso_T = get_anisotropic_tangent(T, N, aniso_rad);
                 vec3 aniso_B = normalize(cross(N, aniso_T));
@@ -708,8 +708,6 @@ Shader "Zarin/PBR"
                     emission *= texture(_EmissionMap, uv).rgb;
                 }
                 result += emission;
-                float spec_occlusion = clamp(pow(NdotV, 2.0), 0.0, 1.0);
-                result = mix(result, result * spec_occlusion, occlusion * (1.0 - roughness));
                 result = result / (result + vec3(1.0));
                 result = pow(result, vec3(1.0 / 2.2));
                 frag_color = vec4(result, alpha);

@@ -11,7 +11,7 @@ import numpy as np
 import moderngl
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
-from core.maths.math3d import Mat4, Quat, Vec3
+from core.maths.math3d import Mat4, Vec3
 from core.components.lighting.light import Light, LightType
 from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache, get_procedural_sky_ibl
 from core.components.rendering.environment.atmosphere import Atmosphere
@@ -286,7 +286,7 @@ def _solar_equatorial(d: float):
     return _equatorial(_sun_ecliptic_longitude(d), 0.0, ecl)
 
 
-def _moon_equatorial(d: float):
+def _moon_ecliptic(d: float):
     lp = (218.316 + 13.176396 * d) % 360.0
     mp = (134.963 + 13.064993 * d) % 360.0
     ms = (357.5291 + 0.98560028 * d) % 360.0
@@ -301,6 +301,11 @@ def _moon_equatorial(d: float):
           + 0.280 * math.sin(math.radians(mp + f)) \
           + 0.277 * math.sin(math.radians(mp - f)) \
           - 0.017 * math.sin(math.radians(2.0 * dm - f))
+    return lon % 360.0, lat
+
+
+def _moon_equatorial(d: float):
+    lon, lat = _moon_ecliptic(d)
     return _equatorial(lon, lat, _obliquity(d))
 
 
@@ -320,7 +325,7 @@ def _alt_az_from_equatorial(ra_deg: float, dec_deg: float, lst_hours: float, lat
     az = math.degrees(math.acos(cos_az))
     if math.sin(h) > 0.0:
         az = 360.0 - az
-    return alt, az
+    return math.degrees(alt), az
 
 
 def _dir_from_alt_az(alt_deg: float, az_deg: float) -> Vec3:
@@ -332,6 +337,75 @@ def _dir_from_alt_az(alt_deg: float, az_deg: float) -> Vec3:
 def _moon_phase_from_days(d: float) -> float:
     age = (d - _NEW_MOON_J2000_JD) % _SYNODIC_MONTH
     return age / _SYNODIC_MONTH
+
+
+def _sun_moon_separation(d: float) -> float:
+    lon_m, lat_m = _moon_ecliptic(d)
+    lon_s = _sun_ecliptic_longitude(d)
+    lat_s = 0.0
+    cos_sep = (math.sin(math.radians(lat_m)) * math.sin(math.radians(lat_s))
+               + math.cos(math.radians(lat_m)) * math.cos(math.radians(lat_s))
+               * math.cos(math.radians(lon_m - lon_s)))
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_sep))))
+
+
+def _new_moon_offset(d: float) -> float:
+    r = (_moon_ecliptic(d)[0] - _sun_ecliptic_longitude(d)) % 360.0
+    return ((r - 180.0) % 360.0) - 180.0
+
+
+def _refine_new_moon(t0: float, t1: float) -> float:
+    for _ in range(24):
+        tm = (t0 + t1) * 0.5
+        if _new_moon_offset(tm) < 0.0:
+            t0 = tm
+        else:
+            t1 = tm
+    return (t0 + t1) * 0.5
+
+
+_ECLIPSE_SEARCH_DAYS = 365 * 5
+_ECLIPSE_SAMPLE_STEP = 0.25
+_ECLIPSE_MAX_SEPARATION = 0.9
+
+
+def nearest_solar_eclipse(d0: float):
+    best = None
+    prev_t = None
+    prev_r = None
+    t = d0 - _ECLIPSE_SEARCH_DAYS
+    end = d0 + _ECLIPSE_SEARCH_DAYS
+    while t <= end:
+        r = _new_moon_offset(t)
+        if prev_r is not None and prev_r <= 0.0 < r:
+            nm = _refine_new_moon(prev_t, t)
+            sep = _sun_moon_separation(nm)
+            if sep < _ECLIPSE_MAX_SEPARATION:
+                if best is None or abs(nm - d0) < abs(best[0] - d0):
+                    best = (nm, sep)
+        prev_t = t
+        prev_r = r
+        t += _ECLIPSE_SAMPLE_STEP
+    return best
+
+
+def _julian_day_to_ymd(jd: float):
+    jd = jd + 0.5
+    z = int(jd)
+    f = jd - z
+    if z < 2299161:
+        a = z
+    else:
+        alpha = int((z - 1867216.25) / 36524.25)
+        a = z + 1 + alpha - int(alpha / 4)
+    b = a + 1524
+    c = int((b - 122.1) / 365.25)
+    d = int(365.25 * c)
+    e = int((b - d) / 30.6001)
+    day = b - d - int(30.6001 * e) + f
+    month = e - 1 if e < 14 else e - 13
+    year = c - 4716 if month > 2 else c - 4715
+    return int(year), int(month), day
 
 
 def release_env_cache():
@@ -388,6 +462,7 @@ class Sky(Component):
             InspectorField("hour", "Hour", FieldType.INT, min_val=0, max_val=23, step=1),
             InspectorField("minute", "Minute", FieldType.INT, min_val=0, max_val=59, step=1),
             InspectorField("second", "Second", FieldType.INT, min_val=0, max_val=59, step=1),
+            InspectorField("_btn_nearest_solar_eclipse", "Nearest Solar Eclipse", FieldType.BUTTON),
             InspectorField("latitude", "Latitude (deg)", FieldType.SLIDER, min_val=-90.0, max_val=90.0, step=0.1, decimals=2),
             InspectorField("longitude", "Longitude (deg)", FieldType.SLIDER, min_val=-180.0, max_val=180.0, step=0.1, decimals=2),
             InspectorField("utc_offset", "UTC Offset (h)", FieldType.SLIDER, min_val=-12.0, max_val=14.0, step=0.5, decimals=1),
@@ -459,6 +534,30 @@ class Sky(Component):
             return False
         self.sun_light_entity_id = entity.id
         return True
+
+    def _btn_nearest_solar_eclipse(self):
+        jd = _julian_day(self.year, self.month, self.day)
+        civil = self.hour + self.minute / 60.0 + self.second / 3600.0
+        utc = civil - self.utc_offset
+        d0 = jd - _J2000_JD + utc / 24.0
+        best = nearest_solar_eclipse(d0)
+        if best is None:
+            return
+        jd = best[0] + _J2000_JD
+        local_hours = ((jd + 0.5) % 1.0) * 24.0 + self.utc_offset
+        day_shift = math.floor(local_hours / 24.0)
+        local_hours -= day_shift * 24.0
+        y, m, day = _julian_day_to_ymd(jd + day_shift)
+        h = int(local_hours)
+        mi = int((local_hours - h) * 60.0)
+        s = int(round(((local_hours - h) * 60.0 - mi) * 60.0))
+        if s == 60:
+            s = 0
+            mi += 1
+        if mi == 60:
+            mi = 0
+            h += 1
+        self.set_time(year=y, month=m, day=int(day), hour=h, minute=mi, second=s)
 
     def _invalidate_time(self):
         self._time_cache_key = None
@@ -538,8 +637,18 @@ class Sky(Component):
         if sl is None:
             return
         _l, tr = sl
-        q = Quat.look_rotation(-self._sun_dir, Vec3.up())
-        m = q.to_matrix4()
+        f = self._sun_dir * -1.0
+        r = f.cross(Vec3.up())
+        rl = r.length()
+        if rl < 1e-6:
+            r = f.cross(Vec3.right())
+            rl = r.length()
+        r = r * (1.0 / rl)
+        u = r.cross(f)
+        m = Mat4()
+        m._d[0, 0] = r.x; m._d[0, 1] = r.y; m._d[0, 2] = r.z
+        m._d[1, 0] = u.x; m._d[1, 1] = u.y; m._d[1, 2] = u.z
+        m._d[2, 0] = -f.x; m._d[2, 1] = -f.y; m._d[2, 2] = -f.z
         pos = tr.position
         m._d[3, 0] = pos.x
         m._d[3, 1] = pos.y

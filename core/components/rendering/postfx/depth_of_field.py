@@ -38,6 +38,8 @@ uniform float u_focal_distance;
 uniform float u_focal_range;
 uniform float u_aperture;
 uniform float u_max_blur_size;
+uniform float u_bokeh_boost;
+uniform float u_foreground_scale;
 uniform int u_mode;
 uniform int u_ring_count;
 uniform int u_blade_count;
@@ -54,6 +56,10 @@ float view_z(vec2 uv, float depth) {
     return v.z / v.w;
 }
 
+float hash2(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
 float bokeh_radius(float angle) {
     float bc = float(u_blade_count);
     float blade_angle = 6.28318 / bc;
@@ -63,53 +69,81 @@ float bokeh_radius(float angle) {
     return mix(poly_r, 1.0, u_blade_curvature);
 }
 
+float compute_coc(float z) {
+    float d = z - u_focal_distance;
+    float blend = smoothstep(0.0, max(u_focal_range, 0.001), abs(d));
+    float coc = u_max_blur_size * u_aperture * blend * abs(d) / max(z, 0.001);
+    if (d < 0.0) {
+        coc = min(coc, u_max_blur_size * u_aperture * u_foreground_scale);
+    } else {
+        coc = min(coc, u_max_blur_size * u_aperture);
+    }
+    return d < 0.0 ? -coc : coc;
+}
+
 void main() {
     vec3 color = texture(u_input_tex, v_uv).rgb;
     float depth = texture(u_depth_tex, v_uv).r;
-    if (depth >= 1.0) {
+    bool is_sky = depth >= 1.0;
+
+    float z = is_sky ? 0.0 : -view_z(v_uv, depth);
+    float coc;
+    float blend;
+    if (is_sky) {
+        coc = u_max_blur_size * u_aperture;
+        blend = 1.0;
+    } else {
+        coc = compute_coc(z);
+        blend = smoothstep(0.0, max(u_focal_range, 0.001), abs(z - u_focal_distance));
+    }
+    float c_abs = abs(coc);
+
+    if (u_visualize_coc) {
+        frag_color = vec4(mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), blend), 1.0);
+        return;
+    }
+
+    if (c_abs < 0.5) {
         frag_color = vec4(color, 1.0);
         return;
     }
 
-    float z = -view_z(v_uv, depth);
-    float d = abs(z - u_focal_distance);
-    float coc = smoothstep(0.0, max(u_focal_range, 0.001), d);
-    coc = clamp(coc * u_aperture, 0.0, 1.0);
-
-    if (u_visualize_coc) {
-        frag_color = vec4(mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), coc), 1.0);
-        return;
-    }
-
-    vec3 blur = color;
-    float total = 1.0;
-    float max_spread = coc * u_max_blur_size;
-
-    int rings = u_ring_count;
-    for (int r = 1; r <= 5; r++) {
+    float jit = hash2(v_uv) * 6.28318;
+    int rings = is_sky ? min(u_ring_count, 2) : u_ring_count;
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (int r = 1; r <= 8; r++) {
         if (r > rings) break;
-        float radius = float(r) / float(rings) * max_spread;
+        float t = float(r) / float(rings);
+        float radius = t * c_abs;
         if (radius < 0.5) continue;
-        int samples = r * 6;
-        float a_step = 6.28318 / float(samples);
-        for (int i = 0; i < 30; i++) {
+        int samples = r * 8;
+        float a0 = jit + float(r) * 2.39996;
+        for (int i = 0; i < 64; i++) {
             if (i >= samples) break;
-            float a = float(i) * a_step;
+            float a = a0 + 6.28318 * float(i) / float(samples);
             float shape = 1.0;
             if (u_mode == 1) {
                 shape = bokeh_radius(a);
             }
-            vec2 off = vec2(cos(a), sin(a)) * radius * shape * u_pixel_size;
-            vec2 uv = v_uv + off;
-            if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-                blur += texture(u_input_tex, uv).rgb;
-            }
-            total += 1.0;
+            vec2 dir = vec2(cos(a), sin(a));
+            vec2 uv = v_uv + dir * radius * shape * u_pixel_size;
+            if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) continue;
+            float sd = texture(u_depth_tex, uv).r;
+            float sc = abs(compute_coc(-view_z(uv, sd)));
+            float spread = max(c_abs, sc);
+            if (t * spread * shape < 0.5) continue;
+            vec2 uv2 = v_uv + dir * t * spread * shape * u_pixel_size;
+            if (uv2.x < 0.0 || uv2.x > 1.0 || uv2.y < 0.0 || uv2.y > 1.0) continue;
+            vec3 s = texture(u_input_tex, uv2).rgb;
+            float l = dot(s, vec3(0.299, 0.587, 0.114));
+            float w = 1.0 + u_bokeh_boost * l;
+            acc += s * w;
+            wsum += w;
         }
     }
-    blur /= total;
-
-    frag_color = vec4(mix(color, blur, coc), 1.0);
+    vec3 blur = wsum > 0.0 ? acc / wsum : color;
+    frag_color = vec4(mix(color, blur, blend), 1.0);
 }
 """
 
@@ -128,6 +162,8 @@ class DepthOfField(GraphicsEffect):
         self._focal_range: float = 8.0
         self._aperture: float = 1.0
         self._max_blur_size: float = 12.0
+        self._bokeh_boost: float = 0.5
+        self._foreground_scale: float = 2.0
         self._ring_count: int = 3
         self._blade_count: int = 6
         self._blade_curvature: float = 1.0
@@ -150,6 +186,8 @@ class DepthOfField(GraphicsEffect):
             InspectorField("_focal_range", "Focal Range", FieldType.SLIDER, min_val=0.001, max_val=100.0, step=0.1, decimals=2),
             InspectorField("_aperture", "Aperture", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
             InspectorField("_max_blur_size", "Max Blur Size", FieldType.SLIDER, min_val=1.0, max_val=50.0, step=0.5, decimals=1),
+            InspectorField("_bokeh_boost", "Bokeh Highlight Boost", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.05, decimals=2),
+            InspectorField("_foreground_scale", "Foreground Blur Scale", FieldType.SLIDER, min_val=1.0, max_val=5.0, step=0.1, decimals=1),
 
             InspectorField("_header_quality", "Quality", FieldType.HEADER),
             InspectorField("_ring_count", "Rings", FieldType.INT_SLIDER, min_val=1, max_val=5, step=1),
@@ -171,6 +209,8 @@ class DepthOfField(GraphicsEffect):
             "_focal_range": self._focal_range,
             "_aperture": self._aperture,
             "_max_blur_size": self._max_blur_size,
+            "_bokeh_boost": self._bokeh_boost,
+            "_foreground_scale": self._foreground_scale,
             "_ring_count": self._ring_count,
             "_blade_count": self._blade_count,
             "_blade_curvature": self._blade_curvature,
@@ -191,6 +231,8 @@ class DepthOfField(GraphicsEffect):
         inst._focal_range = float(data.get("_focal_range", 8.0))
         inst._aperture = float(data.get("_aperture", 1.0))
         inst._max_blur_size = float(data.get("_max_blur_size", 12.0))
+        inst._bokeh_boost = float(data.get("_bokeh_boost", 0.5))
+        inst._foreground_scale = float(data.get("_foreground_scale", 2.0))
         inst._ring_count = int(data.get("_ring_count", 3))
         inst._blade_count = int(data.get("_blade_count", 6))
         inst._blade_curvature = float(data.get("_blade_curvature", 1.0))
@@ -267,6 +309,10 @@ class DepthOfField(GraphicsEffect):
             self._prog["u_aperture"].value = self._aperture
         if "u_max_blur_size" in self._prog:
             self._prog["u_max_blur_size"].value = self._max_blur_size
+        if "u_bokeh_boost" in self._prog:
+            self._prog["u_bokeh_boost"].value = self._bokeh_boost
+        if "u_foreground_scale" in self._prog:
+            self._prog["u_foreground_scale"].value = self._foreground_scale
         if "u_mode" in self._prog:
             self._prog["u_mode"].value = 1 if self._mode == DoFMode.BOKEH else 0
         if "u_ring_count" in self._prog:
