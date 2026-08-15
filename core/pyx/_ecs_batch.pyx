@@ -1,6 +1,7 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False
 import numpy as np
 cimport numpy as np
+from core._math_vec cimport Vec3, Quat
 
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
@@ -69,16 +70,18 @@ def extract_transform_soa(list transforms):
     cdef np.ndarray[np.int32_t, ndim=1] parent_idx = np.full(n, -1, dtype=np.int32)
 
     cdef int i
-    cdef object t, p, q, s, e, parent_e
+    cdef object t, e, parent_e
+    cdef Vec3 p, s
+    cdef Quat q
 
     for i in range(n):
         t = transforms[i]
         p = t._local_pos
         q = t._local_rot
         s = t._local_scale
-        pos_x[i] = p.x; pos_y[i] = p.y; pos_z[i] = p.z
-        rot_x[i] = q.x; rot_y[i] = q.y; rot_z[i] = q.z; rot_w[i] = q.w
-        sc_x[i] = s.x; sc_y[i] = s.y; sc_z[i] = s.z
+        pos_x[i] = p._x; pos_y[i] = p._y; pos_z[i] = p._z
+        rot_x[i] = q._x; rot_y[i] = q._y; rot_z[i] = q._z; rot_w[i] = q._w
+        sc_x[i] = s._x; sc_y[i] = s._y; sc_z[i] = s._z
 
     return (pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, rot_w,
             sc_x, sc_y, sc_z, has_parent, parent_idx)
@@ -163,7 +166,9 @@ def batch_update_from_transforms(list transforms):
 
     cdef dict id_to_idx = {}
     cdef int i, pi, j, k
-    cdef object t, e, parent_e, pt, p, q, s, wm, wm_arr
+    cdef object t, e, parent_e, pt, wm, wm_arr
+    cdef Vec3 p, s
+    cdef Quat q
     cdef str parent_id
     cdef DTYPE_t local[4][4], result[4][4]
 
@@ -178,9 +183,9 @@ def batch_update_from_transforms(list transforms):
         p = t._local_pos
         q = t._local_rot
         s = t._local_scale
-        pos_x[i] = p.x; pos_y[i] = p.y; pos_z[i] = p.z
-        rot_x[i] = q.x; rot_y[i] = q.y; rot_z[i] = q.z; rot_w[i] = q.w
-        sc_x[i] = s.x; sc_y[i] = s.y; sc_z[i] = s.z
+        pos_x[i] = p._x; pos_y[i] = p._y; pos_z[i] = p._z
+        rot_x[i] = q._x; rot_y[i] = q._y; rot_z[i] = q._z; rot_w[i] = q._w
+        sc_x[i] = s._x; sc_y[i] = s._y; sc_z[i] = s._z
 
     for i in range(n):
         t = transforms[i]

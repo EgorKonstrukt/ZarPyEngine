@@ -95,6 +95,12 @@ def _frustum_cull_instances(group, planes, mesh_radius):
     n = len(group)
     if n == 0:
         return group
+    try:
+        from core._culling import cull_group_instances as _cgi
+        return _cgi(group, np.ascontiguousarray(planes, dtype=np.float32),
+                    float(mesh_radius))
+    except ImportError:
+        pass
     centers = np.empty((n, 3), dtype=np.float64)
     radii = np.empty(n, dtype=np.float64)
     for i, item in enumerate(group):

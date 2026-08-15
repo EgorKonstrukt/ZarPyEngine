@@ -89,3 +89,38 @@ def extract_frustum_planes_c(np.ndarray[DTYPE_t, ndim=2] view_proj):
     cdef np.ndarray[DTYPE_t, ndim=2] planes = np.empty((6, 4), dtype=DTYPE)
     _extract_frustum_planes(view_proj, planes)
     return planes
+
+
+def cull_group_instances(list group, np.ndarray[np.float32_t, ndim=2] planes,
+                         double mesh_radius):
+    cdef int n = len(group)
+    if n == 0:
+        return []
+    cdef list visible = []
+    cdef int i, j
+    cdef double sx, sy, sz, ms, dist
+    cdef bint inside
+    cdef object item, wm
+    cdef DTYPE_t[:, :] d
+    for i in range(n):
+        item = group[i]
+        wm = item[6]
+        d = wm._d
+        sx = sqrt(d[0, 0] * d[0, 0] + d[1, 0] * d[1, 0] + d[2, 0] * d[2, 0])
+        sy = sqrt(d[0, 1] * d[0, 1] + d[1, 1] * d[1, 1] + d[2, 1] * d[2, 1])
+        sz = sqrt(d[0, 2] * d[0, 2] + d[1, 2] * d[1, 2] + d[2, 2] * d[2, 2])
+        ms = sx
+        if sy > ms:
+            ms = sy
+        if sz > ms:
+            ms = sz
+        inside = True
+        for j in range(6):
+            dist = (planes[j, 0] * d[3, 0] + planes[j, 1] * d[3, 1]
+                    + planes[j, 2] * d[3, 2] + planes[j, 3])
+            if dist <= -ms * mesh_radius:
+                inside = False
+                break
+        if inside:
+            visible.append(item)
+    return visible

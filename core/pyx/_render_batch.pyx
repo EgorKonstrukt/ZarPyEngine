@@ -13,7 +13,8 @@ def build_instance_matrices(list entries):
 
     cdef np.ndarray[np.float32_t, ndim=3] out = np.empty((n, 4, 4), dtype=np.float32)
     cdef int i
-    cdef object entry, wm, d
+    cdef object entry, wm
+    cdef DTYPE_t[:, :] d
     cdef int j, k
 
     for i in range(n):
@@ -35,7 +36,8 @@ def build_bounding_spheres_batch(list entries, np.ndarray[DTYPE_t, ndim=1] bound
     cdef np.ndarray[np.float32_t, ndim=1] radii = np.empty(n, dtype=np.float32)
     cdef int i
     cdef double sx, sy, sz, ms
-    cdef object entry, wm, d
+    cdef object entry, wm
+    cdef DTYPE_t[:, :] d
 
     for i in range(n):
         entry = entries[i]

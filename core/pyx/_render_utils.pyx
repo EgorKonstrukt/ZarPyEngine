@@ -18,37 +18,39 @@ def compute_bounding_spheres(list matrices, np.ndarray[DTYPE_t, ndim=1] bounding
 
     cdef np.ndarray[np.float32_t, ndim=2] spheres = np.empty((n, 4), dtype=np.float32)
     cdef int i
-    cdef object wm, _d
+    cdef object wm
+    cdef DTYPE_t[:, :] d
 
     for i in range(n):
         wm = matrices[i]
-        _d = wm._d
-        spheres[i, 0] = <np.float32_t>_d[3, 0]
-        spheres[i, 1] = <np.float32_t>_d[3, 1]
-        spheres[i, 2] = <np.float32_t>_d[3, 2]
+        d = wm._d
+        spheres[i, 0] = <np.float32_t>d[3, 0]
+        spheres[i, 1] = <np.float32_t>d[3, 1]
+        spheres[i, 2] = <np.float32_t>d[3, 2]
         spheres[i, 3] = <np.float32_t>bounding_radii[i]
 
     return spheres
 
 
-def build_frustum_cull_inputs(list entries, np.ndarray[DTYPE_t, ndim=1] bounding_radii):
+def build_frustum_cull_inputs(list entries):
     cdef int n = len(entries)
     if n == 0:
-        return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.float32)
+        return np.zeros((0, 3), dtype=np.float64), np.zeros(0, dtype=np.float64)
 
-    cdef np.ndarray[np.float32_t, ndim=2] centers = np.empty((n, 3), dtype=np.float32)
-    cdef np.ndarray[np.float32_t, ndim=1] radii = np.empty(n, dtype=np.float32)
+    cdef np.ndarray[DTYPE_t, ndim=2] centers = np.empty((n, 3), dtype=DTYPE)
+    cdef np.ndarray[DTYPE_t, ndim=1] radii = np.empty(n, dtype=DTYPE)
     cdef int i
     cdef double sx, sy, sz, ms
-    cdef object entry, wm, d
+    cdef object entry, wm
+    cdef DTYPE_t[:, :] d
 
     for i in range(n):
         entry = entries[i]
         wm = entry[4]
         d = wm._d
-        centers[i, 0] = <np.float32_t>d[3, 0]
-        centers[i, 1] = <np.float32_t>d[3, 1]
-        centers[i, 2] = <np.float32_t>d[3, 2]
+        centers[i, 0] = d[3, 0]
+        centers[i, 1] = d[3, 1]
+        centers[i, 2] = d[3, 2]
         sx = sqrt(d[0, 0] * d[0, 0] + d[1, 0] * d[1, 0] + d[2, 0] * d[2, 0])
         sy = sqrt(d[0, 1] * d[0, 1] + d[1, 1] * d[1, 1] + d[2, 1] * d[2, 1])
         sz = sqrt(d[0, 2] * d[0, 2] + d[1, 2] * d[1, 2] + d[2, 2] * d[2, 2])
@@ -57,7 +59,7 @@ def build_frustum_cull_inputs(list entries, np.ndarray[DTYPE_t, ndim=1] bounding
             ms = sy
         if sz > ms:
             ms = sz
-        radii[i] = <np.float32_t>(ms * bounding_radii[i])
+        radii[i] = ms * entry[2].bounding_radius
 
     return centers, radii
 
@@ -68,7 +70,8 @@ def batch_mat4_to_f32(list matrices):
         return np.zeros((0, 4, 4), dtype=np.float32)
     cdef np.ndarray[np.float32_t, ndim=3] out = np.empty((n, 4, 4), dtype=np.float32)
     cdef int i
-    cdef object wm, d
+    cdef object wm
+    cdef DTYPE_t[:, :] d
     for i in range(n):
         wm = matrices[i]
         d = wm._d
@@ -97,7 +100,8 @@ def batch_mat4_to_f32_flat(list matrices):
         return np.zeros((0, 16), dtype=np.float32)
     cdef np.ndarray[np.float32_t, ndim=2] out = np.empty((n, 16), dtype=np.float32)
     cdef int i, r, c, idx
-    cdef object wm, d
+    cdef object wm
+    cdef DTYPE_t[:, :] d
     for i in range(n):
         wm = matrices[i]
         d = wm._d

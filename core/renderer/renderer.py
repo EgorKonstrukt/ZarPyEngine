@@ -2401,8 +2401,7 @@ out vec4 frag_color;
                 cull_entries = snap.cull_entries
                 n_ent = len(cull_entries)
                 if n_ent:
-                    radii_in = np.array([entry[2].bounding_radius for entry in cull_entries], dtype=np.float64)
-                    centers, radii = _bfci(cull_entries, radii_in)
+                    centers, radii = _bfci(cull_entries)
                     visible = cpu_frustum_cull(centers, radii, vp)
                     offsets = snap.cull_offsets
                     counts = snap.cull_counts
@@ -2419,8 +2418,7 @@ out vec4 frag_color;
                             renderable = list(_chain.from_iterable(parts))
                 else:
                     n = len(renderable)
-                    radii_in = np.array([entry[2].bounding_radius for entry in renderable], dtype=np.float64)
-                    centers, radii = _bfci(renderable, radii_in)
+                    centers, radii = _bfci(renderable)
                     visible = cpu_frustum_cull(centers, radii, vp)
                     self._culled_visible = len(visible)
                     if len(visible) < n:
