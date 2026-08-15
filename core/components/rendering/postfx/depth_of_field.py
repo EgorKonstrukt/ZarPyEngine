@@ -33,6 +33,7 @@ DOF_FRAG = """
 #version 460 core
 uniform sampler2D u_input_tex;
 uniform sampler2D u_depth_tex;
+uniform mat4 u_inv_proj;
 uniform float u_focal_distance;
 uniform float u_focal_range;
 uniform float u_aperture;
@@ -47,6 +48,12 @@ uniform vec2 u_pixel_size;
 in vec2 v_uv;
 out vec4 frag_color;
 
+float view_z(vec2 uv, float depth) {
+    vec4 ndc = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    vec4 v = u_inv_proj * ndc;
+    return v.z / v.w;
+}
+
 float bokeh_radius(float angle) {
     float bc = float(u_blade_count);
     float blade_angle = 6.28318 / bc;
@@ -59,10 +66,14 @@ float bokeh_radius(float angle) {
 void main() {
     vec3 color = texture(u_input_tex, v_uv).rgb;
     float depth = texture(u_depth_tex, v_uv).r;
+    if (depth >= 1.0) {
+        frag_color = vec4(color, 1.0);
+        return;
+    }
 
-    float d = abs(depth - u_focal_distance);
-    float coc = 1.0 - smoothstep(0.0, max(u_focal_range, 0.001), d);
-    coc = 1.0 - coc;
+    float z = -view_z(v_uv, depth);
+    float d = abs(z - u_focal_distance);
+    float coc = smoothstep(0.0, max(u_focal_range, 0.001), d);
     coc = clamp(coc * u_aperture, 0.0, 1.0);
 
     if (u_visualize_coc) {
@@ -108,13 +119,13 @@ class DepthOfField(GraphicsEffect):
     _allow_multiple = False
     _gizmo_icon_label = "Df"
     render_type = "screen"
-    _skip_rate = 1
+    _skip_rate = 0
 
     def __init__(self):
         super().__init__()
         self._mode: DoFMode = DoFMode.GAUSSIAN
-        self._focal_distance: float = 0.5
-        self._focal_range: float = 0.3
+        self._focal_distance: float = 10.0
+        self._focal_range: float = 8.0
         self._aperture: float = 1.0
         self._max_blur_size: float = 12.0
         self._ring_count: int = 3
@@ -135,8 +146,8 @@ class DepthOfField(GraphicsEffect):
             InspectorField("_mode", "Mode", FieldType.ENUM, enum_class=DoFMode),
 
             InspectorField("_header_focus", "Focus", FieldType.HEADER),
-            InspectorField("_focal_distance", "Focal Distance", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.01, decimals=3),
-            InspectorField("_focal_range", "Focal Range", FieldType.SLIDER, min_val=0.001, max_val=1.0, step=0.01, decimals=3),
+            InspectorField("_focal_distance", "Focal Distance", FieldType.SLIDER, min_val=0.1, max_val=200.0, step=0.1, decimals=2),
+            InspectorField("_focal_range", "Focal Range", FieldType.SLIDER, min_val=0.001, max_val=100.0, step=0.1, decimals=2),
             InspectorField("_aperture", "Aperture", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.05, decimals=3),
             InspectorField("_max_blur_size", "Max Blur Size", FieldType.SLIDER, min_val=1.0, max_val=50.0, step=0.5, decimals=1),
 
@@ -176,8 +187,8 @@ class DepthOfField(GraphicsEffect):
             inst._mode = DoFMode(mode_str)
         except ValueError:
             inst._mode = DoFMode.GAUSSIAN
-        inst._focal_distance = float(data.get("_focal_distance", 0.5))
-        inst._focal_range = float(data.get("_focal_range", 0.3))
+        inst._focal_distance = float(data.get("_focal_distance", 10.0))
+        inst._focal_range = float(data.get("_focal_range", 8.0))
         inst._aperture = float(data.get("_aperture", 1.0))
         inst._max_blur_size = float(data.get("_max_blur_size", 12.0))
         inst._ring_count = int(data.get("_ring_count", 3))
@@ -246,6 +257,8 @@ class DepthOfField(GraphicsEffect):
         if "u_depth_tex" in self._prog:
             self._prog["u_depth_tex"] = 1
             scene_depth_tex.use(1)
+        if "u_inv_proj" in self._prog:
+            self._prog["u_inv_proj"].write(proj_mat.inverted().to_f32().tobytes())
         if "u_focal_distance" in self._prog:
             self._prog["u_focal_distance"].value = self._focal_distance
         if "u_focal_range" in self._prog:

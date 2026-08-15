@@ -165,7 +165,7 @@ class SSAO(GraphicsEffect):
     _allow_multiple = False
     _gizmo_icon_label = "AO"
     render_type = "screen"
-    _skip_rate = 1
+    _skip_rate = 0
     _intensity_prop = "_intensity"
 
     def __init__(self):
