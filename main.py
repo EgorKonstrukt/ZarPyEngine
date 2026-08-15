@@ -70,42 +70,12 @@ sys.excepthook = excepthook
 from editor.bug_report import install_hooks as _install_bug_hooks
 _install_bug_hooks()
 
-def run_headless_mcp():
-    os.environ["ZARIN_MCP_MODE"] = "stdio"
-    import os as _os
-    _orig_stdout = sys.stdout
-    sys.stdout.flush()
-    _orig_fd1 = _os.dup(1)
-    _os.dup2(2, 1)
-    sys.stdout = sys.stderr
-    try:
-        from core.engine.engine import Engine
-        engine = Engine()
-        engine._mcp_mode = "stdio"
-        engine.initialize()
-        for fname in sorted(os.listdir("plugins")):
-            fpath = os.path.join("plugins", fname)
-            if fname.endswith(".py") and not fname.startswith("_"):
-                engine.plugin_manager.load_from_file(fpath)
-        engine.plugin_manager.load_directory("plugins/user")
-        engine.new_scene("Scene")
-    finally:
-        sys.stdout.flush()
-        _os.dup2(_orig_fd1, 1)
-        _os.close(_orig_fd1)
-        sys.stdout = _orig_stdout
-    engine.plugin_manager.load_package("plugins/zarin_mcp")
-
 def main():
     multiprocessing.freeze_support()
     import argparse
     parser = argparse.ArgumentParser(description="Zarin Engine")
-    parser.add_argument("--mcp", action="store_true", help="Run in headless MCP stdio server mode")
     parser.add_argument("file", nargs="?", default=None, help="Scene file to open")
     args, _ = parser.parse_known_args()
-    if args.mcp:
-        run_headless_mcp()
-        return
     if args.file and args.file.endswith(".zpes"):
         from editor.ipc_server import send_file_to_running_instance
         if send_file_to_running_instance(args.file):
@@ -150,17 +120,14 @@ def main():
             build_plugins = bs.get("build_plugins", [])
         except Exception:
             pass
-    if build_plugins:
+    if os.path.isdir("plugins"):
+        engine.plugin_manager.load_directory("plugins")
+    elif build_plugins:
         for name in build_plugins:
             module_name = "plugins." + name if not name.startswith("plugins.") else name
             engine.plugin_manager.load_module(module_name)
-    else:
-        engine.plugin_manager.load_directory("plugins")
     splash.advance("Loading user plugins...")
-    if build_plugins:
-        pass  # user plugins included in build_plugins list
-    else:
-        engine.plugin_manager.load_directory("plugins/user")
+    engine.plugin_manager.load_directory("plugins/user")
     splash.advance("Setting up collaboration...")
     from core.network.collaboration import CollaborationManager
     engine.collab_manager = CollaborationManager(engine)

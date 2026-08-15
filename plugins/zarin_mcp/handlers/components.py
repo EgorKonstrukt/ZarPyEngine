@@ -5,7 +5,15 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from .util import get_scene, get_entity_by_id_or_name, serialize_component
+from .util import (
+    get_scene,
+    get_entity_by_id_or_name,
+    serialize_component,
+    component_inspector_fields,
+    coerce_value,
+    value_to_json,
+    value_type_name,
+)
 
 
 def register(registry, engine):
@@ -33,17 +41,22 @@ def register(registry, engine):
 
     @registry.tool(
         "component_add",
-        "Add a component to an entity",
+        "Add a component to an entity, optionally with initial property values",
         {
             "type": "object",
             "properties": {
                 "entity_id": {"type": "string", "description": "Entity UUID"},
                 "component_type": {"type": "string", "description": "Component class name"},
+                "properties": {
+                    "type": "object",
+                    "description": "Optional initial property values to set after adding",
+                    "default": {},
+                },
             },
             "required": ["entity_id", "component_type"],
         },
     )
-    def component_add(entity_id="", component_type=""):
+    def component_add(entity_id="", component_type="", properties=None):
         s = _scene()
         if s is None:
             return {"error": "No scene loaded"}
@@ -54,12 +67,31 @@ def register(registry, engine):
         cls = ComponentRegistry.get(component_type)
         if cls is None:
             return {"error": f"Unknown component: {component_type}"}
+        if component_type != "Transform" and e.has_component(cls) and not getattr(cls, "_allow_multiple", False):
+            return {"error": f"Entity already has {component_type}"}
         try:
             inst = cls()
             e.add_component(inst)
-            return {"message": f"Added {component_type} to '{e.name}'", "component": serialize_component(inst)}
         except Exception as ex:
             return {"error": f"Failed to add component: {ex}"}
+        fields = component_inspector_fields(component_type)
+        applied = {}
+        errors = {}
+        for k, v in (properties or {}).items():
+            if not hasattr(inst, k):
+                errors[k] = "no such property"
+                continue
+            try:
+                setattr(inst, k, coerce_value(inst, k, v, fields.get(k)))
+                applied[k] = value_to_json(getattr(inst, k))
+            except Exception as ex:
+                errors[k] = str(ex)
+        result = {"message": f"Added {component_type} to '{e.name}'", "component": serialize_component(inst)}
+        if applied:
+            result["properties_applied"] = applied
+        if errors:
+            result["property_errors"] = errors
+        return result
 
     @registry.tool(
         "component_remove",
@@ -121,14 +153,14 @@ def register(registry, engine):
 
     @registry.tool(
         "component_set_property",
-        "Set a property on a component. For transform use transform_* tools.",
+        "Set a property on a component. Values are coerced to the property type (numbers, bools, vectors, enums). For transform use transform_* tools.",
         {
             "type": "object",
             "properties": {
                 "entity_id": {"type": "string", "description": "Entity UUID"},
                 "component_type": {"type": "string", "description": "Component class name"},
                 "property": {"type": "string", "description": "Property name"},
-                "value": {"description": "Value (number, string, bool, or array for vectors)"},
+                "value": {"description": "Value (number, string, bool, or array for vectors/colors)"},
             },
             "required": ["entity_id", "component_type", "property", "value"],
         },
@@ -147,11 +179,183 @@ def register(registry, engine):
         comp = e.get_component(cls)
         if comp is None:
             return {"error": f"Entity has no {component_type}"}
+        if not hasattr(comp, property):
+            return {"error": f"{component_type} has no property '{property}'"}
+        fields = component_inspector_fields(component_type)
         try:
-            setattr(comp, property, value)
-            return {"message": f"Set {component_type}.{property} = {value}"}
+            new_value = coerce_value(comp, property, value, fields.get(property))
+            setattr(comp, property, new_value)
+            return {
+                "message": f"Set {component_type}.{property}",
+                "value": value_to_json(getattr(comp, property)),
+            }
         except Exception as ex:
             return {"error": f"Failed to set property: {ex}"}
+
+    @registry.tool(
+        "component_set_properties",
+        "Set multiple properties on a component in one call",
+        {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "Entity UUID"},
+                "component_type": {"type": "string", "description": "Component class name"},
+                "properties": {
+                    "type": "object",
+                    "description": "Property name -> value map",
+                },
+            },
+            "required": ["entity_id", "component_type", "properties"],
+        },
+    )
+    def component_set_properties(entity_id="", component_type="", properties=None):
+        s = _scene()
+        if s is None:
+            return {"error": "No scene loaded"}
+        e = get_entity_by_id_or_name(s, entity_id)
+        if e is None:
+            return {"error": "Entity not found"}
+        from core.ecs.ecs import ComponentRegistry
+        cls = ComponentRegistry.get(component_type)
+        if cls is None:
+            return {"error": f"Unknown component: {component_type}"}
+        comp = e.get_component(cls)
+        if comp is None:
+            return {"error": f"Entity has no {component_type}"}
+        fields = component_inspector_fields(component_type)
+        applied = {}
+        errors = {}
+        for k, v in (properties or {}).items():
+            if not hasattr(comp, k):
+                errors[k] = "no such property"
+                continue
+            try:
+                setattr(comp, k, coerce_value(comp, k, v, fields.get(k)))
+                applied[k] = value_to_json(getattr(comp, k))
+            except Exception as ex:
+                errors[k] = str(ex)
+        result = {"message": f"Set {len(applied)} properties on {component_type} of '{e.name}'", "applied": applied}
+        if errors:
+            result["errors"] = errors
+        return result
+
+    @registry.tool(
+        "component_has",
+        "Check whether an entity has a specific component",
+        {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "Entity UUID"},
+                "component_type": {"type": "string", "description": "Component class name"},
+            },
+            "required": ["entity_id", "component_type"],
+        },
+    )
+    def component_has(entity_id="", component_type=""):
+        s = _scene()
+        if s is None:
+            return {"error": "No scene loaded"}
+        e = get_entity_by_id_or_name(s, entity_id)
+        if e is None:
+            return {"error": "Entity not found"}
+        from core.ecs.ecs import ComponentRegistry
+        cls = ComponentRegistry.get(component_type)
+        if cls is None:
+            return {"error": f"Unknown component: {component_type}"}
+        return {
+            "entity": e.name,
+            "component_type": component_type,
+            "has": e.has_component(cls),
+        }
+
+    @registry.tool(
+        "component_list",
+        "List all components on an entity with keys and enabled state",
+        {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "Entity UUID"},
+            },
+            "required": ["entity_id"],
+        },
+    )
+    def component_list(entity_id=""):
+        s = _scene()
+        if s is None:
+            return {"error": "No scene loaded"}
+        e = get_entity_by_id_or_name(s, entity_id)
+        if e is None:
+            return {"error": "Entity not found"}
+        comps = []
+        for c in e.get_all_components():
+            comps.append({
+                "type": type(c).__name__,
+                "key": getattr(c, "_key", ""),
+                "enabled": bool(getattr(c, "enabled", True)),
+            })
+        return {"entity": e.name, "components": comps, "count": len(comps)}
+
+    @registry.tool(
+        "component_get_properties",
+        "Describe the editable properties of a component type (names, types, defaults, enum options, ranges)",
+        {
+            "type": "object",
+            "properties": {
+                "component_type": {"type": "string", "description": "Component class name"},
+            },
+            "required": ["component_type"],
+        },
+    )
+    def component_get_properties(component_type=""):
+        from core.ecs.ecs import ComponentRegistry
+        cls = ComponentRegistry.get(component_type)
+        if cls is None:
+            return {"error": f"Unknown component: {component_type}"}
+        try:
+            inst = cls()
+        except Exception as ex:
+            return {"error": f"Failed to instantiate {component_type}: {ex}"}
+        fields = component_inspector_fields(component_type)
+        properties = []
+        if fields:
+            for fname, f in fields.items():
+                current = getattr(inst, fname, None)
+                entry = {
+                    "name": fname,
+                    "label": getattr(f, "label", fname),
+                    "field_type": f.field_type.value,
+                    "value_type": value_type_name(current),
+                    "value": value_to_json(current),
+                    "readonly": bool(getattr(f, "readonly", False)),
+                }
+                if f.enum_class is not None:
+                    entry["enum_options"] = [m.name for m in f.enum_class]
+                if getattr(f, "min_val", -1e18) > -1e17:
+                    entry["min"] = f.min_val
+                if getattr(f, "max_val", 1e18) < 1e17:
+                    entry["max"] = f.max_val
+                if f.field_type.name in ("FLOAT", "INT", "SLIDER", "INT_SLIDER"):
+                    entry["step"] = f.step
+                if getattr(f, "description", ""):
+                    entry["description"] = f.description
+                properties.append(entry)
+        else:
+            descr_map = dict(vars(type(inst)))
+            for attr in dir(inst):
+                if attr.startswith("_"):
+                    continue
+                val = getattr(inst, attr, None)
+                if callable(val):
+                    continue
+                descr = descr_map.get(attr)
+                readonly = isinstance(descr, property) and descr.fset is None
+                properties.append({
+                    "name": attr,
+                    "value_type": value_type_name(val),
+                    "value": value_to_json(val),
+                    "readonly": readonly,
+                })
+        return {"component_type": component_type, "properties": properties, "count": len(properties)}
 
     @registry.tool(
         "component_move",

@@ -29,7 +29,7 @@ def register(registry, engine):
     )
     def project_get_settings():
         from core.config.config import get_project_config
-        cfg = get_project_config(".", lazy=True)
+        cfg = get_project_config(engine.project_root or ".")
         if cfg is None:
             return {"error": "No project config"}
         return {"settings": cfg._data}
@@ -50,7 +50,7 @@ def register(registry, engine):
         if value is None:
             value = ""
         from core.config.config import get_project_config
-        cfg = get_project_config(".", lazy=True)
+        cfg = get_project_config(engine.project_root or ".")
         if cfg is None:
             return {"error": "No project config"}
         cfg.set(key, value)
@@ -64,7 +64,7 @@ def register(registry, engine):
     )
     def project_get_physics_settings():
         from core.config.config import get_project_config
-        cfg = get_project_config(".", lazy=True)
+        cfg = get_project_config(engine.project_root or ".")
         if cfg is None:
             return {"error": "No project config"}
         physics = cfg.get("physics", {})

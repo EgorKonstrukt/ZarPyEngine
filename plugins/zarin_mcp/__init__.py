@@ -5,7 +5,6 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-import os
 
 from core.foundation.plugin_manager import PluginBase
 from core.foundation.logger import Logger
@@ -24,19 +23,15 @@ class ZarinMCPPlugin(PluginBase):
         super().__init__()
         self._server: McpServer = None
         self._registry = Registry()
+        self._dock_widget = None
 
     def initialize(self, engine):
         super().initialize(engine)
         self._discover_handlers(engine)
         self._server = McpServer(self._registry, port=self.get_config("port", 9100))
-        mcp_mode = os.environ.get("ZARIN_MCP_MODE", "") or getattr(engine, "_mcp_mode", "")
-        if mcp_mode == "stdio":
-            Logger.info("[ZarinMCP] Running in stdio mode")
-            self._server.run_stdio_forever()
-        else:
-            self._register_ui()
-            self._server.start_sse()
-            Logger.info(f"[ZarinMCP] SSE server on http://127.0.0.1:{self.get_config('port', 9100)}/sse")
+        self._register_ui()
+        self._server.start_sse()
+        Logger.info(f"[ZarinMCP] SSE server on http://127.0.0.1:{self.get_config('port', 9100)}/sse")
 
     def shutdown(self):
         if self._server:
@@ -44,9 +39,24 @@ class ZarinMCPPlugin(PluginBase):
         Logger.info("[ZarinMCP] Shutdown.")
 
     def _register_ui(self):
-        self.add_menu_item("ZarinMCP", "Open MCP Server...", lambda: Logger.info(f"ZarinMCP on port {self.get_config('port', 9100)}"))
-        self.add_toolbar_button("MCP", lambda: Logger.info(f"ZarinMCP on port {self.get_config('port', 9100)}"),
-                                tooltip="ZarinMCP Server Status")
+        self.register_dock("ZarinMCP", self._create_dock, area="right")
+        self.add_menu_item("ZarinMCP", "Open MCP Panel", self._open_panel)
+        self.add_toolbar_button("MCP", self._open_panel, tooltip="ZarinMCP Control Panel")
+
+    def _create_dock(self):
+        from plugins.zarin_mcp.mcp_dock import ZarinMCPPanel
+        self._dock_widget = ZarinMCPPanel(self._engine, self)
+        return self._dock_widget
+
+    def _open_panel(self):
+        w = getattr(self, "_dock_widget", None)
+        if w is None:
+            return
+        dock = w.parent()
+        if dock is not None:
+            dock.show()
+            dock.raise_()
+            dock.setFocus()
 
     def _discover_handlers(self, engine):
         import plugins.zarin_mcp.handlers.scene as _scene
