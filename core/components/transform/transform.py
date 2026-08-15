@@ -44,7 +44,8 @@ class Transform(Component):
                 if ct:
                     ct._mark_dirty()
     def _update_world_matrix(self):
-        if not self._dirty: return
+        if not self._dirty and self._world_matrix is not None:
+            return
         if self._world_target is not None:
             self._resolve_world_target()
             return

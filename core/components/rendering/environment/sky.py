@@ -11,7 +11,7 @@ import numpy as np
 import moderngl
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
-from core.maths.math3d import Mat4, Vec3
+from core.maths.math3d import Mat4, Vec3, Quat, FLOAT_TYPE
 from core.components.lighting.light import Light, LightType
 from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_sky_ibl_cache, get_procedural_sky_ibl
 from core.components.rendering.environment.atmosphere import Atmosphere
@@ -338,6 +338,11 @@ def _dir_from_alt_az(alt_deg: float, az_deg: float) -> Vec3:
     return Vec3(math.sin(z) * math.cos(a), math.sin(a), -math.cos(z) * math.cos(a))
 
 
+def _sep_deg(a: Vec3, b: Vec3) -> float:
+    dot = max(-1.0, min(1.0, a.x * b.x + a.y * b.y + a.z * b.z))
+    return math.degrees(math.acos(dot))
+
+
 def _moon_phase_from_days(d: float) -> float:
     age = (d - _NEW_MOON_J2000_JD) % _SYNODIC_MONTH
     return age / _SYNODIC_MONTH
@@ -440,6 +445,47 @@ def release_env_cache():
 @ComponentRegistry.register
 class Sky(Component):
     _icon = "Sky.png"
+    _registry: list = []
+
+    def on_awake(self):
+        if self not in self._registry:
+            self._registry.append(self)
+
+    def on_destroy(self):
+        if self in self._registry:
+            self._registry.remove(self)
+
+    def on_disable(self):
+        if self in self._registry:
+            self._registry.remove(self)
+
+    def on_enable(self):
+        if self not in self._registry:
+            self._registry.append(self)
+
+    @staticmethod
+    def _eclipse_coverage(sun_r_deg: float, moon_r_deg: float, sep_deg: float) -> float:
+        import math as _m
+        if sep_deg <= 0.0:
+            return 1.0 if moon_r_deg >= sun_r_deg else (moon_r_deg / sun_r_deg) ** 2
+        R = _m.radians(sun_r_deg)
+        r = _m.radians(moon_r_deg)
+        d = _m.radians(sep_deg)
+        if d >= R + r:
+            return 0.0
+        if d <= r - R:
+            return 1.0
+        if d <= R - r:
+            return (r / R) ** 2
+        cos1 = (_m.cos(d) * r - R) / (_m.sin(d) * R)
+        cos1 = max(-1.0, min(1.0, cos1))
+        a1 = _m.acos(cos1) * R * R
+        cos2 = (_m.cos(d) * R - r) / (_m.sin(d) * r)
+        cos2 = max(-1.0, min(1.0, cos2))
+        a2 = _m.acos(cos2) * r * r
+        p = (R + r + d) * 0.5
+        tri = _m.sqrt(max(0.0, (p - R) * (p - r) * (p - d) * p))
+        return (a1 + a2 - tri) / (_m.pi * R * R)
 
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
@@ -516,6 +562,9 @@ class Sky(Component):
         self._moon_phase: float = 1.0
         self._day_seconds: float = 0.0
         self._sim_seconds: float = 0.0
+        self._eclipse_darkness: float = 0.0
+        self._star_pole: Vec3 = Vec3(0.0, 1.0, 0.0)
+        self._star_rotation: float = 0.0
 
     def set_time(self, year=None, month=None, day=None,
                  hour=None, minute=None, second=None):
@@ -612,6 +661,12 @@ class Sky(Component):
         if best is None:
             return
         jd = best[0] + _J2000_JD
+        moon_ra, moon_dec = _moon_equatorial(best[0])
+        gmst = (18.697374558 + 24.06570982441908 * best[0]) % 24.0
+        sub_lon = ((moon_ra - 15.0 * gmst + 180.0) % 360.0) - 180.0
+        self.latitude = max(-90.0, min(90.0, moon_dec))
+        self.longitude = sub_lon
+        self.utc_offset = float(int(round(self.longitude / 15.0)))
         local_hours = ((jd + 0.5) % 1.0) * 24.0 + self.utc_offset
         day_shift = math.floor(local_hours / 24.0)
         local_hours -= day_shift * 24.0
@@ -646,6 +701,8 @@ class Sky(Component):
         self._day_seconds = civil * 3600.0
         self._sim_seconds = (jd - _J2000_JD) * 86400.0 + utc * 3600.0
         lst = _local_sidereal_hours(d, self.longitude)
+        self._star_pole = _dir_from_alt_az(self.latitude, 0.0)
+        self._star_rotation = math.radians(lst * 15.0)
         sun_ra, sun_dec = _solar_equatorial(d)
         sal, saz = _alt_az_from_equatorial(sun_ra, sun_dec, lst, self.latitude)
         self._sun_dir = _dir_from_alt_az(sal, saz)
@@ -653,6 +710,16 @@ class Sky(Component):
         mal, maz = _alt_az_from_equatorial(moon_ra, moon_dec, lst, self.latitude)
         self._moon_dir = _dir_from_alt_az(mal, maz)
         self._moon_phase = _moon_phase_from_days(d)
+        sun_r_deg = 0.27
+        try:
+            atmos = next((a for a in Atmosphere._registry
+                          if a.enabled and a.entity and a.entity.active), None)
+            if atmos is not None:
+                sun_r_deg = float(getattr(atmos, "_sun_angular_radius", 0.27))
+        except Exception:
+            pass
+        sep = _sep_deg(self._sun_dir, self._moon_dir)
+        self._eclipse_darkness = self._eclipse_coverage(sun_r_deg, self.moon_size, sep)
 
     @property
     def sun_direction(self) -> Vec3:
@@ -678,6 +745,21 @@ class Sky(Component):
     def sim_seconds(self) -> float:
         self._update_time_cache()
         return self._sim_seconds
+
+    @property
+    def star_pole(self) -> Vec3:
+        self._update_time_cache()
+        return self._star_pole
+
+    @property
+    def star_rotation(self) -> float:
+        self._update_time_cache()
+        return self._star_rotation
+
+    @property
+    def eclipse_darkness(self) -> float:
+        self._update_time_cache()
+        return self._eclipse_darkness
 
     def get_sun_light(self):
         scene = self._entity._scene if self._entity else None
@@ -713,15 +795,11 @@ class Sky(Component):
             rl = r.length()
         r = r * (1.0 / rl)
         u = r.cross(f)
-        m = Mat4()
-        m._d[0, 0] = r.x; m._d[0, 1] = r.y; m._d[0, 2] = r.z
-        m._d[1, 0] = u.x; m._d[1, 1] = u.y; m._d[1, 2] = u.z
-        m._d[2, 0] = -f.x; m._d[2, 1] = -f.y; m._d[2, 2] = -f.z
-        pos = tr.position
-        m._d[3, 0] = pos.x
-        m._d[3, 1] = pos.y
-        m._d[3, 2] = pos.z
-        tr.world_matrix = m
+        m3 = np.eye(3, dtype=FLOAT_TYPE)
+        m3[0] = [r.x, r.y, r.z]
+        m3[1] = [u.x, u.y, u.z]
+        m3[2] = [-f.x, -f.y, -f.z]
+        tr.local_rotation = Quat._from_rotation_matrix3(m3.T)
 
     def on_update(self, dt: float):
         self._sync_sun_light()
@@ -733,6 +811,7 @@ class Sky(Component):
             self.star_enabled, self.star_density, self.star_intensity,
             self.star_scale, self.star_twinkle, self.star_seed,
             tuple(self.star_color),
+            tuple(self.star_pole), round(self.star_rotation, 6),
             self.milky_way_enabled, self.milky_way_intensity,
             tuple(self.milky_way_pole),
             self.moon_enabled, tuple(self._moon_dir),
@@ -772,6 +851,8 @@ class Sky(Component):
         f("_StarTwinkle", self.star_twinkle)
         f("_StarSeed", self.star_seed)
         v3("_StarColor", self.star_color)
+        v3("_StarPole", self.star_pole)
+        f("_StarRotation", self.star_rotation)
         f("_MilkyWayEnabled", 1.0 if self.milky_way_enabled else 0.0)
         f("_MilkyWayIntensity", self.milky_way_intensity)
         v3("_MilkyWayPole", self.milky_way_pole)

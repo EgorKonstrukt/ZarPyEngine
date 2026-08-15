@@ -266,6 +266,14 @@ class Light(Component):
                 except Exception:
                     pass
                 c, i = Light.compute_sun_light(-transform.forward, color_temp, aerosol)
+                try:
+                    from core.components.rendering.environment.sky import Sky
+                    sky = next((s for s in Sky._registry
+                                if s.enabled and s.entity and s.entity.active), None)
+                    if sky is not None:
+                        i *= (1.0 - 0.95 * float(sky.eclipse_darkness))
+                except Exception:
+                    pass
                 return [c[0], c[1], c[2]], i * sc
             return list(light.color), light.intensity * Light.LUX_TO_RADIANCE * sc
         if light.light_type == LightType.AREA:

@@ -620,6 +620,8 @@ class RaytracingRenderer(Component):
                 self._sky_env_prog["u_star_twinkle"] = sky_comp.star_twinkle
                 self._sky_env_prog["u_star_seed"] = sky_comp.star_seed
                 self._sky_env_prog["u_star_color"] = (sky_comp.star_color[0], sky_comp.star_color[1], sky_comp.star_color[2])
+                self._sky_env_prog["u_star_pole"] = (sky_comp.star_pole.x, sky_comp.star_pole.y, sky_comp.star_pole.z)
+                self._sky_env_prog["u_star_rotation"] = sky_comp.star_rotation
                 self._sky_env_prog["u_milkyway_enabled"] = 1.0 if sky_comp.milky_way_enabled else 0.0
                 self._sky_env_prog["u_milkyway_intensity"] = sky_comp.milky_way_intensity
                 self._sky_env_prog["u_milkyway_pole"] = (sky_comp.milky_way_pole[0], sky_comp.milky_way_pole[1], sky_comp.milky_way_pole[2])

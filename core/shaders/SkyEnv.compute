@@ -39,6 +39,8 @@ ComputeShader "Zarin/SkyEnv"
     uniform float u_star_twinkle;
     uniform float u_star_seed;
     uniform vec3 u_star_color;
+    uniform vec3 u_star_pole;
+    uniform float u_star_rotation;
     uniform float u_milkyway_enabled;
     uniform float u_milkyway_intensity;
     uniform vec3 u_milkyway_pole;
@@ -140,7 +142,16 @@ ComputeShader "Zarin/SkyEnv"
         return disk;
     }
 
+    vec3 celestial_rotate(vec3 dir) {
+        vec3 axis = normalize(u_star_pole);
+        float ang = -u_star_rotation;
+        float c = cos(ang);
+        float s = sin(ang);
+        return dir * c + cross(axis, dir) * s + axis * dot(axis, dir) * (1.0 - c);
+    }
+
     vec3 procedural_stars(vec3 dir) {
+        dir = celestial_rotate(dir);
         vec3 g = dir * u_star_scale + vec3(u_star_seed * 137.31);
         vec3 id = floor(g);
         vec3 f = fract(g);
@@ -171,6 +182,7 @@ ComputeShader "Zarin/SkyEnv"
     }
 
     vec3 milky_way(vec3 dir) {
+        dir = celestial_rotate(dir);
         vec3 pole = normalize(u_milkyway_pole);
         float band = pow(1.0 - abs(dot(dir, pole)), 3.0);
         vec3 p = dir * 6.0 + vec3(u_star_seed * 13.7);

@@ -22,6 +22,8 @@ Shader "Zarin/Sky"
         _StarTwinkle("Star Twinkle", Range(0, 1)) = 0.5
         _StarSeed("Star Seed", Float) = 1
         _StarColor("Star Tint", Color) = (0.9, 0.93, 1, 1)
+        _StarPole("Celestial North Pole", Vector) = (0, 1, 0, 0)
+        _StarRotation("Star Rotation (rad)", Float) = 0
         _MilkyWayEnabled("Milky Way", Float) = 1
         _MilkyWayIntensity("Milky Way Intensity", Float) = 0.6
         _MilkyWayPole("Milky Way Pole", Vector) = (0.4, 0.3, 0.85, 0)
@@ -76,6 +78,8 @@ Shader "Zarin/Sky"
             uniform float _StarTwinkle;
             uniform float _StarSeed;
             uniform vec3 _StarColor;
+            uniform vec3 _StarPole;
+            uniform float _StarRotation;
             uniform float _MilkyWayEnabled;
             uniform float _MilkyWayIntensity;
             uniform vec3 _MilkyWayPole;
@@ -189,7 +193,16 @@ Shader "Zarin/Sky"
                 return disk;
             }
 
+            vec3 celestial_rotate(vec3 dir) {
+                vec3 axis = normalize(_StarPole);
+                float ang = -_StarRotation;
+                float c = cos(ang);
+                float s = sin(ang);
+                return dir * c + cross(axis, dir) * s + axis * dot(axis, dir) * (1.0 - c);
+            }
+
             vec3 procedural_stars(vec3 dir) {
+                dir = celestial_rotate(dir);
                 vec3 g = dir * _StarScale + vec3(_StarSeed * 137.31);
                 vec3 id = floor(g);
                 vec3 f = fract(g);
@@ -220,6 +233,7 @@ Shader "Zarin/Sky"
             }
 
             vec3 milky_way(vec3 dir) {
+                dir = celestial_rotate(dir);
                 vec3 pole = normalize(_MilkyWayPole);
                 float band = pow(1.0 - abs(dot(dir, pole)), 3.0);
                 vec3 p = dir * 6.0 + vec3(_StarSeed * 13.7);
@@ -283,6 +297,8 @@ Shader "Zarin/Sky"
                 float cos_gamma = dot(dir, sun_dir);
                 float sun_height = sun_dir.y;
                 float night = smoothstep(0.05, -0.4, sun_height);
+                float day_fade = 1.0 - night * 0.72;
+                vec3 sun_contrib = vec3(0.0);
                 vec3 color;
                 if (u_use_atmosphere > 0.5) {
                     float theta = acos(clamp(dir.y, 0.0, 1.0));
@@ -291,10 +307,11 @@ Shader "Zarin/Sky"
                     color = texture(u_sky_lut, sky_uv).rgb * u_atmosphere_intensity;
                     color = max(color, vec3(0.0));
                     vec3 sun_trans = sample_transmittance_dir(sun_dir);
-                    color += _SunColor * _SunIntensity * sun_trans
-                           * sun_disk_factor(dir, sun_dir)
-                           * u_atmosphere_intensity * 2.0;
-                    color *= (1.0 - night * 0.72);
+                    sun_contrib = _SunColor * _SunIntensity * sun_trans
+                                * sun_disk_factor(dir, sun_dir)
+                                * u_atmosphere_intensity * 2.0;
+                    color += sun_contrib;
+                    color *= day_fade;
                 } else if (u_use_env > 0.5) {
                     vec2 uv = vec2(0.5 + atan(dir.z, dir.x) / 6.28318530718, acos(clamp(dir.y, -1.0, 1.0)) / 3.14159265359);
                     color = texture(u_env_tex, uv).rgb;
@@ -318,11 +335,33 @@ Shader "Zarin/Sky"
                     vec3 base_sky = mix(horizon_color, mix(sky_top, night_top, night), height_gradient);
                     color = max(color + base_sky * 0.85 + vec3(0.015, 0.025, 0.04), 0.0);
                     float below_horizon = smoothstep(0.0, -0.12, sun_height);
-                    color += _SunColor * _SunIntensity
-                           * sun_disk_factor(dir, sun_dir) * (1.0 - below_horizon);
-                    color *= (1.0 - night * 0.72);
+                    sun_contrib = _SunColor * _SunIntensity
+                                * sun_disk_factor(dir, sun_dir) * (1.0 - below_horizon);
+                    color += sun_contrib;
+                    color *= day_fade;
                 }
                 color += night_sky(dir, sun_dir, night);
+                if (_MoonEnabled > 0.5) {
+                    vec3 moon_dir = normalize(_MoonDirection);
+                    float sep = acos(clamp(dot(sun_dir, moon_dir), -1.0, 1.0));
+                    float sun_r = radians(max(_SunAngularRadius, 0.01));
+                    float moon_r = radians(max(_MoonSize, 0.05));
+                    float near_eclipse = 1.0 - smoothstep(moon_r + sun_r, moon_r + sun_r * 2.5, sep);
+                    if (near_eclipse > 0.001) {
+                        float totality = 1.0 - smoothstep(moon_r - sun_r * 0.6, moon_r + sun_r, sep);
+                        float mdist = acos(clamp(dot(dir, moon_dir), -1.0, 1.0));
+                        float sdist = acos(clamp(dot(dir, sun_dir), -1.0, 1.0));
+                        float occl = 1.0 - smoothstep(moon_r * 0.96, moon_r, mdist);
+                        color = (color - sun_contrib * day_fade) * mix(1.0, 0.35, totality) + sun_contrib * day_fade;
+                        color = mix(color, color - sun_contrib * day_fade * near_eclipse, occl);
+                        color = mix(color, vec3(0.010, 0.012, 0.022), occl * near_eclipse);
+                        float corona_w = moon_r * 0.35 + 0.002;
+                        float corona = (1.0 - occl) * exp(-pow(max(mdist - moon_r, 0.0) / corona_w, 2.0)) * totality;
+                        color += corona * vec3(1.0, 0.985, 0.95) * (0.5 + 0.6 * totality);
+                        float ring = exp(-pow((sdist - sun_r) / (sun_r * 0.22), 2.0)) * (1.0 - occl);
+                        color += ring * _SunColor * _SunIntensity * (1.0 - totality) * near_eclipse * 0.35;
+                    }
+                }
                 frag_color = vec4(color, 1.0);
             }
             ENDGLSL
