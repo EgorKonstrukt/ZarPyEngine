@@ -7,6 +7,7 @@
 from __future__ import annotations
 import math
 import os
+import time
 import numpy as np
 import moderngl
 from core.ecs.ecs import Component, ComponentRegistry
@@ -17,6 +18,7 @@ from core.components.rendering.environment.sky_ibl import get_sky_ibl, release_s
 from core.components.rendering.environment.atmosphere import Atmosphere
 
 _ENV_TEX_CACHE: dict[str, tuple[float, object]] = {}
+_STAR_TWINKLE_ORIGIN: float = time.time()
 
 
 def _decode_rgbe_scanline_rle(raw: bytes, pos: int, width: int):
@@ -499,6 +501,7 @@ class Sky(Component):
             InspectorField("star_intensity", "Intensity", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.1, decimals=1),
             InspectorField("star_scale", "Scale", FieldType.SLIDER, min_val=20.0, max_val=200.0, step=1.0, decimals=0),
             InspectorField("star_twinkle", "Twinkle", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.05, decimals=2),
+            InspectorField("star_twinkle_speed", "Twinkle Speed", FieldType.SLIDER, min_val=0.0, max_val=10.0, step=0.1, decimals=1),
             InspectorField("star_seed", "Seed", FieldType.SLIDER, min_val=0.0, max_val=100.0, step=0.1, decimals=1),
             InspectorField("star_color", "Tint", FieldType.COLOR),
             InspectorField("", "Milky Way", FieldType.HEADER),
@@ -536,6 +539,7 @@ class Sky(Component):
         self.star_intensity: float = 1.0
         self.star_scale: float = 80.0
         self.star_twinkle: float = 0.5
+        self.star_twinkle_speed: float = 1.0
         self.star_seed: float = 1.0
         self.star_color: list[float] = [0.9, 0.93, 1.0]
         self.milky_way_enabled: bool = True
@@ -742,6 +746,10 @@ class Sky(Component):
         return self._day_seconds
 
     @property
+    def twinkle_time(self) -> float:
+        return ((time.time() - _STAR_TWINKLE_ORIGIN) % 1000.0) * self.star_twinkle_speed
+
+    @property
     def sim_seconds(self) -> float:
         self._update_time_cache()
         return self._sim_seconds
@@ -809,7 +817,7 @@ class Sky(Component):
         return (
             self.night_sky_enabled, self.night_exposure,
             self.star_enabled, self.star_density, self.star_intensity,
-            self.star_scale, self.star_twinkle, self.star_seed,
+            self.star_scale, self.star_twinkle, self.star_twinkle_speed, self.star_seed,
             tuple(self.star_color),
             tuple(self.star_pole), round(self.star_rotation, 6),
             self.milky_way_enabled, self.milky_way_intensity,
@@ -869,7 +877,7 @@ class Sky(Component):
             prog["u_moon_tex"].value = 4
             prog["u_use_moon_tex"].value = 1.0 if self.moon_texture_path else 0.0
         if "u_time" in prog:
-            prog["u_time"].value = self._day_seconds
+            prog["u_time"].value = self.twinkle_time
 
     def render_sky(self, ctx, shaders, view_mat, proj_mat, dir_light, cube_mesh):
         prog = shaders.get_or_compile(self.material_path) if shaders else None
@@ -972,6 +980,7 @@ class Sky(Component):
         d["star_intensity"] = self.star_intensity
         d["star_scale"] = self.star_scale
         d["star_twinkle"] = self.star_twinkle
+        d["star_twinkle_speed"] = self.star_twinkle_speed
         d["star_seed"] = self.star_seed
         d["star_color"] = self.star_color
         d["milky_way_enabled"] = self.milky_way_enabled
@@ -1006,6 +1015,7 @@ class Sky(Component):
         c.star_intensity = data.get("star_intensity", 1.0)
         c.star_scale = data.get("star_scale", 80.0)
         c.star_twinkle = data.get("star_twinkle", 0.5)
+        c.star_twinkle_speed = data.get("star_twinkle_speed", 1.0)
         c.star_seed = data.get("star_seed", 1.0)
         c.star_color = data.get("star_color", [0.9, 0.93, 1.0])
         c.milky_way_enabled = data.get("milky_way_enabled", True)

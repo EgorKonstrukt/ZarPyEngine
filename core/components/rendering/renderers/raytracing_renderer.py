@@ -630,7 +630,7 @@ class RaytracingRenderer(Component):
                 self._sky_env_prog["u_moon_size"] = sky_comp.moon_size
                 self._sky_env_prog["u_moon_intensity"] = sky_comp.moon_intensity
                 self._sky_env_prog["u_moon_phase"] = sky_comp.moon_phase
-                self._sky_env_prog["u_time"] = sky_comp.day_seconds
+                self._sky_env_prog["u_time"] = sky_comp.twinkle_time
                 moon_tex = _get_moon_texture(ctx, sky_comp.moon_texture_path)
                 if moon_tex is None:
                     moon_tex = _get_white_tex(ctx)
