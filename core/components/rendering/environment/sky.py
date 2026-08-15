@@ -253,8 +253,41 @@ _DEFAULT_LONGITUDE = 37.62
 _DEFAULT_UTC_OFFSET = 3.0
 
 _J2000_JD = 2451545.0
-_SYNODIC_MONTH = 29.530588853
-_NEW_MOON_J2000_JD = 2451550.258
+
+# Advanced celestial-model parameters. Every value mirrors the constants used
+# by the astronomy functions below; the Sky component exposes them in the
+# inspector ("Celestial Model (Advanced)") so orbits can be tuned per scene.
+_ASTRO_DEFAULTS = {
+    "obliquity_deg": 23.439,
+    "obliquity_drift": 0.0000004,
+    "sun_ml_epoch": 280.459,
+    "sun_ml_rate": 0.98564736,
+    "sun_ma_epoch": 357.5291,
+    "sun_ma_rate": 0.98560028,
+    "sun_ecc": 1.915,
+    "sun_ecc2": 0.020,
+    "moon_ml_epoch": 218.316,
+    "moon_ml_rate": 13.176396,
+    "moon_ma_epoch": 134.963,
+    "moon_ma_rate": 13.064993,
+    "moon_el_epoch": 297.850,
+    "moon_el_rate": 12.190749,
+    "moon_af_epoch": 93.272,
+    "moon_af_rate": 13.229350,
+    "moon_lon1": 6.289,
+    "moon_lon2": -1.274,
+    "moon_lon3": 0.658,
+    "moon_lon4": -0.186,
+    "moon_lon5": -0.060,
+    "moon_lat1": 5.128,
+    "moon_lat2": 0.280,
+    "moon_lat3": 0.277,
+    "moon_lat4": -0.017,
+    "synodic_month": 29.530588853,
+    "new_moon_jd": 2451550.258,
+    "gmst_epoch": 18.697374558,
+    "gmst_rate": 24.06570982441908,
+}
 
 
 def _julian_day(year: int, month: int, day: int) -> float:
@@ -268,14 +301,18 @@ def _julian_day(year: int, month: int, day: int) -> float:
     return int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + day + b - 1524.5
 
 
-def _sun_ecliptic_longitude(d: float) -> float:
-    g = (357.5291 + 0.98560028 * d) % 360.0
-    q = (280.459 + 0.98564736 * d) % 360.0
-    return q + 1.915 * math.sin(math.radians(g)) + 0.020 * math.sin(math.radians(2.0 * g))
+def _sun_ecliptic_longitude(d: float, p: dict = None) -> float:
+    if p is None:
+        p = _ASTRO_DEFAULTS
+    g = (p["sun_ma_epoch"] + p["sun_ma_rate"] * d) % 360.0
+    q = (p["sun_ml_epoch"] + p["sun_ml_rate"] * d) % 360.0
+    return q + p["sun_ecc"] * math.sin(math.radians(g)) + p["sun_ecc2"] * math.sin(math.radians(2.0 * g))
 
 
-def _obliquity(d: float) -> float:
-    return 23.439 - 0.0000004 * d
+def _obliquity(d: float, p: dict = None) -> float:
+    if p is None:
+        p = _ASTRO_DEFAULTS
+    return p["obliquity_deg"] - p["obliquity_drift"] * d
 
 
 def _equatorial(lon_deg: float, lat_deg: float, ecl_deg: float):
@@ -287,36 +324,40 @@ def _equatorial(lon_deg: float, lat_deg: float, ecl_deg: float):
     return math.degrees(ra) % 360.0, math.degrees(dec)
 
 
-def _solar_equatorial(d: float):
-    ecl = _obliquity(d)
-    return _equatorial(_sun_ecliptic_longitude(d), 0.0, ecl)
+def _solar_equatorial(d: float, p: dict = None):
+    ecl = _obliquity(d, p)
+    return _equatorial(_sun_ecliptic_longitude(d, p), 0.0, ecl)
 
 
-def _moon_ecliptic(d: float):
-    lp = (218.316 + 13.176396 * d) % 360.0
-    mp = (134.963 + 13.064993 * d) % 360.0
-    ms = (357.5291 + 0.98560028 * d) % 360.0
-    dm = (297.850 + 12.190749 * d) % 360.0
-    f = (93.272 + 13.229350 * d) % 360.0
-    lon = lp + 6.289 * math.sin(math.radians(mp)) \
-          - 1.274 * math.sin(math.radians(2.0 * dm - mp)) \
-          + 0.658 * math.sin(math.radians(2.0 * dm)) \
-          - 0.186 * math.sin(math.radians(ms)) \
-          - 0.060 * math.sin(math.radians(2.0 * mp - 2.0 * dm))
-    lat = 5.128 * math.sin(math.radians(f)) \
-          + 0.280 * math.sin(math.radians(mp + f)) \
-          + 0.277 * math.sin(math.radians(mp - f)) \
-          - 0.017 * math.sin(math.radians(2.0 * dm - f))
+def _moon_ecliptic(d: float, p: dict = None):
+    if p is None:
+        p = _ASTRO_DEFAULTS
+    lp = (p["moon_ml_epoch"] + p["moon_ml_rate"] * d) % 360.0
+    mp = (p["moon_ma_epoch"] + p["moon_ma_rate"] * d) % 360.0
+    ms = (p["sun_ma_epoch"] + p["sun_ma_rate"] * d) % 360.0
+    dm = (p["moon_el_epoch"] + p["moon_el_rate"] * d) % 360.0
+    f = (p["moon_af_epoch"] + p["moon_af_rate"] * d) % 360.0
+    lon = lp + p["moon_lon1"] * math.sin(math.radians(mp)) \
+          + p["moon_lon2"] * math.sin(math.radians(2.0 * dm - mp)) \
+          + p["moon_lon3"] * math.sin(math.radians(2.0 * dm)) \
+          + p["moon_lon4"] * math.sin(math.radians(ms)) \
+          + p["moon_lon5"] * math.sin(math.radians(2.0 * mp - 2.0 * dm))
+    lat = p["moon_lat1"] * math.sin(math.radians(f)) \
+          + p["moon_lat2"] * math.sin(math.radians(mp + f)) \
+          + p["moon_lat3"] * math.sin(math.radians(mp - f)) \
+          + p["moon_lat4"] * math.sin(math.radians(2.0 * dm - f))
     return lon % 360.0, lat
 
 
-def _moon_equatorial(d: float):
-    lon, lat = _moon_ecliptic(d)
-    return _equatorial(lon, lat, _obliquity(d))
+def _moon_equatorial(d: float, p: dict = None):
+    lon, lat = _moon_ecliptic(d, p)
+    return _equatorial(lon, lat, _obliquity(d, p))
 
 
-def _local_sidereal_hours(d: float, longitude_deg: float) -> float:
-    gmst = (18.697374558 + 24.06570982441908 * d) % 24.0
+def _local_sidereal_hours(d: float, longitude_deg: float, p: dict = None) -> float:
+    if p is None:
+        p = _ASTRO_DEFAULTS
+    gmst = (p["gmst_epoch"] + p["gmst_rate"] * d) % 24.0
     return (gmst + longitude_deg / 15.0) % 24.0
 
 
@@ -345,14 +386,16 @@ def _sep_deg(a: Vec3, b: Vec3) -> float:
     return math.degrees(math.acos(dot))
 
 
-def _moon_phase_from_days(d: float) -> float:
-    age = (d - _NEW_MOON_J2000_JD) % _SYNODIC_MONTH
-    return age / _SYNODIC_MONTH
+def _moon_phase_from_days(d: float, p: dict = None) -> float:
+    if p is None:
+        p = _ASTRO_DEFAULTS
+    age = (d - p["new_moon_jd"]) % p["synodic_month"]
+    return age / p["synodic_month"]
 
 
-def _sun_moon_separation(d: float) -> float:
-    lon_m, lat_m = _moon_ecliptic(d)
-    lon_s = _sun_ecliptic_longitude(d)
+def _sun_moon_separation(d: float, p: dict = None) -> float:
+    lon_m, lat_m = _moon_ecliptic(d, p)
+    lon_s = _sun_ecliptic_longitude(d, p)
     lat_s = 0.0
     cos_sep = (math.sin(math.radians(lat_m)) * math.sin(math.radians(lat_s))
                + math.cos(math.radians(lat_m)) * math.cos(math.radians(lat_s))
@@ -360,15 +403,15 @@ def _sun_moon_separation(d: float) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, cos_sep))))
 
 
-def _new_moon_offset(d: float) -> float:
-    r = (_moon_ecliptic(d)[0] - _sun_ecliptic_longitude(d)) % 360.0
+def _new_moon_offset(d: float, p: dict = None) -> float:
+    r = (_moon_ecliptic(d, p)[0] - _sun_ecliptic_longitude(d, p)) % 360.0
     return ((r - 180.0) % 360.0) - 180.0
 
 
-def _refine_new_moon(t0: float, t1: float) -> float:
+def _refine_new_moon(t0: float, t1: float, p: dict = None) -> float:
     for _ in range(24):
         tm = (t0 + t1) * 0.5
-        if _new_moon_offset(tm) < 0.0:
+        if _new_moon_offset(tm, p) < 0.0:
             t0 = tm
         else:
             t1 = tm
@@ -380,17 +423,17 @@ _ECLIPSE_SAMPLE_STEP = 0.25
 _ECLIPSE_MAX_SEPARATION = 0.9
 
 
-def nearest_solar_eclipse(d0: float):
+def nearest_solar_eclipse(d0: float, p: dict = None):
     best = None
     prev_t = None
     prev_r = None
     t = d0 - _ECLIPSE_SEARCH_DAYS
     end = d0 + _ECLIPSE_SEARCH_DAYS
     while t <= end:
-        r = _new_moon_offset(t)
+        r = _new_moon_offset(t, p)
         if prev_r is not None and prev_r <= 0.0 < r:
-            nm = _refine_new_moon(prev_t, t)
-            sep = _sun_moon_separation(nm)
+            nm = _refine_new_moon(prev_t, t, p)
+            sep = _sun_moon_separation(nm, p)
             if sep < _ECLIPSE_MAX_SEPARATION:
                 if best is None or abs(nm - d0) < abs(best[0] - d0):
                     best = (nm, sep)
@@ -526,6 +569,39 @@ class Sky(Component):
             InspectorField("moon_size", "Angular Radius (deg)", FieldType.SLIDER, min_val=0.05, max_val=1.5, step=0.01, decimals=2),
             InspectorField("moon_intensity", "Intensity", FieldType.SLIDER, min_val=0.0, max_val=5.0, step=0.1, decimals=1),
             InspectorField("moon_texture_path", "Texture", FieldType.RESOURCE_PATH, file_filter="Images (*.png *.jpg *.jpeg *.tga *.bmp)"),
+            InspectorField("", "Celestial Model (Advanced)", FieldType.HEADER),
+            InspectorField("_astro_obliquity_deg", "Axial Tilt (deg)", FieldType.SLIDER, min_val=0.0, max_val=90.0, step=0.001, decimals=3),
+            InspectorField("_astro_obliquity_drift", "Tilt Drift (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=0.001, step=0.0000001, decimals=7),
+            InspectorField("", "Sun Orbit", FieldType.HEADER),
+            InspectorField("_astro_sun_ml_epoch", "Mean Longitude (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_sun_ml_rate", "Longitude Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=2.0, step=0.000001, decimals=6),
+            InspectorField("_astro_sun_ma_epoch", "Mean Anomaly (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_sun_ma_rate", "Anomaly Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=2.0, step=0.000001, decimals=6),
+            InspectorField("_astro_sun_ecc", "Equation of Center", FieldType.SLIDER, min_val=0.0, max_val=3.0, step=0.001, decimals=3),
+            InspectorField("_astro_sun_ecc2", "Eccentricity Harmonic", FieldType.SLIDER, min_val=0.0, max_val=1.0, step=0.001, decimals=3),
+            InspectorField("", "Moon Orbit", FieldType.HEADER),
+            InspectorField("_astro_moon_ml_epoch", "Mean Longitude (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_moon_ml_rate", "Longitude Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=15.0, step=0.000001, decimals=6),
+            InspectorField("_astro_moon_ma_epoch", "Mean Anomaly (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_moon_ma_rate", "Anomaly Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=15.0, step=0.000001, decimals=6),
+            InspectorField("_astro_moon_el_epoch", "Elongation (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_moon_el_rate", "Elongation Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=15.0, step=0.000001, decimals=6),
+            InspectorField("_astro_moon_af_epoch", "Arg of Latitude (deg)", FieldType.SLIDER, min_val=0.0, max_val=360.0, step=0.1, decimals=2),
+            InspectorField("_astro_moon_af_rate", "Arg of Latitude Rate (deg/day)", FieldType.SLIDER, min_val=0.0, max_val=15.0, step=0.000001, decimals=6),
+            InspectorField("_astro_moon_lat1", "Orbital Inclination (deg)", FieldType.SLIDER, min_val=0.0, max_val=15.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lon1", "Lon Amp sin(M)", FieldType.SLIDER, min_val=-10.0, max_val=10.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lon2", "Lon Amp sin(2D-M)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lon3", "Lon Amp sin(2D)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lon4", "Lon Amp sin(Ms)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lon5", "Lon Amp sin(2M-2D)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lat2", "Lat Amp sin(M+F)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lat3", "Lat Amp sin(M-F)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("_astro_moon_lat4", "Lat Amp sin(2D-F)", FieldType.SLIDER, min_val=-5.0, max_val=5.0, step=0.001, decimals=3),
+            InspectorField("", "Phases & Sidereal Time", FieldType.HEADER),
+            InspectorField("_astro_synodic_month", "Synodic Month (days)", FieldType.SLIDER, min_val=20.0, max_val=40.0, step=0.000001, decimals=6),
+            InspectorField("_astro_new_moon_jd", "New Moon Epoch (JD)", FieldType.FLOAT, min_val=0.0, max_val=3000000.0, step=0.001, decimals=3),
+            InspectorField("_astro_gmst_epoch", "GMST Epoch (hours)", FieldType.SLIDER, min_val=0.0, max_val=24.0, step=0.000001, decimals=6),
+            InspectorField("_astro_gmst_rate", "GMST Rate (hours/day)", FieldType.SLIDER, min_val=23.0, max_val=25.0, step=0.000001, decimals=6),
         ]
 
     def __init__(self):
@@ -569,6 +645,8 @@ class Sky(Component):
         self._eclipse_darkness: float = 0.0
         self._star_pole: Vec3 = Vec3(0.0, 1.0, 0.0)
         self._star_rotation: float = 0.0
+        for _k, _v in _ASTRO_DEFAULTS.items():
+            setattr(self, "_astro_" + _k, _v)
 
     def set_time(self, year=None, month=None, day=None,
                  hour=None, minute=None, second=None):
@@ -657,16 +735,17 @@ class Sky(Component):
         return True
 
     def _btn_nearest_solar_eclipse(self):
+        p = self._astro_params()
         jd = _julian_day(self.year, self.month, self.day)
         civil = self.hour + self.minute / 60.0 + self.second / 3600.0
         utc = civil - self.utc_offset
         d0 = jd - _J2000_JD + utc / 24.0
-        best = nearest_solar_eclipse(d0)
+        best = nearest_solar_eclipse(d0, p)
         if best is None:
             return
         jd = best[0] + _J2000_JD
-        moon_ra, moon_dec = _moon_equatorial(best[0])
-        gmst = (18.697374558 + 24.06570982441908 * best[0]) % 24.0
+        moon_ra, moon_dec = _moon_equatorial(best[0], p)
+        gmst = (p["gmst_epoch"] + p["gmst_rate"] * best[0]) % 24.0
         sub_lon = ((moon_ra - 15.0 * gmst + 180.0) % 360.0) - 180.0
         self.latitude = max(-90.0, min(90.0, moon_dec))
         self.longitude = sub_lon
@@ -689,31 +768,39 @@ class Sky(Component):
     def _invalidate_time(self):
         self._time_cache_key = None
 
+    def _astro_params(self) -> dict:
+        return {k: getattr(self, "_astro_" + k, _ASTRO_DEFAULTS[k]) for k in _ASTRO_DEFAULTS}
+
+    def _astro_params_key(self) -> tuple:
+        return tuple(self._astro_params().values())
+
     def _time_fields_key(self):
         return (self.year, self.month, self.day, self.hour, self.minute,
-                self.second, self.latitude, self.longitude, self.utc_offset)
+                self.second, self.latitude, self.longitude, self.utc_offset,
+                self._astro_params_key())
 
     def _update_time_cache(self):
         key = self._time_fields_key()
         if key == self._time_cache_key:
             return
         self._time_cache_key = key
+        p = self._astro_params()
         jd = _julian_day(self.year, self.month, self.day)
         civil = self.hour + self.minute / 60.0 + self.second / 3600.0
         utc = civil - self.utc_offset
         d = jd - _J2000_JD + utc / 24.0
         self._day_seconds = civil * 3600.0
         self._sim_seconds = (jd - _J2000_JD) * 86400.0 + utc * 3600.0
-        lst = _local_sidereal_hours(d, self.longitude)
+        lst = _local_sidereal_hours(d, self.longitude, p)
         self._star_pole = _dir_from_alt_az(self.latitude, 0.0)
         self._star_rotation = math.radians(lst * 15.0)
-        sun_ra, sun_dec = _solar_equatorial(d)
+        sun_ra, sun_dec = _solar_equatorial(d, p)
         sal, saz = _alt_az_from_equatorial(sun_ra, sun_dec, lst, self.latitude)
         self._sun_dir = _dir_from_alt_az(sal, saz)
-        moon_ra, moon_dec = _moon_equatorial(d)
+        moon_ra, moon_dec = _moon_equatorial(d, p)
         mal, maz = _alt_az_from_equatorial(moon_ra, moon_dec, lst, self.latitude)
         self._moon_dir = _dir_from_alt_az(mal, maz)
-        self._moon_phase = _moon_phase_from_days(d)
+        self._moon_phase = _moon_phase_from_days(d, p)
         sun_r_deg = 0.27
         try:
             atmos = next((a for a in Atmosphere._registry
@@ -1000,6 +1087,8 @@ class Sky(Component):
         d["moon_size"] = self.moon_size
         d["moon_intensity"] = self.moon_intensity
         d["moon_texture_path"] = self.moon_texture_path
+        for _k in _ASTRO_DEFAULTS:
+            d["_astro_" + _k] = getattr(self, "_astro_" + _k)
         return d
 
     @classmethod
@@ -1035,4 +1124,6 @@ class Sky(Component):
         c.moon_size = data.get("moon_size", 0.27)
         c.moon_intensity = data.get("moon_intensity", 1.0)
         c.moon_texture_path = data.get("moon_texture_path", "core/textures/moon.tga")
+        for _k, _v in _ASTRO_DEFAULTS.items():
+            setattr(c, "_astro_" + _k, data.get("_astro_" + _k, _v))
         return c
