@@ -128,3 +128,140 @@ def batch_sync_physics_to_ecs(list items, object solver):
             rb._torque_accum._z = 0.0
         else:
             rb._torque_accum = 0.0
+
+
+def sync_read_to_ecs(object shared, list cache):
+    """cache: list of (entity, rb, rb2d, tr, slot)"""
+    cdef unsigned char[:] flags = shared._flags_nd
+    cdef float[:, :] rdata = shared._rdata_nd
+    cdef Py_ssize_t i, n = len(cache)
+    cdef int slot
+    cdef unsigned char fl
+    cdef double hz, r0, r1, r2
+    cdef double sr, cr, sp, cp, sy, cy
+    cdef object entity, rb, rb2d, tr
+    for i in range(n):
+        entity, rb, rb2d, tr, slot = cache[i]
+        fl = flags[slot]
+        if not (fl & 1) or (fl & 4):
+            continue
+        if rb2d is not None:
+            tr._local_pos._x = rdata[slot, 0]
+            tr._local_pos._y = rdata[slot, 1]
+            tr._local_pos._z = 0.0
+            hz = rdata[slot, 5] * 0.5
+            tr._local_rot._x = 0.0
+            tr._local_rot._y = 0.0
+            tr._local_rot._z = csin(hz)
+            tr._local_rot._w = ccos(hz)
+            tr._dirty = True
+            if not getattr(rb2d, "_velocity_dirty", False):
+                rb2d._velocity._x = rdata[slot, 6]
+                rb2d._velocity._y = rdata[slot, 7]
+                rb2d._angular_velocity = rdata[slot, 11]
+            rb2d._force_accum._x = 0.0
+            rb2d._force_accum._y = 0.0
+            rb2d._torque_accum = 0.0
+        elif rb is not None:
+            tr._local_pos._x = rdata[slot, 0]
+            tr._local_pos._y = rdata[slot, 1]
+            tr._local_pos._z = rdata[slot, 2]
+            r0 = rdata[slot, 3]
+            r1 = rdata[slot, 4]
+            r2 = rdata[slot, 5]
+            sr, cr = csin(r0 * 0.5), ccos(r0 * 0.5)
+            sp, cp = csin(r1 * 0.5), ccos(r1 * 0.5)
+            sy, cy = csin(r2 * 0.5), ccos(r2 * 0.5)
+            tr._local_rot._x = sr * cp * cy - cr * sp * sy
+            tr._local_rot._y = cr * sp * cy + sr * cp * sy
+            tr._local_rot._z = cr * cp * sy - sr * sp * cy
+            tr._local_rot._w = cr * cp * cy + sr * sp * sy
+            tr._dirty = True
+            if not getattr(rb, "_velocity_dirty", False):
+                rb._velocity._x = rdata[slot, 6]
+                rb._velocity._y = rdata[slot, 7]
+                rb._velocity._z = rdata[slot, 8]
+                rb._angular_velocity._x = rdata[slot, 9]
+                rb._angular_velocity._y = rdata[slot, 10]
+                rb._angular_velocity._z = rdata[slot, 11]
+
+
+def sync_write_from_ecs(object shared, list cache):
+    """cache: list of (entity, rb, rb2d, tr, slot)"""
+    cdef unsigned char[:] flags = shared._flags_nd
+    cdef float[:, :] edata = shared._edata_nd
+    cdef float[:, :] fdata = shared._fdata_nd
+    cdef Py_ssize_t i, n = len(cache)
+    cdef int slot, max_slot = -1
+    cdef double qx, qy, qz, qw, sz
+    cdef object entity, rb, rb2d, tr, lp, q, fa, ta
+    for i in range(n):
+        entity, rb, rb2d, tr, slot = cache[i]
+        if not entity._active:
+            continue
+        lp = tr._local_pos
+        if rb2d is not None:
+            q = tr._local_rot
+            sz = 2.0 * asin(_clamp(q._z, -1.0, 1.0))
+            fa = rb2d._force_accum
+            edata[slot, 0] = lp._x
+            edata[slot, 1] = lp._y
+            edata[slot, 2] = 0.0
+            edata[slot, 3] = 0.0
+            edata[slot, 4] = 0.0
+            edata[slot, 5] = sz
+            edata[slot, 6] = rb2d._velocity._x
+            edata[slot, 7] = rb2d._velocity._y
+            edata[slot, 8] = 0.0
+            edata[slot, 9] = 0.0
+            edata[slot, 10] = 0.0
+            edata[slot, 11] = rb2d._angular_velocity
+            fdata[slot, 0] = fa._x
+            fdata[slot, 1] = fa._y
+            fdata[slot, 2] = 0.0
+            fdata[slot, 3] = 0.0
+            fdata[slot, 4] = 0.0
+            fdata[slot, 5] = rb2d._torque_accum
+            if rb2d.is_kinematic:
+                flags[slot] = 15
+            else:
+                flags[slot] = 11 if rb2d.consume_velocity_dirty() else 9
+        elif rb is not None:
+            q = tr._local_rot
+            qx = q._x
+            qy = q._y
+            qz = q._z
+            qw = q._w
+            fa = rb._force_accum
+            ta = rb._torque_accum
+            edata[slot, 0] = lp._x
+            edata[slot, 1] = lp._y
+            edata[slot, 2] = lp._z
+            edata[slot, 3] = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy))
+            edata[slot, 4] = asin(_clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0))
+            edata[slot, 5] = atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+            edata[slot, 6] = rb._velocity._x
+            edata[slot, 7] = rb._velocity._y
+            edata[slot, 8] = rb._velocity._z
+            edata[slot, 9] = rb._angular_velocity._x
+            edata[slot, 10] = rb._angular_velocity._y
+            edata[slot, 11] = rb._angular_velocity._z
+            fdata[slot, 0] = fa._x
+            fdata[slot, 1] = fa._y
+            fdata[slot, 2] = fa._z
+            fdata[slot, 3] = ta._x
+            fdata[slot, 4] = ta._y
+            fdata[slot, 5] = ta._z
+            fa._x = 0.0
+            fa._y = 0.0
+            fa._z = 0.0
+            ta._x = 0.0
+            ta._y = 0.0
+            ta._z = 0.0
+            if rb.is_kinematic:
+                flags[slot] = 7
+            else:
+                flags[slot] = 3 if rb.consume_velocity_dirty() else 1
+        if slot > max_slot:
+            max_slot = slot
+    return max_slot
