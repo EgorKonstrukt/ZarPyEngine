@@ -21,6 +21,7 @@ EXTENSIONS = [
     _ext("core._bvh_build", "_bvh_build.pyx"),
     _ext("core._raytracing_data", "_raytracing_data.pyx"),
     _ext("core.math_helpers", "math_helpers.pyx"),
+    _ext("core._math_vec", "_math_vec.pyx"),
     _ext("core._culling", "_culling.pyx"),
     _ext("core._transform_batch", "_transform_batch.pyx"),
     _ext("core._render_utils", "_render_utils.pyx"),

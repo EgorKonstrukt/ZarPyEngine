@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from libc.math cimport fabs, atan2, asin, sqrt, sin as csin, cos as ccos
+from core._math_vec cimport Vec2, Vec3, Quat
 
 cdef inline double _clamp(double v, double lo, double hi):
     if v < lo:
@@ -139,7 +140,11 @@ def sync_read_to_ecs(object shared, list cache):
     cdef unsigned char fl
     cdef double hz, r0, r1, r2
     cdef double sr, cr, sp, cp, sy, cy
-    cdef object entity, rb, rb2d, tr, lp, lq, vel, av, fa
+    cdef object entity, rb, rb2d, tr
+    cdef Vec3 lp
+    cdef Quat lq
+    cdef Vec2 vel2, fa2
+    cdef Vec3 vel3, av3
     for i in range(n):
         entity, rb, rb2d, tr, slot = cache[i]
         fl = flags[slot]
@@ -158,13 +163,13 @@ def sync_read_to_ecs(object shared, list cache):
             lq._w = ccos(hz)
             tr._dirty = True
             if not rb2d._velocity_dirty:
-                vel = rb2d._velocity
-                vel._x = rdata[slot, 6]
-                vel._y = rdata[slot, 7]
+                vel2 = rb2d._velocity
+                vel2._x = rdata[slot, 6]
+                vel2._y = rdata[slot, 7]
                 rb2d._angular_velocity = rdata[slot, 11]
-            fa = rb2d._force_accum
-            fa._x = 0.0
-            fa._y = 0.0
+            fa2 = rb2d._force_accum
+            fa2._x = 0.0
+            fa2._y = 0.0
             rb2d._torque_accum = 0.0
         elif rb is not None:
             lp = tr._local_pos
@@ -184,14 +189,14 @@ def sync_read_to_ecs(object shared, list cache):
             lq._w = cr * cp * cy + sr * sp * sy
             tr._dirty = True
             if not rb._velocity_dirty:
-                vel = rb._velocity
-                vel._x = rdata[slot, 6]
-                vel._y = rdata[slot, 7]
-                vel._z = rdata[slot, 8]
-                av = rb._angular_velocity
-                av._x = rdata[slot, 9]
-                av._y = rdata[slot, 10]
-                av._z = rdata[slot, 11]
+                vel3 = rb._velocity
+                vel3._x = rdata[slot, 6]
+                vel3._y = rdata[slot, 7]
+                vel3._z = rdata[slot, 8]
+                av3 = rb._angular_velocity
+                av3._x = rdata[slot, 9]
+                av3._y = rdata[slot, 10]
+                av3._z = rdata[slot, 11]
 
 
 def sync_write_from_ecs(object shared, list cache):
@@ -202,7 +207,11 @@ def sync_write_from_ecs(object shared, list cache):
     cdef Py_ssize_t i, n = len(cache)
     cdef int slot, max_slot = -1
     cdef double qx, qy, qz, qw, sz
-    cdef object entity, rb, rb2d, tr, lp, q, fa, ta, vel, av
+    cdef object entity, rb, rb2d, tr
+    cdef Vec3 lp
+    cdef Quat q
+    cdef Vec2 vel2, fa2
+    cdef Vec3 vel3, av3, fa3, ta3
     for i in range(n):
         entity, rb, rb2d, tr, slot = cache[i]
         if not entity._active:
@@ -211,22 +220,22 @@ def sync_write_from_ecs(object shared, list cache):
         if rb2d is not None:
             q = tr._local_rot
             sz = 2.0 * asin(_clamp(q._z, -1.0, 1.0))
-            fa = rb2d._force_accum
-            vel = rb2d._velocity
+            fa2 = rb2d._force_accum
+            vel2 = rb2d._velocity
             edata[slot, 0] = lp._x
             edata[slot, 1] = lp._y
             edata[slot, 2] = 0.0
             edata[slot, 3] = 0.0
             edata[slot, 4] = 0.0
             edata[slot, 5] = sz
-            edata[slot, 6] = vel._x
-            edata[slot, 7] = vel._y
+            edata[slot, 6] = vel2._x
+            edata[slot, 7] = vel2._y
             edata[slot, 8] = 0.0
             edata[slot, 9] = 0.0
             edata[slot, 10] = 0.0
             edata[slot, 11] = rb2d._angular_velocity
-            fdata[slot, 0] = fa._x
-            fdata[slot, 1] = fa._y
+            fdata[slot, 0] = fa2._x
+            fdata[slot, 1] = fa2._y
             fdata[slot, 2] = 0.0
             fdata[slot, 3] = 0.0
             fdata[slot, 4] = 0.0
@@ -242,34 +251,34 @@ def sync_write_from_ecs(object shared, list cache):
             qy = q._y
             qz = q._z
             qw = q._w
-            fa = rb._force_accum
-            ta = rb._torque_accum
-            vel = rb._velocity
-            av = rb._angular_velocity
+            fa3 = rb._force_accum
+            ta3 = rb._torque_accum
+            vel3 = rb._velocity
+            av3 = rb._angular_velocity
             edata[slot, 0] = lp._x
             edata[slot, 1] = lp._y
             edata[slot, 2] = lp._z
             edata[slot, 3] = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy))
             edata[slot, 4] = asin(_clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0))
             edata[slot, 5] = atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
-            edata[slot, 6] = vel._x
-            edata[slot, 7] = vel._y
-            edata[slot, 8] = vel._z
-            edata[slot, 9] = av._x
-            edata[slot, 10] = av._y
-            edata[slot, 11] = av._z
-            fdata[slot, 0] = fa._x
-            fdata[slot, 1] = fa._y
-            fdata[slot, 2] = fa._z
-            fdata[slot, 3] = ta._x
-            fdata[slot, 4] = ta._y
-            fdata[slot, 5] = ta._z
-            fa._x = 0.0
-            fa._y = 0.0
-            fa._z = 0.0
-            ta._x = 0.0
-            ta._y = 0.0
-            ta._z = 0.0
+            edata[slot, 6] = vel3._x
+            edata[slot, 7] = vel3._y
+            edata[slot, 8] = vel3._z
+            edata[slot, 9] = av3._x
+            edata[slot, 10] = av3._y
+            edata[slot, 11] = av3._z
+            fdata[slot, 0] = fa3._x
+            fdata[slot, 1] = fa3._y
+            fdata[slot, 2] = fa3._z
+            fdata[slot, 3] = ta3._x
+            fdata[slot, 4] = ta3._y
+            fdata[slot, 5] = ta3._z
+            fa3._x = 0.0
+            fa3._y = 0.0
+            fa3._z = 0.0
+            ta3._x = 0.0
+            ta3._y = 0.0
+            ta3._z = 0.0
             if rb.is_kinematic:
                 flags[slot] = 7
             else:
