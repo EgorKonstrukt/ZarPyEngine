@@ -191,7 +191,11 @@ def _load_moon_float(path: str):
     arr = np.asarray(img)
     if arr.ndim != 3 or arr.shape[2] < 3:
         return None
-    arr = arr[:, :, :3]
+    if arr.shape[2] == 3:
+        ones = np.ones((arr.shape[0], arr.shape[1], 1), dtype=arr.dtype)
+        arr = np.concatenate([arr, ones], axis=2)
+    else:
+        arr = arr[:, :, :4]
     if arr.dtype == np.uint8:
         arr = arr.astype(np.float32) / 255.0
     elif arr.dtype != np.float32:
@@ -221,7 +225,7 @@ def _get_moon_texture(ctx: moderngl.Context, path: str):
         _MOON_TEX_CACHE[abs_path] = (mtime, None)
         return None
     h, w = arr.shape[:2]
-    tex = ctx.texture((w, h), 3, arr.tobytes(), dtype="f4")
+    tex = ctx.texture((w, h), 4, arr.tobytes(), dtype="f4")
     tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
     tex.repeat_x = False
     tex.repeat_y = False
@@ -457,11 +461,11 @@ class Sky(Component):
             InspectorField("milky_way_pole", "Band Pole", FieldType.VEC3),
             InspectorField("", "Time Controller", FieldType.HEADER),
             InspectorField("year", "Year", FieldType.INT, min_val=1, max_val=9999, step=1),
-            InspectorField("month", "Month", FieldType.INT, min_val=1, max_val=12, step=1),
-            InspectorField("day", "Day", FieldType.INT, min_val=1, max_val=31, step=1),
-            InspectorField("hour", "Hour", FieldType.INT, min_val=0, max_val=23, step=1),
-            InspectorField("minute", "Minute", FieldType.INT, min_val=0, max_val=59, step=1),
-            InspectorField("second", "Second", FieldType.INT, min_val=0, max_val=59, step=1),
+            InspectorField("month", "Month", FieldType.INT, min_val=1, max_val=12, step=1, on_set="_on_time_field_set"),
+            InspectorField("day", "Day", FieldType.INT, min_val=1, max_val=31, step=1, on_set="_on_time_field_set"),
+            InspectorField("hour", "Hour", FieldType.INT, min_val=0, max_val=23, step=1, on_set="_on_time_field_set"),
+            InspectorField("minute", "Minute", FieldType.INT, min_val=0, max_val=59, step=1, on_set="_on_time_field_set"),
+            InspectorField("second", "Second", FieldType.INT, min_val=0, max_val=59, step=1, on_set="_on_time_field_set"),
             InspectorField("_btn_nearest_solar_eclipse", "Nearest Solar Eclipse", FieldType.BUTTON),
             InspectorField("latitude", "Latitude (deg)", FieldType.SLIDER, min_val=-90.0, max_val=90.0, step=0.1, decimals=2),
             InspectorField("longitude", "Longitude (deg)", FieldType.SLIDER, min_val=-180.0, max_val=180.0, step=0.1, decimals=2),
@@ -528,6 +532,70 @@ class Sky(Component):
         if second is not None:
             self.second = int(second)
         self._invalidate_time()
+
+    def _days_in_month(self, y: int, m: int) -> int:
+        if m == 2:
+            leap = (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+            return 29 if leap else 28
+        return 31 if m in (1, 3, 5, 7, 8, 10, 12) else 30
+
+    def _normalize_days(self):
+        while self.day > self._days_in_month(self.year, self.month):
+            self.day -= self._days_in_month(self.year, self.month)
+            self.month += 1
+            if self.month > 12:
+                self.month = 1
+                self.year += 1
+        while self.day < 1:
+            self.month -= 1
+            if self.month < 1:
+                self.month = 12
+                self.year -= 1
+            self.day += self._days_in_month(self.year, self.month)
+
+    def _carry_days(self, n: int):
+        if n == 0:
+            return
+        self.day += n
+        self._normalize_days()
+
+    def _carry_hours(self, n: int):
+        if n == 0:
+            return
+        total = self.hour + n
+        carry, self.hour = divmod(total, 24)
+        self._carry_days(carry)
+
+    def _carry_minutes(self, n: int):
+        if n == 0:
+            return
+        total = self.minute + n
+        carry, self.minute = divmod(total, 60)
+        self._carry_hours(carry)
+
+    def _on_time_field_set(self, name: str, value: int) -> bool:
+        v = int(value)
+        before = self._time_fields_key()
+        if name == "second":
+            carry, self.second = divmod(v, 60)
+            self._carry_minutes(carry)
+        elif name == "minute":
+            carry, self.minute = divmod(v, 60)
+            self._carry_hours(carry)
+        elif name == "hour":
+            carry, self.hour = divmod(v, 24)
+            self._carry_days(carry)
+        elif name == "day":
+            self.day = v
+            self._normalize_days()
+        elif name == "month":
+            carry, self.month = divmod(v - 1, 12)
+            self.month += 1
+            self.year += carry
+        else:
+            return False
+        self._invalidate_time()
+        return self._time_fields_key() != before
 
     def set_sun_light(self, entity) -> bool:
         if entity is None or entity.transform is None:
@@ -672,6 +740,17 @@ class Sky(Component):
             self._moon_phase, self.moon_texture_path,
         )
 
+    def _ibl_settings_key(self, atmos) -> tuple:
+        key = self._night_settings_key()
+        if atmos is not None and getattr(atmos, "enabled", False):
+            key = key + (
+                atmos._intensity, atmos._sun_intensity, atmos._resolution_scale,
+                atmos._ozone_factor, atmos._aerosol_scale,
+                atmos._sun_angular_radius, atmos._sun_limb_darkening,
+                atmos._sun_convergence, atmos._color_temperature,
+            )
+        return key
+
     def _apply_night_sky(self, prog, ctx=None):
         self._sync_sun_light()
         def f(name, val):
@@ -780,7 +859,7 @@ class Sky(Component):
                 sun_intensity = sky_i
             self._sky_ibl = get_procedural_sky_ibl(ctx, prog, self.material_path,
                                                    sun_dir, sun_color, sun_intensity,
-                                                   settings_key=self._night_settings_key())
+                                                   settings_key=self._ibl_settings_key(atmos))
         if "u_env_tex" in prog:
             if env_tex is not None:
                 env_tex.use(0)

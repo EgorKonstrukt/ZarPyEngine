@@ -501,6 +501,21 @@ class ComponentWidget(QWidget):
                 w.deleteLater()
         self._build_fields()
 
+    def _sync_int_field_values(self):
+        c = self._component
+        for r in self._field_rows:
+            pn = r.get("prop_name", "")
+            if not pn or not hasattr(c, pn):
+                continue
+            cell = r.get("field_widget")
+            if cell is None:
+                continue
+            child = getattr(cell, "_field_child", None)
+            if isinstance(child, QSpinBox):
+                child.blockSignals(True)
+                child.setValue(getattr(c, pn, child.value()))
+                child.blockSignals(False)
+
     def _target_layout(self) -> QFormLayout:
         return self._group_form if self._group_form is not None else self._layout
 
@@ -609,11 +624,26 @@ class ComponentWidget(QWidget):
                 sb = QSpinBox()
                 min_i = max(-2147483648, min(2147483647, int(field.min_val)))
                 max_i = max(-2147483648, min(2147483647, int(field.max_val)))
+                natural_min = min_i
+                natural_max = max_i
+                if field.on_set and hasattr(c, field.on_set):
+                    min_i = max(-2147483648, min_i - 1)
+                    max_i = min(2147483647, max_i + 1)
                 sb.setRange(min_i, max_i)
-                sb.setValue(max(min_i, min(max_i, int(value))))
+                sb.setValue(max(natural_min, min(natural_max, int(value))))
                 sb.setMinimumWidth(60)
                 comp_cls = type(c)
-                sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
+                if field.on_set and hasattr(c, field.on_set):
+                    def _on_int_value(v, n=prop_name, m=field.on_set, nmn=natural_min, nmx=natural_max):
+                        if nmn <= v <= nmx:
+                            self._undo_setter_all(comp_cls, n)(v)
+                        else:
+                            fn = getattr(c, m, None)
+                            if callable(fn) and fn(n, v):
+                                self._sync_int_field_values()
+                    sb.valueChanged.connect(_on_int_value)
+                else:
+                    sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
                 self._add_field(field.label, sb, prop_name, field.toggle_field)
         elif field.field_type.value == "slider":
             row = QWidget()
@@ -688,7 +718,12 @@ class ComponentWidget(QWidget):
             self._toggle_checkboxes[prop_name] = cb
         elif field.field_type.value == "button":
             btn = QPushButton(field.label)
-            btn.clicked.connect(lambda: getattr(c, prop_name, lambda: None)())
+            def _on_button():
+                fn = getattr(c, prop_name, None)
+                if callable(fn):
+                    fn()
+                self._sync_int_field_values()
+            btn.clicked.connect(_on_button)
             self._add_field("", btn)
         elif field.field_type.value == "color":
             from editor.color_picker import ColorLineEdit

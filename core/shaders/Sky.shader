@@ -249,7 +249,8 @@ Shader "Zarin/Sky"
         float limb = sqrt(max(1.0 - clamp(dist / radius, 0.0, 1.0) * clamp(dist / radius, 0.0, 1.0), 0.0));
         vec3 surface = albedo * shade * (0.5 + 0.5 * limb);
         vec2 tex_uv = vec2(0.5 + 0.5 * az / radius, 0.5 - 0.5 * elev / radius);
-        surface = mix(surface, texture(u_moon_tex, tex_uv).rgb * (0.5 + 0.5 * limb), u_use_moon_tex);
+        vec4 texel = texture(u_moon_tex, tex_uv);
+        surface = mix(surface, texel.rgb * (0.5 + 0.5 * limb), u_use_moon_tex * smoothstep(0.05, 0.5, texel.a));
         vec3 sun_local = normalize(vec3(dot(sun_dir, v), dot(sun_dir, w), dot(sun_dir, u)));
         vec3 phase_axis = vec3(sun_local.x, sun_local.y, 0.0);
         float pa_len = length(phase_axis);

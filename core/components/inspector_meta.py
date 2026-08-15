@@ -74,6 +74,7 @@ class InspectorField:
     description: str = ""
     default_value: object = None
     favorite: bool = False
+    on_set: str = ""
 
 @dataclass
 class ComponentInspectorMeta:
