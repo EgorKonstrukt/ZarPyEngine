@@ -39,6 +39,7 @@ class Rigidbody2D(Component):
         self._force_accum: Vec2 = Vec2.zero()
         self._torque_accum: float = 0.0
         self._body_id: int = -1
+        self._velocity_dirty: bool = False
 
     @property
     def velocity(self) -> Vec2:
@@ -47,6 +48,7 @@ class Rigidbody2D(Component):
     @velocity.setter
     def velocity(self, v: Vec2):
         self._velocity = v
+        self._velocity_dirty = True
 
     @property
     def angular_velocity(self) -> float:
@@ -55,6 +57,7 @@ class Rigidbody2D(Component):
     @angular_velocity.setter
     def angular_velocity(self, v: float):
         self._angular_velocity = v
+        self._velocity_dirty = True
 
     def add_force(self, force: Vec2):
         self._force_accum = self._force_accum + force
@@ -65,6 +68,12 @@ class Rigidbody2D(Component):
     def add_impulse(self, impulse: Vec2):
         if self.mass > 0 and not self.is_kinematic:
             self._velocity = self._velocity + impulse * (1.0 / self.mass)
+            self._velocity_dirty = True
+
+    def consume_velocity_dirty(self) -> bool:
+        d = self._velocity_dirty
+        self._velocity_dirty = False
+        return d
 
     def _clear_forces(self):
         self._force_accum = Vec2.zero()

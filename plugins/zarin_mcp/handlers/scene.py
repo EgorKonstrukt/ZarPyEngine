@@ -7,6 +7,7 @@
 from __future__ import annotations
 import os
 from .util import get_scene, get_entity_by_id_or_name, serialize_component
+from plugins.zarin_mcp.main_thread import run_on_main_thread
 
 
 def register(registry, engine):
@@ -414,7 +415,7 @@ def register(registry, engine):
             scenes = _get_project_scenes(engine)
             return {"message": "Provide a path. Available scenes:", "scenes": scenes}
         full = os.path.join(engine.project_root, path) if not os.path.isabs(path) else path
-        scene = engine.load_scene(full)
+        scene = run_on_main_thread(lambda: engine.load_scene(full))
         if scene is None:
             return {"error": f"Failed to load scene: {path}"}
         return {"message": f"Loaded scene '{scene.name}'"}
@@ -430,7 +431,7 @@ def register(registry, engine):
         },
     )
     def scene_new(name="NewScene"):
-        engine.new_scene(name)
+        run_on_main_thread(lambda: engine.new_scene(name))
         return {"message": f"Created new scene '{name}'"}
 
 

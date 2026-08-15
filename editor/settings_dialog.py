@@ -826,11 +826,13 @@ class SettingsDialog(QDialog):
             cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             return cb
         if isinstance(value, list):
-            from editor.color_picker import ColorLineEdit
-            current = self._config.get(key, value)
-            cl = ColorLineEdit(current)
-            cl.colorChanged.connect(lambda _, k=key, w=cl: self._on_value_changed(k, w.get_color_rgba()))
-            return cl
+            if len(value) in (3, 4) and all(isinstance(v, (int, float)) for v in value):
+                from editor.color_picker import ColorLineEdit
+                current = self._config.get(key, value)
+                cl = ColorLineEdit(current)
+                cl.colorChanged.connect(lambda _, k=key, w=cl: self._on_value_changed(k, w.get_color_rgba()))
+                return cl
+            return None
         if isinstance(value, bool):
             cb = QCheckBox()
             cb.setChecked(self._config.get(key, value))

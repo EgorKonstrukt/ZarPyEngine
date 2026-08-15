@@ -65,6 +65,7 @@ class ScriptComponent(Component):
         self._py_has_awake: bool = False
         self._py_has_start: bool = False
         self._py_has_destroy: bool = False
+        self._script_mtime: Optional[float] = None
 
     def get_script_public_fields(self) -> list[InspectorField]:
         if not self.script_path:
@@ -91,6 +92,16 @@ class ScriptComponent(Component):
                 if os.path.exists(candidate):
                     script_path = candidate
         try:
+            mtime = os.path.getmtime(script_path)
+        except Exception:
+            mtime = None
+        if (self._py_class is not None and mtime is not None
+                and self._script_mtime == mtime):
+            return
+        self._py_instance = None
+        self._cached_fields = []
+        self._cached_hints = None
+        try:
             spec = importlib.util.spec_from_file_location("_user_script_inspect", script_path)
             if spec is None:
                 Logger.warning(f"Script inspect spec is None for '{self.script_path}'")
@@ -100,6 +111,7 @@ class ScriptComponent(Component):
             mod.KeyCode = KeyCode
             spec.loader.exec_module(mod)
             self._py_module = mod
+            self._script_mtime = mtime
             for attr in dir(mod):
                 obj = getattr(mod, attr)
                 if isinstance(obj, type) and (hasattr(obj, "on_update") or hasattr(obj, "_inspector_buttons")):
@@ -243,7 +255,7 @@ class ScriptComponent(Component):
             Logger.error(f"Script load error '{self.script_path}': {e}")
 
     def on_start(self):
-        if not self._py_instance and self.script_path:
+        if self.script_path:
             self._load_script()
         self._apply_fields_to_instance()
         if self._py_instance and self._py_has_awake:

@@ -27,6 +27,8 @@ class ZarinMCPPlugin(PluginBase):
 
     def initialize(self, engine):
         super().initialize(engine)
+        from plugins.zarin_mcp.main_thread import ensure_dispatcher
+        ensure_dispatcher()
         self._discover_handlers(engine)
         self._server = McpServer(self._registry, port=self.get_config("port", 9100))
         self._register_ui()

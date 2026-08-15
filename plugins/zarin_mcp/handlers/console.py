@@ -7,6 +7,8 @@
 from __future__ import annotations
 import traceback
 
+from plugins.zarin_mcp.main_thread import run_on_main_thread
+
 
 def register(registry, engine):
 
@@ -91,8 +93,12 @@ def register(registry, engine):
                 loc["Entity"] = ecs.Entity
                 loc["Component"] = ecs.Component
                 loc["ComponentRegistry"] = ecs.ComponentRegistry
-            exec(code, globals(), loc)
-            result = loc.get("_result", "Code executed successfully (no _result variable set)")
+
+            def _run():
+                exec(code, globals(), loc)
+                return loc.get("_result", "Code executed successfully (no _result variable set)")
+
+            result = run_on_main_thread(_run)
             return {"result": str(result)}
         except Exception as e:
             return {"error": f"Execution error: {e}\n{traceback.format_exc()}"}

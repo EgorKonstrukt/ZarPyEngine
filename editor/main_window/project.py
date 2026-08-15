@@ -38,6 +38,7 @@ def _do_switch_project(mw, project_path: str):
     _add_recent_project(name, project_path)
     mw._engine._project_path = project_path
     mw._project.set_project_root(assets_dir)
+    mw._engine._plugin_manager.notify_project_opened()
     from core.audio.audio_system import AudioSystem
     audio = AudioSystem.instance()
     if audio:

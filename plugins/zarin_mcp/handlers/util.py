@@ -211,7 +211,9 @@ def coerce_value(comp, name, value, field=None):
 def value_to_json(val):
     from enum import Enum
     from core.maths.math3d import Vec2, Vec3, Vec4
-    if isinstance(val, (Vec2, Vec3, Vec4)):
+    if isinstance(val, Vec2):
+        return [float(val.x), float(val.y)]
+    if isinstance(val, (Vec3, Vec4)):
         parts = [val.x, val.y, val.z]
         if hasattr(val, "w"):
             parts.append(val.w)

@@ -34,6 +34,7 @@ class PlayViewport(QOpenGLWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, False)
         engine.on("play_stop", self._on_play_stop)
         fmt = QSurfaceFormat()
@@ -120,6 +121,10 @@ class PlayViewport(QOpenGLWidget):
 
     def _tick(self):
         if self._engine.play_mode and self.isVisible():
+            from core.input.input_manager import InputManager
+            im = InputManager.instance()
+            im.set_surface_size(self.width(), self.height())
+            im.new_frame()
             self._tick_editor_cameras()
             self._sync_cursor()
             self.update()
@@ -209,6 +214,8 @@ class PlayViewport(QOpenGLWidget):
             btn = self._mouse_button_index(event.button())
             from core.input.input_manager import InputManager
             im = InputManager.instance()
+            with im._lock:
+                im._pending_mouse.append((event.position().x(), event.position().y(), 0))
             im.feed_mouse_button(btn, True)
             if event.button() == Qt.MouseButton.RightButton and not self._mouse_captured:
                 self._mouse_captured = True
@@ -233,6 +240,13 @@ class PlayViewport(QOpenGLWidget):
                 im._pending_mouse_delta.append((dx, dy))
             self._forward_to_editor_cam_delta(dx, dy)
             self._center_cursor()
+            event.accept()
+            return
+        if self._engine.play_mode:
+            from core.input.input_manager import InputManager
+            im = InputManager.instance()
+            with im._lock:
+                im._pending_mouse.append((event.position().x(), event.position().y(), 0))
             event.accept()
             return
         event.ignore()

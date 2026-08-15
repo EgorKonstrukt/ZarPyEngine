@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from plugins.zarin_mcp.main_thread import run_on_main_thread
+
 
 def register(registry, engine):
 
@@ -36,7 +38,7 @@ def register(registry, engine):
     def engine_play():
         if engine is None:
             return {"error": "Engine not available"}
-        engine.start_play()
+        run_on_main_thread(engine.start_play)
         return {"message": "Play mode started"}
 
     @registry.tool(
@@ -47,7 +49,7 @@ def register(registry, engine):
     def engine_stop():
         if engine is None:
             return {"error": "Engine not available"}
-        engine.stop_play()
+        run_on_main_thread(engine.stop_play)
         return {"message": "Play mode stopped"}
 
     @registry.tool(

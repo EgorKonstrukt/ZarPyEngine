@@ -23,7 +23,7 @@ SHAPE_TYPE_MAP = {
     "MeshCollider": "mesh",
     "TerrainCollider": "heightfield",
     "BoxCollider2D": "box",
-    "CircleCollider2D": "cylinder",
+    "CircleCollider2D": "sphere",
 }
 
 SHAPE_INFO_CACHE_KEYS = {
@@ -33,7 +33,7 @@ SHAPE_INFO_CACHE_KEYS = {
     "MeshCollider": ("type", "file", "collision_mode", "max_vertices", "scale", "friction", "restitution", "is_trigger"),
     "TerrainCollider": ("type", "size", "resolution", "height_scale", "center", "friction", "restitution", "is_trigger"),
     "BoxCollider2D": ("type", "size", "center", "friction", "restitution", "is_trigger"),
-    "CircleCollider2D": ("type", "radius", "height", "center", "friction", "restitution", "is_trigger"),
+    "CircleCollider2D": ("type", "radius", "center", "friction", "restitution", "is_trigger"),
 }
 
 
@@ -92,7 +92,6 @@ def find_shape_info(entity: Entity, transform=None) -> Optional[dict]:
             is_trigger = comp.is_trigger
         elif cname == "CircleCollider2D":
             params["radius"] = comp.scaled_radius
-            params["height"] = 1.0
             off = comp.scaled_offset
             params["center"] = [off.x, off.y, 0.0]
             friction = comp.material_friction

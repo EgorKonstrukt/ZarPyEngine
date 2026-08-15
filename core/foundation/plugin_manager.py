@@ -76,6 +76,9 @@ class PluginBase:
     def on_scene_unloaded(self, scene):
         pass
 
+    def on_project_opened(self):
+        pass
+
     def on_play_start(self):
         pass
 
@@ -329,6 +332,13 @@ class PluginManager:
 
     def notify_scene_unloaded(self, scene):
         self._notify_all("on_scene_unloaded", scene)
+
+    def notify_project_opened(self):
+        for p in self.get_all():
+            try:
+                p.on_project_opened()
+            except Exception as e:
+                Logger.error(f"Plugin on_project_opened error: {e}", e)
 
     def notify_play_start(self):
         self._notify_all("on_play_start")

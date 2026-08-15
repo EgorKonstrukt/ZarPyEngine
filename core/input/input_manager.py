@@ -149,6 +149,8 @@ class InputManager:
         self._running = False
         self._mouse_x: float = 0.0
         self._mouse_y: float = 0.0
+        self._surface_w: int = 1
+        self._surface_h: int = 1
 
     def start(self):
         if self._running:
@@ -254,6 +256,13 @@ class InputManager:
 
     def feed_scroll(self, dx: float, dy: float):
         Input._state_ref().set_scroll(dx, dy)
+
+    def set_surface_size(self, w: int, h: int):
+        self._surface_w = max(1, w)
+        self._surface_h = max(1, h)
+
+    def surface_size(self) -> tuple[int, int]:
+        return (self._surface_w, self._surface_h)
 
     def new_frame(self):
         Input.end_frame()

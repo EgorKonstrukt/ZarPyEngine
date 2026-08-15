@@ -55,6 +55,10 @@ class PhysicsPlugin(PluginBase):
     def enabled(self, v: bool):
         self._enabled = v
 
+    @property
+    def physics_scene(self) -> Optional[PhysicsScene]:
+        return self._physics_scene
+
     def _get_physics_settings(self) -> dict:
         project_path = getattr(self._engine, "_project_path", None) or "." if self._engine else "."
         cfg = get_project_config(project_path)
@@ -232,6 +236,39 @@ class PhysicsPlugin(PluginBase):
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
         self._step_caches.clear()
+
+    def on_project_opened(self):
+        settings = self._get_physics_settings()
+        new_mode = settings.get("simulation_mode", "multi_threaded")
+        if new_mode == self._simulation_mode:
+            return
+        Logger.info(f"[PhysicsPlugin] project opened: simulation_mode {self._simulation_mode} -> {new_mode}")
+        if self._simulation_mode == "per_layer_process":
+            for proc in self._layer_processes.values():
+                proc.shutdown(1000)
+            self._layer_processes.clear()
+        elif self._simulation_mode == "single":
+            if self._physics_scene is not None:
+                self._physics_scene.shutdown()
+                self._physics_scene = None
+            self._solver = None
+        else:
+            if self._physics_process is not None:
+                self._physics_process.shutdown(1000)
+                self._physics_process = None
+        self._simulation_mode = new_mode
+        if new_mode == "single":
+            self._init_single(*self._solver_module_class_with_settings())
+        elif new_mode == "per_layer_process":
+            Logger.info("PhysicsPlugin: per-layer process mode (processes spawned on demand).")
+        else:
+            solver_module, solver_class = self._solver_module_class()
+            self._physics_process = PhysicsProcess(project_root=self._project_root)
+            if not self._physics_process.start(solver_module, solver_class, settings):
+                Logger.warning("PhysicsPlugin: multi-threaded init failed, falling back to single-threaded mode")
+                self._physics_process = None
+                self._simulation_mode = "single"
+                self._init_single(*self._solver_module_class_with_settings())
 
     def on_scene_unloaded(self, scene):
         self._scanned_entity_ids.clear()
