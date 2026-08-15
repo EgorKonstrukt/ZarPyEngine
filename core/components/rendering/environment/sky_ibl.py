@@ -5,7 +5,9 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import math
 import os
+import time
 from collections import OrderedDict
 import numpy as np
 import moderngl
@@ -347,7 +349,11 @@ _PROC_SUN_DEFAULT_DIR = np.array([0.0, -0.3, -1.0], dtype=np.float32)
 _PROC_SUN_DEFAULT_COLOR = np.array([1.0, 0.95, 0.85], dtype=np.float32)
 _PROC_SUN_DEFAULT_INTENSITY = 1.0
 
-_SUN_DIR_GRID = 16.0
+_SUN_DIR_GRID = 1024.0
+
+_PROC_REGEN_COOLDOWN = 0.15
+_PROC_REGEN_CAP_DEG = 2.0
+_PROC_LAST_GEN: dict[int, tuple] = {}
 
 
 def _snap_sun_dir(v):
@@ -361,6 +367,12 @@ def _snap_sun_dir(v):
     if n2 <= 1e-9:
         return _PROC_SUN_DEFAULT_DIR.copy()
     return (a / n2).astype(np.float32)
+
+
+def _ang_deg(a, b):
+    d = float(np.clip(np.dot(np.asarray(a, dtype=np.float64).ravel(),
+                              np.asarray(b, dtype=np.float64).ravel()), -1.0, 1.0))
+    return math.degrees(math.acos(d))
 
 
 def _quant(v, ndig: int):
@@ -377,6 +389,7 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
         sun_color = _PROC_SUN_DEFAULT_COLOR
     if sun_intensity is None:
         sun_intensity = _PROC_SUN_DEFAULT_INTENSITY
+    true_dir = np.asarray(sun_dir, dtype=np.float64).reshape(3)
     sun_dir = _snap_sun_dir(sun_dir)
     key = "|".join([
         material_path or "",
@@ -391,6 +404,18 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
         ibl = _PROC_SKY_IBL_CACHE.pop(key)
         _PROC_SKY_IBL_CACHE[key] = ibl
         return ibl
+    cid = id(ctx)
+    settings_ident = (material_path or "", settings_key,
+                      repr(_quant(sun_color, 2)), str(round(float(sun_intensity), 2)))
+    now = time.perf_counter()
+    last = _PROC_LAST_GEN.get(cid)
+    if last is not None:
+        last_t, last_dir, last_ibl, last_settings = last
+        if (last_ibl is not None and last_ibl.ready
+                and last_settings == settings_ident
+                and (now - last_t) < _PROC_REGEN_COOLDOWN):
+            if _ang_deg(last_dir, true_dir) < _PROC_REGEN_CAP_DEG:
+                return last_ibl
     src_cube = None
     ibl = None
     try:
@@ -407,6 +432,7 @@ def get_procedural_sky_ibl(ctx: moderngl.Context, sky_prog: moderngl.Program,
                 pass
     if ibl is not None:
         _PROC_SKY_IBL_CACHE[key] = ibl
+        _PROC_LAST_GEN[cid] = (now, true_dir, ibl, settings_ident)
         while len(_PROC_SKY_IBL_CACHE) > _PROC_SKY_IBL_CACHE_MAX:
             _old_key, _old = _PROC_SKY_IBL_CACHE.popitem(last=False)
             try:
@@ -453,3 +479,4 @@ def release_sky_ibl_cache():
             except Exception:
                 pass
     _PROC_SKY_IBL_CACHE.clear()
+    _PROC_LAST_GEN.clear()

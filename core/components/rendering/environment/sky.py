@@ -477,14 +477,14 @@ class Sky(Component):
             return 1.0
         if d <= R - r:
             return (r / R) ** 2
-        cos1 = (_m.cos(d) * r - R) / (_m.sin(d) * R)
+        cos1 = (d * d + R * R - r * r) / (2.0 * d * R)
         cos1 = max(-1.0, min(1.0, cos1))
         a1 = _m.acos(cos1) * R * R
-        cos2 = (_m.cos(d) * R - r) / (_m.sin(d) * r)
+        cos2 = (d * d + r * r - R * R) / (2.0 * d * r)
         cos2 = max(-1.0, min(1.0, cos2))
         a2 = _m.acos(cos2) * r * r
         p = (R + r + d) * 0.5
-        tri = _m.sqrt(max(0.0, (p - R) * (p - r) * (p - d) * p))
+        tri = 2.0 * _m.sqrt(max(0.0, (p - R) * (p - r) * (p - d) * p))
         return (a1 + a2 - tri) / (_m.pi * R * R)
 
     @classmethod

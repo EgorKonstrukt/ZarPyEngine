@@ -360,6 +360,17 @@ Shader "Zarin/Sky"
                         color += corona * vec3(1.0, 0.985, 0.95) * (0.5 + 0.6 * totality);
                         float ring = exp(-pow((sdist - sun_r) / (sun_r * 0.22), 2.0)) * (1.0 - occl);
                         color += ring * _SunColor * _SunIntensity * (1.0 - totality) * near_eclipse * 0.35;
+                        vec3 ray_ref = abs(moon_dir.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+                        vec3 ray_e1 = normalize(cross(ray_ref, moon_dir));
+                        vec3 ray_e2 = cross(moon_dir, ray_e1);
+                        float ray_dist = max(mdist - moon_r, 0.0) / max(moon_r, 0.005);
+                        float ray_az = atan(dot(dir, ray_e2), dot(dir, ray_e1));
+                        float ray_mask = 0.5 + 0.5 * cos(ray_az * 12.0);
+                        ray_mask *= 0.65 + 0.35 * cos(ray_az * 24.0);
+                        ray_mask = pow(max(ray_mask, 0.0), 2.0);
+                        float ray_fall = exp(-ray_dist * 1.2) * (1.0 - occl);
+                        color += _SunColor * _SunIntensity * day_fade * totality * near_eclipse
+                               * ray_fall * ray_mask * 0.8;
                     }
                 }
                 frag_color = vec4(color, 1.0);
