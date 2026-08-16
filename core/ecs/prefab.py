@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Optional, Any
 from core.ecs.ecs import Scene, Entity, ComponentRegistry
 from core.foundation.logger import Logger
+from core.foundation.progress import task_complete, task_start
 
 
 class PrefabOverrideType(Enum):
@@ -774,11 +775,15 @@ class PrefabLibrary:
             return None
         if path in cls._prefabs:
             return cls._prefabs[path]
-        p = Prefab.load(path)
-        if p:
-            cls._prefabs[path] = p
-            cls._guids[p.guid] = path
-        return p
+        task_start("prefab_load:" + path, f"Loading prefab {os.path.basename(path)}...")
+        try:
+            p = Prefab.load(path)
+            if p:
+                cls._prefabs[path] = p
+                cls._guids[p.guid] = path
+            return p
+        finally:
+            task_complete("prefab_load:" + path)
 
     @classmethod
     def get_all(cls) -> dict[str, Prefab]:

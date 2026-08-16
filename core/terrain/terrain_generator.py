@@ -5,13 +5,16 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-import os
 import math
-import numpy as np
-import moderngl
+import os
 from dataclasses import dataclass, field
 from typing import Optional
+
+import moderngl
+import numpy as np
+
 from core.foundation.logger import Logger
+from core.foundation.progress import task_complete, task_set_detail, task_start
 from core.shaders.compute_shader import compile_compute_shader
 
 _SHADER_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "terrain_gen.compute")
@@ -220,10 +223,15 @@ class TerrainGenerator:
         return arr
 
     def generate_mesh(self, settings: TerrainSettings, size: float = 1000.0) -> Optional[dict]:
-        hf = self.generate_heightfield(settings)
-        if hf is None:
-            return None
-        return self.mesh_from_heightfield(hf, size)
+        task_start("terrain:hf", "Generating terrain…", fraction=None)
+        try:
+            hf = self.generate_heightfield(settings)
+            if hf is None:
+                return None
+            task_set_detail("terrain:hf", f"{hf.shape[0]}×{hf.shape[1]} heightfield")
+            return self.mesh_from_heightfield(hf, size)
+        finally:
+            task_complete("terrain:hf")
 
     def mesh_from_heightfield(self, hf: np.ndarray, size: float = 1000.0) -> Optional[dict]:
         if hf is None:

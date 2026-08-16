@@ -13,6 +13,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
+    QRect,
     Qt,
     QTimer,
 )
@@ -39,6 +40,7 @@ _FADE_IN_MS = 260
 _FADE_OUT_MS = 200
 _SLIDE_IN_MS = 360
 _SLIDE_OUT_MS = 200
+_RESIZE_MS = 220
 
 _CARD_QSS = """
 QFrame#ProgressCard {
@@ -132,6 +134,10 @@ class ProgressToast(QWidget):
         self._slide = QPropertyAnimation(self, b"pos", self)
         self._slide.setDuration(_SLIDE_IN_MS)
         self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
+
+        self._resize = QPropertyAnimation(self, b"geometry", self)
+        self._resize.setDuration(_RESIZE_MS)
+        self._resize.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -283,18 +289,31 @@ class ProgressToast(QWidget):
         self._errors_lbl.setVisible(bool(err_text))
 
         if tasks or self._history or errors:
-            self.adjustSize()
-            if self._slide.state() != QAbstractAnimation.State.Running:
-                self.reposition()
+            if self.isHidden():
+                self.adjustSize()
+            elif self._slide.state() != QAbstractAnimation.State.Running \
+                    and self._resize.state() != QAbstractAnimation.State.Running:
+                if self.size() != self.sizeHint():
+                    self._animate_resize()
+                else:
+                    self.reposition()
             self._show_animated()
         elif self.isVisible():
             self._hide_animated()
+
+    def _animate_resize(self):
+        target = self._target_rect(self.sizeHint())
+        self._resize.stop()
+        self._resize.setStartValue(self.geometry())
+        self._resize.setEndValue(target)
+        self._resize.start()
 
     def _show_animated(self):
         if self.isHidden():
             self.show()
             self._fade_out.stop()
             self._slide.stop()
+            self._resize.stop()
             self._anim_effect.setOpacity(0.0)
             start = self._target_pos() + QPoint(_SLIDE_X, 0)
             self.move(start)
@@ -308,12 +327,14 @@ class ProgressToast(QWidget):
             if self._fade_out.state() == QAbstractAnimation.State.Running:
                 self._fade_out.stop()
                 self._slide.stop()
+                self._resize.stop()
                 self._anim_effect.setOpacity(1.0)
                 self.reposition()
 
     def _hide_animated(self):
         if self._fade_out.state() != QAbstractAnimation.State.Running:
             self._fade_in.stop()
+            self._resize.stop()
             start = self.pos()
             self._slide.setDuration(_SLIDE_OUT_MS)
             self._slide.setEasingCurve(QEasingCurve.Type.InOutQuad)
@@ -325,14 +346,19 @@ class ProgressToast(QWidget):
     def _hide_done(self):
         self.hide()
         self._slide.stop()
+        self._resize.stop()
         self._anim_effect.setOpacity(1.0)
 
-    def _target_pos(self) -> QPoint:
+    def _target_rect(self, size) -> QRect:
         parent = self.parentWidget()
         if parent is None:
-            return QPoint(0, 0)
-        return QPoint(max(0, parent.width() - self.width() - _MARGIN),
-                      max(0, parent.height() - self.height() - _MARGIN))
+            return QRect(QPoint(0, 0), size)
+        x = max(0, parent.width() - size.width() - _MARGIN)
+        y = max(0, parent.height() - size.height() - _MARGIN)
+        return QRect(x, y, size.width(), size.height())
+
+    def _target_pos(self) -> QPoint:
+        return self._target_rect(self.size()).topLeft()
 
     def reposition(self) -> None:
         self.move(self._target_pos())

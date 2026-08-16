@@ -5,14 +5,18 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+
 import os
-import numpy as np
+from typing import Any, Optional
+
 import moderngl
-from typing import Optional, Any
-from core.engine.engine import Engine
-from core.foundation.logger import Logger
+import numpy as np
+
 from core.assets.material import Material, MaterialLibrary
 from core.assets.texture_import_settings import TextureImportSettings
+from core.engine.engine import Engine
+from core.foundation.logger import Logger
+from core.foundation.progress import task_complete, task_set_detail, task_start
 
 
 class MaterialManager:
@@ -105,10 +109,20 @@ class MaterialManager:
                 w = max(1, int(w * scale))
                 h = max(1, int(h * scale))
                 img = img.resize((w, h), Image.LANCZOS)
-            tex = self._ctx.texture(img.size, 4, img.tobytes())
-            import_settings.apply_to_texture(tex)
-            self._texture_cache[abs_path] = (import_mtime, tex)
-            return tex
+            try:
+                file_size = os.path.getsize(abs_path)
+            except OSError:
+                file_size = 0
+            task_start("tex_load:" + abs_path, f"Loading texture {os.path.basename(abs_path)}...",
+                       total=float(file_size) if file_size else None, units="bytes")
+            try:
+                task_set_detail("tex_load:" + abs_path, f"{w}×{h}")
+                tex = self._ctx.texture(img.size, 4, img.tobytes())
+                import_settings.apply_to_texture(tex)
+                self._texture_cache[abs_path] = (import_mtime, tex)
+                return tex
+            finally:
+                task_complete("tex_load:" + abs_path)
         except Exception:
             return None
 
@@ -155,17 +169,26 @@ class MaterialManager:
                 cached_tex.release()
             except Exception:
                 pass
-        from core.assets.asset_importer import _get_thread_pool
+        from core.ecs.pool import asset as _get_asset_pool
+        try:
+            file_size = os.path.getsize(abs_path)
+        except OSError:
+            file_size = 0
+        task_start("tex_load:" + abs_path, f"Loading texture {os.path.basename(abs_path)}...",
+                   total=float(file_size) if file_size else None, units="bytes")
 
         def _task():
             try:
                 from PIL import Image
                 img = Image.open(abs_path).convert("RGBA")
-                with self._async_lock:
-                    self._pending_texture_queue.append((abs_path, callback, img))
-            except Exception:
+            except (ImportError, OSError, ValueError):
+                task_complete("tex_load:" + abs_path)
                 callback(None)
-        _get_thread_pool().submit(_task)
+                return
+            task_set_detail("tex_load:" + abs_path, f"{img.size[0]}×{img.size[1]}")
+            with self._async_lock:
+                self._pending_texture_queue.append((abs_path, callback, img))
+        _get_asset_pool().submit(_task)
 
     def process_texture_pending(self) -> None:
         if not self._pending_texture_queue:
@@ -188,7 +211,9 @@ class MaterialManager:
                 import_mtime = TextureImportSettings.import_mtime(abs_path)
                 self._texture_cache[abs_path] = (import_mtime, tex)
                 callback(tex)
+                task_complete("tex_load:" + abs_path)
             except Exception:
+                task_complete("tex_load:" + abs_path)
                 callback(None)
 
     # Maps URP-style/PBR property names to default shader uniform names

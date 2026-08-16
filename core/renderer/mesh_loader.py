@@ -16,6 +16,8 @@ from core.foundation.logger import Logger
 from core.foundation.progress import (
     notify_error,
     task_complete,
+    task_set_detail,
+    task_set_title,
     task_start,
     task_update,
 )
@@ -32,6 +34,14 @@ _MAX_PENDING_PER_FRAME = 16
 
 def _display_name(path: str) -> str:
     return os.path.basename(path.replace("\\", "/")) or path
+
+
+def _fmt_count(n: float) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{int(n)}"
 
 
 def _mesh_load_task(cache_key: str) -> str:
@@ -60,6 +70,8 @@ class MeshLoader:
         self._pending_mesh_queue: list = []
         self._render_callback = None
         self._loaded_generation: int = 0
+        self._batch_active: bool = False
+        self._built_count: int = 0
 
     def register_primitives(self):
         self._meshes["cube"] = make_cube_mesh()
@@ -134,6 +146,25 @@ class MeshLoader:
         from core.spatial.bvh import prebuild_mesh_bvh
         mesh_name = _display_name(cache_key.split("|")[0])
         prebuild_mesh_bvh(m.vertices, m.indices, title=f"Building BVH {mesh_name}...")
+        self._record_mesh_built(cache_key)
+
+    def _record_mesh_built(self, cache_key: str):
+        if cache_key not in self._pending_cache_keys:
+            return
+        if not self._batch_active:
+            total = len(self._pending_cache_keys)
+            if total < 2:
+                return
+            self._batch_active = True
+            self._built_count = 0
+            task_start("mesh_batch", "Building meshes…", fraction=0.0, total=float(total))
+        self._built_count += 1
+        total = len(self._pending_cache_keys) or 1
+        task_update(
+            "mesh_batch",
+            fraction=min(1.0, self._built_count / total),
+            detail=f"Built {self._built_count}/{total} meshes",
+        )
 
     def _resolve_path(self, key: str, file_path: str) -> str:
         if file_path and os.path.exists(file_path):
@@ -208,10 +239,11 @@ class MeshLoader:
                 size = None
             if size:
                 task_update(_mesh_load_task(cache_key), total=float(size), units="bytes")
-        from core.assets.asset_importer import load_obj_future, load_mesh_future
+        from core.assets.asset_importer import load_mesh_future, load_obj_future
         lower_path = path.lower()
 
         def _io_done(fut):
+            queued = False
             try:
                 try:
                     import_data = fut.result()
@@ -234,11 +266,19 @@ class MeshLoader:
                     import_data.vertices = (verts * s).ravel().astype(np.float32)
                     import_data.normals = norms.ravel().astype(np.float32)
                     import_data.is_error_mesh = True
+                if import_data is not None and len(import_data.vertices) > 0:
+                    task_set_detail(
+                        _mesh_load_task(cache_key),
+                        f"Imported {_fmt_count(len(import_data.vertices) / 3)} verts · "
+                        f"{_fmt_count(len(import_data.indices) / 3)} tris",
+                    )
                 with self._async_lock:
                     self._pending_mesh_queue.append((cache_key, import_data, scale, cp, fuvs))
                 self._on_async_load_complete()
+                queued = True
             finally:
-                task_complete(_mesh_load_task(cache_key))
+                if not queued:
+                    task_complete(_mesh_load_task(cache_key))
         if lower_path.endswith(".obj"):
             fut = load_obj_future(path)
         else:
@@ -274,18 +314,38 @@ class MeshLoader:
             m = self._build_mesh_data(import_data)
             if not m:
                 self._pending_cache_keys.discard(cache_key)
+                task_complete(_mesh_load_task(cache_key))
                 continue
+            task_set_title(_mesh_load_task(cache_key), f"Building {_display_name(cache_key.split('|')[0])}...")
             self._apply_transforms(m, cache_key, scale, cp, fuvs)
+            task_complete(_mesh_load_task(cache_key))
             self._loaded_generation += 1
+        self._finish_batch_if_drained()
+
+    def _finish_batch_if_drained(self):
+        if not self._batch_active:
+            return
+        with self._async_lock:
+            drained = not self._pending_mesh_queue and self._pending_async_loads <= 0
+        if drained:
+            task_complete("mesh_batch")
+            self._batch_active = False
 
     def bump_generation(self):
         self._loaded_generation += 1
 
     def clear_scene_data(self):
+        if self._batch_active:
+            task_complete("mesh_batch")
+            self._batch_active = False
         with self._async_lock:
+            pending_keys = list(self._pending_cache_keys)
             self._pending_mesh_queue.clear()
             self._pending_async_loads = 0
             self._pending_cache_keys.clear()
+        for key in pending_keys:
+            task_complete(_mesh_load_task(key))
+        self._built_count = 0
         for m in self._meshes.values():
             m.release()
         self._meshes.clear()

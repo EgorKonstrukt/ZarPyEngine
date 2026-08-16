@@ -17,6 +17,7 @@ from core.config.config import get_global_config
 from core.config.constants import PATH_FIELDS as _PATH_FIELDS
 from core.ecs.pool import general as _get_pool
 from core.foundation.profiler import Profiler as _Profiler
+from core.foundation.progress import task_complete, task_start
 
 if TYPE_CHECKING:
     from core.engine.engine_worker import GameWorker
@@ -189,46 +190,55 @@ class Engine:
 
         Logger.info("Zarin Engine initialized.")
     def load_scene(self, path: str) -> Optional[Scene]:
+        task_start("scene:load", f"Loading scene {os.path.basename(path)}...")
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            data["_source"] = path
-            self.resolve_scene_paths(data)
-            if self._scene:
-                self._plugin_manager.notify_scene_unloaded(self._scene)
-            from core.components.rendering.postfx.graphics_effect import GraphicsEffect
-            GraphicsEffect.cleanup_registry()
-            self._scene = Scene.deserialize(data, self._component_registry)
-            self._scene.path = path
-            self._scene.mark_clean()
-            self._plugin_manager.notify_scene_loaded(self._scene)
-            Logger.info(f"Scene loaded: {path}")
-            self._emit_event("scene_loaded", self._scene)
-            return self._scene
-        except Exception as e:
-            Logger.error(f"Failed to load scene '{path}': {e}", e)
-            return None
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data["_source"] = path
+                self.resolve_scene_paths(data)
+                if self._scene:
+                    self._plugin_manager.notify_scene_unloaded(self._scene)
+                from core.components.rendering.postfx.graphics_effect import GraphicsEffect
+                GraphicsEffect.cleanup_registry()
+                self._scene = Scene.deserialize(data, self._component_registry)
+                self._scene.path = path
+                self._scene.mark_clean()
+                self._plugin_manager.notify_scene_loaded(self._scene)
+                Logger.info(f"Scene loaded: {path}")
+                self._emit_event("scene_loaded", self._scene)
+                return self._scene
+            except Exception as e:
+                Logger.error(f"Failed to load scene '{path}': {e}", e)
+                return None
+        finally:
+            task_complete("scene:load")
     def load_scene_from_data(self, data: dict) -> Optional[Scene]:
+        task_start("scene:load_data", "Loading scene data...")
         try:
-            if self._scene:
-                self._plugin_manager.notify_scene_unloaded(self._scene)
-            from core.components.rendering.postfx.graphics_effect import GraphicsEffect
-            GraphicsEffect.cleanup_registry()
-            self._scene = Scene.deserialize(data, self._component_registry)
-            self._scene.mark_clean()
-            self._plugin_manager.notify_scene_loaded(self._scene)
-            Logger.info(f"Scene synced: {self._scene.name}")
-            self._emit_event("scene_loaded", self._scene)
-            return self._scene
-        except Exception as e:
-            Logger.error(f"Failed to load synced scene: {e}", e)
-            return None
+            try:
+                if self._scene:
+                    self._plugin_manager.notify_scene_unloaded(self._scene)
+                from core.components.rendering.postfx.graphics_effect import GraphicsEffect
+                GraphicsEffect.cleanup_registry()
+                self._scene = Scene.deserialize(data, self._component_registry)
+                self._scene.mark_clean()
+                self._plugin_manager.notify_scene_loaded(self._scene)
+                Logger.info(f"Scene synced: {self._scene.name}")
+                self._emit_event("scene_loaded", self._scene)
+                return self._scene
+            except Exception as e:
+                Logger.error(f"Failed to load synced scene: {e}", e)
+                return None
+        finally:
+            task_complete("scene:load_data")
     def save_scene(self, path: Optional[str] = None):
         if not self._scene: return
         save_path = path or self._scene.path
         if not save_path:
             Logger.warning("No path for scene save.")
             return
+        task_start("scene:save", f"Saving scene {os.path.basename(save_path)}...")
         try:
             data = self._scene.serialize()
             self.relativize_scene_paths(data)
@@ -241,6 +251,8 @@ class Engine:
             self._emit_event("scene_saved", self._scene)
         except Exception as e:
             Logger.error(f"Failed to save scene: {e}", e)
+        finally:
+            task_complete("scene:save")
     def new_scene(self, name: str = "NewScene") -> Scene:
         if self._scene:
             self._plugin_manager.notify_scene_unloaded(self._scene)

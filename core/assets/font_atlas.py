@@ -5,11 +5,14 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
 import os
 import platform
 from typing import Optional
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+from core.foundation.progress import task_complete, task_set_detail, task_start
 
 
 _SYSTEM_FONT_CANDIDATES: list[str] = []
@@ -108,6 +111,14 @@ class FontAtlas:
         return ImageFont.truetype(path, self.base_size)
 
     def _build(self):
+        task_start("font_atlas", "Building font atlas…", fraction=None)
+        try:
+            self._build_impl()
+            task_set_detail("font_atlas", f"{len(self.glyphs)} glyphs")
+        finally:
+            task_complete("font_atlas")
+
+    def _build_impl(self):
         font = self._load_font()
         ascent, descent = font.getmetrics()
         self.ascender = float(ascent)

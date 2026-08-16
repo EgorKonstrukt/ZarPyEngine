@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 import os
-import threading
 import queue
-import numpy as np
-import moderngl
+import threading
 from dataclasses import dataclass
+
+import moderngl
+import numpy as np
+
 from core.foundation.logger import Logger
+from core.foundation.progress import task_complete, task_start, task_update
 from core.shaders.compute_shader import compile_compute_shader
 
 _SHADER_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "terrain_gen.compute")
@@ -38,6 +41,8 @@ class TerrainGenWorker:
         self._last_res = 0
         self._float_uniforms: list[str] = []
         self._int_uniforms: list[str] = []
+        self._batch_active: bool = False
+        self._batch_done: int = 0
 
     def start(self):
         if self._thread is not None and self._thread.is_alive():
@@ -119,12 +124,27 @@ class TerrainGenWorker:
                 continue
             if job is None:
                 break
+            if not self._batch_active and self._req.qsize() >= 1:
+                self._batch_active = True
+                self._batch_done = 0
+                task_start("terrain:gen", "Generating terrain…", fraction=0.0, total=float(1 + self._req.qsize()))
             try:
                 arr = self._generate(job, _DEFAULTS)
                 if arr is not None:
                     self._result.put((job.token, arr))
             except Exception as e:
                 Logger.error(f"TerrainGenWorker: generation error: {e}", e)
+            if self._batch_active:
+                self._batch_done += 1
+                total = self._batch_done + self._req.qsize()
+                task_update(
+                    "terrain:gen",
+                    fraction=min(1.0, self._batch_done / total),
+                    detail=f"Generated {self._batch_done}/{total} chunks",
+                )
+                if self._req.qsize() == 0:
+                    task_complete("terrain:gen")
+                    self._batch_active = False
         try:
             if self._buf is not None:
                 self._buf.release()

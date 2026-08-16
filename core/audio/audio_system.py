@@ -15,6 +15,7 @@ import tempfile
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
 from core.ecs.pool import audio as _get_audio_pool
+from core.foundation.progress import task_complete, task_start
 
 try:
     import openal as al
@@ -420,15 +421,25 @@ class AudioSystem:
             except Exception:
                 pass
             self._clips.pop(abs_path, None)
-        clip = AudioClip()
+        task_id = "audio_load:" + abs_path
         try:
-            clip.load_from_file(abs_path)
-            clip.create_buffer()
-            self._clips[abs_path] = (imtime, clip)
-        except Exception as e:
-            from core.foundation.logger import Logger
-            Logger.error(f"Failed to load audio clip '{path}': {e}")
-        return clip
+            file_size = os.path.getsize(abs_path)
+        except OSError:
+            file_size = 0
+        task_start(task_id, f"Loading audio {os.path.basename(abs_path)}...",
+                   total=float(file_size) if file_size else None, units="bytes")
+        try:
+            clip = AudioClip()
+            try:
+                clip.load_from_file(abs_path)
+                clip.create_buffer()
+                self._clips[abs_path] = (imtime, clip)
+            except Exception as e:
+                from core.foundation.logger import Logger
+                Logger.error(f"Failed to load audio clip '{path}': {e}")
+            return clip
+        finally:
+            task_complete(task_id)
 
     def load_clip_async(self, path: str, callback):
         abs_path = os.path.abspath(path)
@@ -444,6 +455,13 @@ class AudioSystem:
             except Exception:
                 pass
             self._clips.pop(abs_path, None)
+        task_id = "audio_load:" + abs_path
+        try:
+            file_size = os.path.getsize(abs_path)
+        except OSError:
+            file_size = 0
+        task_start(task_id, f"Loading audio {os.path.basename(abs_path)}...",
+                   total=float(file_size) if file_size else None, units="bytes")
         def _load():
             clip = AudioClip()
             try:
@@ -455,6 +473,7 @@ class AudioSystem:
                 Logger.error(f"Failed to load audio clip '{path}': {e}")
                 clip = None
                 self._clips.pop(abs_path, None)
+            task_complete(task_id)
             callback(clip)
         _get_audio_pool().submit(_load)
 
