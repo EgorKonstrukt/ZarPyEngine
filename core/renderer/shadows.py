@@ -99,6 +99,7 @@ class ShadowRenderer:
         self._shadow_vao_cache: dict[tuple[int, int], moderngl.VertexArray] = {}
         self._prog_member_cache: dict[int, frozenset] = {}
         self._shadow_inst_vbo: dict[tuple[int, int], moderngl.Buffer] = {}
+        self._shadow_inst_vbo_fp: dict[tuple[int, int], tuple] = {}
         self._skinned_bone_ssbo: Optional[Any] = None
         self._skinned_bone_ssbo_cap: int = 0
         self._pending_skinned: list = []
@@ -219,12 +220,20 @@ class ShadowRenderer:
 
     def _build_shadow_instance_vbo(self, key: tuple[int, int],
                                    model_matrices: list) -> moderngl.Buffer:
-        data = Mat4.batch_to_f32(model_matrices).tobytes()
+        fp = (len(model_matrices), tuple(id(m) for m in model_matrices))
         cached = self._shadow_inst_vbo.get(key)
+        if cached is not None and self._shadow_inst_vbo_fp.get(key) == fp:
+            return cached
+        try:
+            from core._render_utils import batch_mat4_to_f32_flat
+            data = batch_mat4_to_f32_flat(model_matrices).tobytes()
+        except ImportError:
+            data = Mat4.batch_to_f32(model_matrices).tobytes()
         if cached is not None:
             if cached.size >= len(data):
                 try:
                     cached.write(data)
+                    self._shadow_inst_vbo_fp[key] = fp
                     return cached
                 except Exception:
                     pass
@@ -236,6 +245,7 @@ class ShadowRenderer:
                 except Exception: pass
         vbo = self._ctx.buffer(data)
         self._shadow_inst_vbo[key] = vbo
+        self._shadow_inst_vbo_fp[key] = fp
         return vbo
 
     def _get_shadow_vao(self, prog: moderngl.Program, mesh,
@@ -766,6 +776,7 @@ class ShadowRenderer:
             except Exception:
                 pass
         self._shadow_inst_vbo.clear()
+        self._shadow_inst_vbo_fp.clear()
         self._shadow_vao_cache.clear()
         self._prog_member_cache.clear()
         if self._skinned_bone_ssbo is not None:

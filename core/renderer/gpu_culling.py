@@ -68,7 +68,12 @@ class GpuStorage:
             return
         self._last_upload_version = version
         self.ensure_capacity(len(matrices))
-        self._world_mat_ssbo.write(Mat4.batch_to_f32(matrices).tobytes())
+        try:
+            from core._render_utils import batch_mat4_to_f32_flat
+            data = batch_mat4_to_f32_flat(matrices).tobytes()
+        except ImportError:
+            data = Mat4.batch_to_f32(matrices).tobytes()
+        self._world_mat_ssbo.write(data)
         if self._culling and len(bounding_radii) == len(matrices):
             self._culling.upload_bounding(matrices, bounding_radii)
 

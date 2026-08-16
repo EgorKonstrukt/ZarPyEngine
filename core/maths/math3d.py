@@ -75,7 +75,7 @@ class Mat4:
     def inverted(self): return Mat4(np.linalg.inv(self._d))
     def to_array(self): return self._d.copy()
     def to_f32(self):
-        return self._d.T.astype(np.float32).flatten(order='F')
+        return self._d.astype(np.float32).reshape(-1)
 
     @staticmethod
     def batch_to_f32(matrices: list[Mat4]) -> np.ndarray:

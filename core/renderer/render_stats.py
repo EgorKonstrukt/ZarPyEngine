@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc as _gc
 import subprocess
+import threading
 import time
 
 from PyQt6.QtCore import QRect, Qt
@@ -173,6 +174,27 @@ def _query_vram_mb():
 
 _expensive = {}
 _expensive_t = 0.0
+_vram = (0.0, 0.0)
+_vram_t = 0.0
+_vram_busy = False
+
+
+def _refresh_vram_async():
+    global _vram_busy
+    if _vram_busy:
+        return
+    _vram_busy = True
+
+    def worker():
+        global _vram, _vram_t, _vram_busy
+        try:
+            _vram = _query_vram_mb()
+        except Exception:
+            pass
+        _vram_t = time.time()
+        _vram_busy = False
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def collect_expensive_stats() -> dict:
@@ -181,7 +203,9 @@ def collect_expensive_stats() -> dict:
     if _expensive and (now - _expensive_t) < 5.0:
         return _expensive
     _expensive_t = now
-    vram_used, vram_total = _query_vram_mb()
+    if (now - _vram_t) > 5.0:
+        _refresh_vram_async()
+    vram_used, vram_total = _vram
     gc0, gc1, gc2 = _gc.get_count()
     dsp_load = 0.0
     active_sounds = 0

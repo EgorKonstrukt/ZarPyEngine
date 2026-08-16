@@ -397,7 +397,8 @@ class TracemallocPanel(QDockWidget):
                 self._update_tracemalloc()
 
         if tick % 3 == 0:
-            self._update_object_counts()
+            if self.isVisible():
+                self._update_object_counts()
 
     def _update_gc_stats(self):
         counts = gc.get_count()
