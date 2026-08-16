@@ -31,6 +31,8 @@ def read_shader(name: str) -> str:
 class MeshData:
     """GPU-ready mesh with vertex buffers, index buffers and VAO cache."""
 
+    outline_max_triangles: int = 40000
+
     def __init__(self):
         self.vertices: np.ndarray = np.array([], dtype=np.float32)
         self.indices: np.ndarray = np.array([], dtype=np.uint32)
@@ -192,11 +194,14 @@ class MeshData:
         )
 
     def render_outline(self):
-        if self._outline_vao:
-            try:
-                self._outline_vao.render()
-            except Exception as e:
-                Logger.error("MeshData.render_outline VAO render failed", e)
+        if not self._outline_vao:
+            return
+        if len(self.indices) // 3 > self.outline_max_triangles:
+            return
+        try:
+            self._outline_vao.render()
+        except Exception as e:
+            Logger.error("MeshData.render_outline VAO render failed", e)
 
     def release(self):
         if self._vbo:

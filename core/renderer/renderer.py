@@ -365,6 +365,8 @@ class Renderer:
         sel = config.get("rendering.selection_outline", self._selection_outline_color)
         self._selection_outline_color = [sel[0], sel[1], sel[2], sel[3]]
         self._selection_outline_thickness = config.get("rendering.selection_outline_thickness", self._selection_outline_thickness)
+        from core.renderer.mesh_data import MeshData
+        MeshData.outline_max_triangles = int(config.get("rendering.selection_outline_max_tris", MeshData.outline_max_triangles))
         self._max_lights = config.get("rendering.max_lights", self._max_lights)
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)

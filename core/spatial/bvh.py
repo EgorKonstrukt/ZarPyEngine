@@ -157,17 +157,24 @@ class BVH:
 
         ctx = _BuildCtx(n_tris * 2 + 1, n_tris)
 
+        def _alloc_node(ctx):
+            with ctx.lock:
+                ni = ctx.node_count
+                ctx.node_count += 1
+            return ni
+
         def _make_leaf(ctx, tris):
-            ni = ctx.node_count
-            ctx.node_count += 1
+            ni = _alloc_node(ctx)
             bmin = self._tri_bmin[tris].min(axis=0)
             bmax = self._tri_bmax[tris].max(axis=0)
             ctx.nodes[ni, 0:3] = bmin
             ctx.nodes[ni, 3:6] = bmax
-            ctx.nodes[ni, 6] = float(ctx.tri_offset)
+            with ctx.lock:
+                tri_start = ctx.tri_offset
+                ctx.tri_offset += len(tris)
+            ctx.nodes[ni, 6] = float(tri_start)
             ctx.nodes[ni, 7] = -float(len(tris)) - 1.0
-            ctx.tri_indices[ctx.tri_offset:ctx.tri_offset + len(tris)] = tris.astype(np.uint32)
-            ctx.tri_offset += len(tris)
+            ctx.tri_indices[tri_start:tri_start + len(tris)] = tris.astype(np.uint32)
             return ni
 
         def _sah_build(tris, depth=0):
@@ -269,21 +276,20 @@ class BVH:
 
             use_parallel = depth == 0 and n >= _PAR_THRESH
             if use_parallel:
-                with ctx.lock:
-                    ni = ctx.node_count
-                    ctx.node_count += 1
-                ctx.nodes[ni, 0:3] = bmin
-                ctx.nodes[ni, 3:6] = bmax
                 pool = _get_bvh_parallel_pool()
                 lf = pool.submit(_sah_build, left_tris, depth + 1)
                 rf = pool.submit(_sah_build, right_tris, depth + 1)
-                ctx.nodes[ni, 6] = float(lf.result())
-                ctx.nodes[ni, 7] = float(rf.result())
+                lc = lf.result()
+                rc = rf.result()
+                ni = _alloc_node(ctx)
+                ctx.nodes[ni, 0:3] = bmin
+                ctx.nodes[ni, 3:6] = bmax
+                ctx.nodes[ni, 6] = float(lc)
+                ctx.nodes[ni, 7] = float(rc)
             else:
                 lc = _sah_build(left_tris, depth + 1)
                 rc = _sah_build(right_tris, depth + 1)
-                ni = ctx.node_count
-                ctx.node_count += 1
+                ni = _alloc_node(ctx)
                 ctx.nodes[ni, 0:3] = bmin
                 ctx.nodes[ni, 3:6] = bmax
                 ctx.nodes[ni, 6] = float(lc)

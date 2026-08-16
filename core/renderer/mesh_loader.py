@@ -101,6 +101,9 @@ class MeshLoader:
             uvs_arr = m.uvs.reshape(-1, 2)
             uvs_arr[:, 1] = 1.0 - uvs_arr[:, 1]
             m.uvs = uvs_arr.flatten()
+        m.vertices = np.ascontiguousarray(m.vertices, dtype=np.float32)
+        if len(m.indices) > 0:
+            m.indices = np.ascontiguousarray(m.indices, dtype=np.uint32)
         m.compute_aabb()
         m.build_gl(self._ctx, self._default_prog)
         if self._outline_prog:

@@ -288,29 +288,29 @@ def _test_mesh_hit(wm, ro, rd, mesh):
     local_o = ro @ wm_inv
     local_d = rd @ wm_inv
     if mesh.indices is not None and len(mesh.indices) > 0:
-        from core.spatial.bvh import get_mesh_bvh, get_mesh_bvh_sync
-        bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
+        verts = mesh.vertices
+        if verts.dtype != np.float32 or not verts.flags.c_contiguous:
+            verts = np.ascontiguousarray(verts, dtype=np.float32)
+            if verts is not mesh.vertices:
+                mesh.vertices = verts
+        indices = mesh.indices
+        if indices.dtype != np.uint32:
+            indices = indices.astype(np.uint32)
+            mesh.indices = indices
+        elif not indices.flags.c_contiguous:
+            indices = np.ascontiguousarray(indices)
+            mesh.indices = indices
+        from core.spatial.bvh import get_mesh_bvh
+        bvh = get_mesh_bvh(verts, indices)
         if bvh and bvh.nodes:
             return bvh.intersect(local_o[0], local_o[1], local_o[2],
                                  local_d[0], local_d[1], local_d[2],
-                                 mesh.vertices, mesh.indices)
+                                 verts, indices)
         if _raycast_cy is not None:
-            verts = np.ascontiguousarray(mesh.vertices)
-            if verts.dtype == np.float32 and verts.ndim == 2:
-                indices = mesh.indices
-                if indices.dtype != np.uint32:
-                    indices = indices.astype(np.uint32)
-                else:
-                    indices = np.ascontiguousarray(indices)
-                return _raycast_cy.triangles_intersect(
-                    verts.reshape(-1), indices,
-                    float(local_o[0]), float(local_o[1]), float(local_o[2]),
-                    float(local_d[0]), float(local_d[1]), float(local_d[2]))
-        bvh = get_mesh_bvh_sync(mesh.vertices, mesh.indices)
-        if bvh and bvh.nodes:
-            return bvh.intersect(local_o[0], local_o[1], local_o[2],
-                                 local_d[0], local_d[1], local_d[2],
-                                 mesh.vertices, mesh.indices)
+            return _raycast_cy.triangles_intersect(
+                verts.reshape(-1), indices,
+                float(local_o[0]), float(local_o[1]), float(local_o[2]),
+                float(local_d[0]), float(local_d[1]), float(local_d[2]))
     return _ray_aabb_min(local_o[0], local_o[1], local_o[2],
                          local_d[0], local_d[1], local_d[2],
                          mesh.aabb_min[0], mesh.aabb_min[1], mesh.aabb_min[2],
