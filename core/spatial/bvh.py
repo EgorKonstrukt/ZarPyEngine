@@ -111,7 +111,7 @@ def _moller_trumbore(ox, oy, oz, dx, dy, dz, ax, ay, az, bx, by, bz, cx, cy, cz)
 class BVH:
     __slots__ = ('_nodes', '_tri_indices', '_tri_bmin', '_tri_bmax', '_centroids',
                  '_vertices', '_indices', '_vert_key', '_idx_key', '_cached_depths',
-                 '_node_views')
+                 '_node_views', '_tri_v0', '_tri_v1', '_tri_v2')
 
     def __init__(self, vertices: np.ndarray, indices: np.ndarray):
         self._vertices = vertices
@@ -128,6 +128,9 @@ class BVH:
             self._tri_bmin = np.empty((0, 3), dtype=np.float32)
             self._tri_bmax = np.empty((0, 3), dtype=np.float32)
             self._centroids = np.empty((0, 3), dtype=np.float32)
+            self._tri_v0 = np.array([], dtype=np.uint32)
+            self._tri_v1 = np.array([], dtype=np.uint32)
+            self._tri_v2 = np.array([], dtype=np.uint32)
             return
 
         verts3 = vertices.reshape(-1, 3)
@@ -141,6 +144,12 @@ class BVH:
 
         tri_order = np.arange(n_tris, dtype=np.intp)
         self._build(tri_order, n_tris)
+
+        tri_u32 = np.asarray(indices, dtype=np.uint32)
+        slot_idx = self._tri_indices.astype(np.intp) * 3
+        self._tri_v0 = tri_u32[slot_idx]
+        self._tri_v1 = tri_u32[slot_idx + 1]
+        self._tri_v2 = tri_u32[slot_idx + 2]
 
     def _build(self, tri_order, n_tris):
         import sys
@@ -295,6 +304,11 @@ class BVH:
             return -1.0
         v_arr = self._vertices if vertices is None else vertices
         i_arr = self._indices if indices is None else indices
+        if (_raycast_mod is not None and v_arr is self._vertices and i_arr is self._indices
+                and v_arr.dtype == np.float32 and v_arr.flags.c_contiguous):
+            return _raycast_mod.bvh_intersect(
+                nodes, self._tri_v0, self._tri_v1, self._tri_v2,
+                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz)
         verts3 = v_arr.reshape(-1, 3)
 
         best_t = float('inf')
@@ -376,6 +390,11 @@ class BVH:
             return False
         v_arr = self._vertices if vertices is None else vertices
         i_arr = self._indices if indices is None else indices
+        if (_raycast_mod is not None and v_arr is self._vertices and i_arr is self._indices
+                and v_arr.dtype == np.float32 and v_arr.flags.c_contiguous):
+            return _raycast_mod.bvh_intersect_any(
+                nodes, self._tri_v0, self._tri_v1, self._tri_v2,
+                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz)
         verts3 = v_arr.reshape(-1, 3)
 
         stack = np.empty(64, dtype=np.intp)
@@ -560,6 +579,11 @@ try:
 except ImportError:
     _USE_CYTHON_BVH = False
 
+try:
+    from core import _raycast as _raycast_mod
+except ImportError:
+    _raycast_mod = None
+
 
 _BVH_CACHE: dict[int, Union[BVH, Future, None]] = {}
 _BVH_LOCK = threading.Lock()
@@ -602,6 +626,26 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
                 _BVH_CACHE[key] = result
             return result
         return None
+    return entry
+
+
+def get_mesh_bvh_sync(vertices: np.ndarray, indices: np.ndarray, timeout: float = 60.0) -> BVH | None:
+    key = id(vertices)
+    with _BVH_LOCK:
+        if key not in _BVH_CACHE:
+            if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+                _BVH_CACHE[key] = None
+            else:
+                _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices)
+        entry = _BVH_CACHE[key]
+    if isinstance(entry, Future):
+        try:
+            result = entry.result(timeout=timeout)
+        except Exception:
+            result = None
+        with _BVH_LOCK:
+            _BVH_CACHE[key] = result
+        return result
     return entry
 
 

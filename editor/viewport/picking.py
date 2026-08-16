@@ -10,6 +10,11 @@ import numpy as np
 from core.maths.math3d import Vec3
 from editor.viewport.projection import screen_to_ray, world_to_screen
 
+try:
+    from core import _raycast as _raycast_cy
+except ImportError:
+    _raycast_cy = None
+
 _font_atlas_cache: dict[tuple[str, int], "FontAtlas"] = {}
 
 
@@ -207,6 +212,17 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
     return (bmin, bmax)
 
 
+_mesh_lookup_cache: dict[tuple[int, int], dict] = {}
+_MESH_LOOKUP_SENTINEL = object()
+
+
+def _resolve_mesh_key(meshes, prefix: str):
+    for key, m in meshes.items():
+        if key == prefix or key.startswith(prefix + "|"):
+            return key
+    return _MESH_LOOKUP_SENTINEL
+
+
 def _get_mesh_for(entity, mesh_name: str, mesh_path: str):
     from core.engine.engine import Engine
     engine = Engine.instance()
@@ -229,13 +245,25 @@ def _get_mesh_for(entity, mesh_name: str, mesh_path: str):
         mesh = meshes.get(mesh_path)
         if mesh is not None:
             return mesh
-        for key, m in meshes.items():
-            if key == mesh_path or key.startswith(mesh_path + "|"):
-                return m
+    sig = (id(meshes), len(meshes))
+    cache = _mesh_lookup_cache.get(sig)
+    if cache is None:
+        cache = {}
+        _mesh_lookup_cache[sig] = cache
+    if mesh_path:
+        key = cache.get(("p", mesh_path))
+        if key is None:
+            key = _resolve_mesh_key(meshes, mesh_path)
+            cache[("p", mesh_path)] = key
+        if key is not _MESH_LOOKUP_SENTINEL:
+            return meshes[key]
     if mesh_name and mesh_name != "cube":
-        for key, m in meshes.items():
-            if key.startswith(mesh_name + "|"):
-                return m
+        key = cache.get(("n", mesh_name))
+        if key is None:
+            key = _resolve_mesh_key(meshes, mesh_name)
+            cache[("n", mesh_name)] = key
+        if key is not _MESH_LOOKUP_SENTINEL:
+            return meshes[key]
     return meshes.get("cube")
 
 
@@ -256,12 +284,29 @@ def _test_mesh_hit(wm, ro, rd, mesh):
                       bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2])
     if d < 0:
         return -1.0
-    wm_inv = np.linalg.inv(wm)
+    wm_inv = _raycast_cy.inv_affine4(wm) if _raycast_cy is not None else np.linalg.inv(wm)
     local_o = ro @ wm_inv
     local_d = rd @ wm_inv
     if mesh.indices is not None and len(mesh.indices) > 0:
-        from core.spatial.bvh import get_mesh_bvh
+        from core.spatial.bvh import get_mesh_bvh, get_mesh_bvh_sync
         bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
+        if bvh and bvh.nodes:
+            return bvh.intersect(local_o[0], local_o[1], local_o[2],
+                                 local_d[0], local_d[1], local_d[2],
+                                 mesh.vertices, mesh.indices)
+        if _raycast_cy is not None:
+            verts = np.ascontiguousarray(mesh.vertices)
+            if verts.dtype == np.float32 and verts.ndim == 2:
+                indices = mesh.indices
+                if indices.dtype != np.uint32:
+                    indices = indices.astype(np.uint32)
+                else:
+                    indices = np.ascontiguousarray(indices)
+                return _raycast_cy.triangles_intersect(
+                    verts.reshape(-1), indices,
+                    float(local_o[0]), float(local_o[1]), float(local_o[2]),
+                    float(local_d[0]), float(local_d[1]), float(local_d[2]))
+        bvh = get_mesh_bvh_sync(mesh.vertices, mesh.indices)
         if bvh and bvh.nodes:
             return bvh.intersect(local_o[0], local_o[1], local_o[2],
                                  local_d[0], local_d[1], local_d[2],
@@ -326,6 +371,64 @@ def _test_entity_pick(entity, ro, rd, ray_origin, ray_dir):
     return d if d > 0 else -1.0
 
 
+def _mesh_of_entity(entity):
+    from core.components.rendering.renderers.mesh_filter import MeshFilter
+    from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+    from core.components.rendering.renderers.skinned_mesh_renderer import SkinnedMeshRenderer
+    from core.components.physics.mesh_collider import MeshCollider
+    mf = entity.get_component(MeshFilter)
+    mr = entity.get_component(MeshRenderer)
+    mesh = None
+    if mf:
+        m = _get_mesh_for(entity, mf.mesh_name or "cube", mf.mesh_path)
+        if m is not None and mr and mr.enabled:
+            mesh = m
+    if mesh is None:
+        smr = entity.get_component(SkinnedMeshRenderer)
+        if smr and smr.enabled:
+            m = _get_mesh_for(entity, smr.mesh_name or "cube", smr.mesh_path)
+            if m is not None:
+                mesh = m
+    if mesh is None:
+        mc = entity.get_component(MeshCollider)
+        if mc:
+            mf2 = entity.get_component(MeshFilter)
+            if mf2:
+                m = _get_mesh_for(entity, mf2.mesh_name or "cube", mf2.mesh_path)
+                if m is not None and m.indices is not None and len(m.indices) > 0:
+                    mesh = m
+    return mesh
+
+
+def _batch_mesh_aabb_miss(entities, ro, rd) -> set:
+    if _raycast_cy is None:
+        return set()
+    idx = []
+    bmins = []
+    bmaxs = []
+    wms = []
+    for i, entity in enumerate(entities):
+        mesh = _mesh_of_entity(entity)
+        if mesh is None:
+            continue
+        t = entity.transform
+        if not t:
+            continue
+        idx.append(i)
+        bmins.append(mesh.aabb_min)
+        bmaxs.append(mesh.aabb_max)
+        wms.append(t.world_matrix._d)
+    if not idx:
+        return set()
+    wmn, wmx = _raycast_cy.world_aabbs(
+        np.array(bmins, dtype=np.float64),
+        np.array(bmaxs, dtype=np.float64),
+        np.array(wms, dtype=np.float64),
+    )
+    hits = _raycast_cy.ray_aabbs(ro[0], ro[1], ro[2], rd[0], rd[1], rd[2], wmn, wmx)
+    return {idx[i] for i in range(len(idx)) if not hits[i]}
+
+
 def pick_entity(vp, sx: int, sy: int):
     scene = vp._engine.scene
     if not scene:
@@ -346,42 +449,12 @@ def pick_entity(vp, sx: int, sy: int):
             best_dist = d
             best_entity = entity
     all_ents = scene.get_all_entities()
-    for entity in all_ents:
-        if entity.id in candidate_ids or not entity.active:
+    active = [e for e in all_ents if e.active]
+    miss = _batch_mesh_aabb_miss(active, ro, rd)
+    for i, entity in enumerate(active):
+        if entity.id in candidate_ids or i in miss:
             continue
         d = _test_entity_pick(entity, ro, rd, ray_origin, ray_dir)
-        if d > 0 and d < best_dist:
-            best_dist = d
-            best_entity = entity
-    if best_entity is not None:
-        return best_entity
-    for entity in all_ents:
-        if entity.id in candidate_ids or not entity.active:
-            continue
-        from core.components.transform import Transform
-        t = entity.transform
-        if not t:
-            continue
-        from core.components.rendering.renderers.mesh_filter import MeshFilter
-        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
-        from core.components.physics.mesh_collider import MeshCollider
-        from core.components.physics.box_collider import BoxCollider
-        from core.components.physics.sphere_collider import SphereCollider
-        from core.components.rendering.renderers.sprite_renderer import SpriteRenderer
-        mf = entity.get_component(MeshFilter)
-        mr = entity.get_component(MeshRenderer)
-        mc = entity.get_component(MeshCollider)
-        bc = entity.get_component(BoxCollider)
-        sc = entity.get_component(SphereCollider)
-        sr = entity.get_component(SpriteRenderer)
-        if mf or mr or mc or bc or sc or sr:
-            continue
-        half = 0.5
-        wp = t.position
-        d = _ray_aabb_min(ray_origin.x, ray_origin.y, ray_origin.z,
-                          ray_dir.x, ray_dir.y, ray_dir.z,
-                          wp.x - half, wp.y - half, wp.z - half,
-                          wp.x + half, wp.y + half, wp.z + half)
         if d > 0 and d < best_dist:
             best_dist = d
             best_entity = entity
@@ -409,8 +482,10 @@ def pick_entity_hit(vp, sx: int, sy: int):
             best_dist = d
             best_entity = entity
     all_ents = scene.get_all_entities()
-    for entity in all_ents:
-        if entity.id in candidate_ids or not entity.active:
+    active = [e for e in all_ents if e.active]
+    miss = _batch_mesh_aabb_miss(active, ro, rd)
+    for i, entity in enumerate(active):
+        if entity.id in candidate_ids or i in miss:
             continue
         d = _test_entity_pick(entity, ro, rd, ray_origin, ray_dir)
         if d > 0 and d < best_dist:
@@ -456,21 +531,91 @@ def pick_entities_in_rect(vp, rx: int, ry: int, rw: int, rh: int) -> list:
     scene = vp._engine.scene
     if not scene:
         return []
-    result = []
-    from core.components.transform import Transform
+    entities = []
+    boxes = []
     for entity in scene.get_all_entities():
         if not entity.active:
             continue
         t = entity.transform
         if not t:
             continue
-        saabb = _screen_aabb_of(vp, entity)
-        if saabb is None:
-            sp = world_to_screen(vp, t.position)
-            if sp and rx <= sp[0] <= rx + rw and ry <= sp[1] <= ry + rh:
+        entities.append(entity)
+        boxes.append(_world_aabb_of(entity))
+    if not entities:
+        return []
+    w = float(vp.width())
+    h = float(vp.height())
+    aspect = w / max(1.0, h)
+    vp_mat = (vp._cam.get_view_matrix() * vp._cam.get_projection_matrix(aspect))._d
+
+    corner_rows = []
+    corner_off = []
+    pos_rows = []
+    off = 0
+    for i, (entity, box) in enumerate(zip(entities, boxes)):
+        t = entity.transform
+        p = t.position
+        pos_rows.append((p.x, p.y, p.z))
+        if box is None:
+            corner_off.append(-1)
+            continue
+        (ax, ay, az), (bx, by, bz) = box
+        corner_rows.extend([
+            (ax, ay, az), (bx, ay, az), (ax, by, az), (ax, ay, bz),
+            (bx, by, az), (bx, ay, bz), (ax, by, bz), (bx, by, bz),
+        ])
+        corner_off.append(off)
+        off += 8
+
+    if _raycast_cy is not None:
+        pts = np.array(corner_rows + pos_rows, dtype=np.float64)
+        sx, sy, ok = _raycast_cy.project_points(pts, vp_mat, w, h)
+    else:
+        pts = np.array(corner_rows + pos_rows, dtype=np.float64)
+        sx = np.empty(len(pts), dtype=np.float64)
+        sy = np.empty(len(pts), dtype=np.float64)
+        ok = np.zeros(len(pts), dtype=np.uint8)
+        for i in range(len(pts)):
+            sp = world_to_screen(vp, Vec3(pts[i][0], pts[i][1], pts[i][2]))
+            if sp is not None:
+                sx[i] = sp[0]
+                sy[i] = sp[1]
+                ok[i] = 1
+
+    n_corner = off
+    result = []
+    for i, entity in enumerate(entities):
+        c_off = corner_off[i]
+        if c_off < 0:
+            pi = n_corner + i
+            if ok[pi] and rx <= sx[pi] <= rx + rw and ry <= sy[pi] <= ry + rh:
                 result.append(entity)
             continue
-        ex1, ey1, ex2, ey2 = saabb
-        if ex1 <= rx + rw and ex2 >= rx and ey1 <= ry + rh and ey2 >= ry:
+        sx_min = float('inf')
+        sy_min = float('inf')
+        sx_max = float('-inf')
+        sy_max = float('-inf')
+        any_ok = False
+        for k in range(8):
+            pi = c_off + k
+            if not ok[pi]:
+                continue
+            any_ok = True
+            px = sx[pi]
+            py = sy[pi]
+            if px < sx_min:
+                sx_min = px
+            if px > sx_max:
+                sx_max = px
+            if py < sy_min:
+                sy_min = py
+            if py > sy_max:
+                sy_max = py
+        if not any_ok:
+            pi = n_corner + i
+            if ok[pi] and rx <= sx[pi] <= rx + rw and ry <= sy[pi] <= ry + rh:
+                result.append(entity)
+            continue
+        if sx_min <= rx + rw and sx_max >= rx and sy_min <= ry + rh and sy_max >= ry:
             result.append(entity)
     return result
