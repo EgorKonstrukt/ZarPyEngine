@@ -688,6 +688,16 @@ class SceneViewport(QOpenGLWidget):
             self._fps_frames = 0
         if not self._ctx or not self._renderer:
             return
+        if getattr(self._engine, 'play_mode', False):
+            from core.config.config import get_global_config
+            if get_global_config().get("rendering.play_viewport_throttle", "editor") == "editor":
+                mw = getattr(self, '_mw', None)
+                pd = getattr(mw, '_play_dock', None) if mw is not None else None
+                if pd is not None and pd.isVisible():
+                    step = max(2, int(get_global_config().get("rendering.play_viewport_throttle_step", 2)))
+                    self._throttle_count = getattr(self, '_throttle_count', 0) + 1
+                    if self._throttle_count % step:
+                        return
         eng = self._engine
         if not self._in_update:
             dt = now - self._last_frame_time

@@ -119,6 +119,8 @@ FIELD_TOOLTIPS = {
     "rendering.tick_rate": "Game logic update rate (ticks per second)",
     "rendering.fixed_tick_rate": "Physics fixed update rate (ticks per second)",
     "rendering.max_lights": "Maximum number of dynamic lights",
+    "rendering.play_viewport_throttle": "Play mode dual-viewport throttle: editor, game, or off",
+    "rendering.play_viewport_throttle_step": "Play mode throttle rate (render every Nth frame)",
     "gizmo.handle_size": "Gizmo handle size in world units",
     "gizmo.base_axis_length": "Length of gizmo axis arrows",
     "gizmo.plane_handle_size": "Size of plane translation handles",
@@ -255,6 +257,7 @@ _FIELD_RANGES = {
     "rendering.tick_rate": (30.0, 1000.0),
     "rendering.fixed_tick_rate": (10.0, 500.0),
     "rendering.max_lights": (1, 64),
+    "rendering.play_viewport_throttle_step": (2, 16),
     "gizmo.handle_size": (0.01, 2.0),
     "gizmo.base_axis_length": (0.1, 10.0),
     "gizmo.plane_handle_size": (0.02, 2.0),
@@ -823,6 +826,12 @@ class SettingsDialog(QDialog):
             cb = QComboBox()
             cb.addItems(["metadata", "content"])
             cb.setCurrentText(self._config.get(key, "metadata"))
+            cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            return cb
+        if key == "rendering.play_viewport_throttle":
+            cb = QComboBox()
+            cb.addItems(["editor", "game", "off"])
+            cb.setCurrentText(self._config.get(key, "editor"))
             cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             return cb
         if isinstance(value, list):

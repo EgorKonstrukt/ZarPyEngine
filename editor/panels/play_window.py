@@ -79,6 +79,12 @@ class PlayViewport(QOpenGLWidget):
         if not self._ctx or not self._renderer:
             return
         try:
+            from core.config.config import get_global_config
+            if get_global_config().get("rendering.play_viewport_throttle", "editor") == "game":
+                step = max(2, int(get_global_config().get("rendering.play_viewport_throttle_step", 2)))
+                self._throttle_count = getattr(self, '_throttle_count', 0) + 1
+                if self._throttle_count % step:
+                    return
             self._bind_screen_fbo()
             scene = self._engine.scene
             if not scene:

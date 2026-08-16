@@ -621,28 +621,48 @@ def make_vec3_slider_row(label: str, vec: Vec3, callback, lo=0.0, hi=1.0) -> tup
         spinboxes.append(sb)
     return w, spinboxes
 
+_SOURCE_PATH_CACHE: dict[type, str] = {}
+_LINE_NUM_CACHE: dict[tuple, int] = {}
+
+
 def get_component_source_path(comp_cls: type) -> str:
+    cached = _SOURCE_PATH_CACHE.get(comp_cls)
+    if cached is not None:
+        return cached
     import inspect
+    result = ""
     try:
         file_path = inspect.getfile(comp_cls)
         rel = os.path.relpath(file_path, _PROJECT_ROOT)
-        return rel.replace(os.sep, "/")
+        result = rel.replace(os.sep, "/")
     except Exception:
-        return ""
+        pass
+    _SOURCE_PATH_CACHE[comp_cls] = result
+    return result
+
 
 def get_property_line_number(comp_cls: type, prop_name: str) -> int:
+    key = (comp_cls, prop_name)
+    cached = _LINE_NUM_CACHE.get(key)
+    if cached is not None:
+        return cached
     import inspect
+    result = 1
     try:
         lines, start_line = inspect.getsourcelines(comp_cls)
         for i, line in enumerate(lines):
             if prop_name in line and ("self." + prop_name) in line:
-                return start_line + i
-        for i, line in enumerate(lines):
-            if f"self.{prop_name}" in line or f": {prop_name}" in line:
-                return start_line + i
+                result = start_line + i
+                break
+        else:
+            for i, line in enumerate(lines):
+                if f"self.{prop_name}" in line or f": {prop_name}" in line:
+                    result = start_line + i
+                    break
     except Exception:
         pass
-    return 1
+    _LINE_NUM_CACHE[key] = result
+    return result
 
 def collapse_value(v):
     if hasattr(v, 'to_list'):

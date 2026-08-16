@@ -50,4 +50,4 @@ def setup_statusbar(mw):
     mw._statusbar.addPermanentWidget(mw._status_vram_lbl)
     mw._fps_timer = QTimer(mw)
     mw._fps_timer.timeout.connect(mw._update_status)
-    mw._fps_timer.start(500)
+    mw._fps_timer.start(1000)

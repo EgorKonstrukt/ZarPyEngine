@@ -15,17 +15,19 @@ _plugin_pool: ThreadPoolExecutor | None = None
 _audio_pool: ThreadPoolExecutor | None = None
 _asset_pool: ThreadPoolExecutor | None = None
 _bvh_pool: ThreadPoolExecutor | None = None
+_bvh_parallel_pool: ThreadPoolExecutor | None = None
 _mesh_import_pool: ProcessPoolExecutor | None = None
 
 
 def _get_or_create(name: str, max_workers: int | None = None) -> ThreadPoolExecutor:
-    global _general_pool, _plugin_pool, _audio_pool, _asset_pool, _bvh_pool
+    global _general_pool, _plugin_pool, _audio_pool, _asset_pool, _bvh_pool, _bvh_parallel_pool
     pools = {
         "general": lambda: _general_pool,
         "plugin": lambda: _plugin_pool,
         "audio": lambda: _audio_pool,
         "asset": lambda: _asset_pool,
         "bvh": lambda: _bvh_pool,
+        "bvh_parallel": lambda: _bvh_parallel_pool,
     }
     setters = {
         "general": lambda v: set_global("_general_pool", v),
@@ -33,6 +35,7 @@ def _get_or_create(name: str, max_workers: int | None = None) -> ThreadPoolExecu
         "audio": lambda v: set_global("_audio_pool", v),
         "asset": lambda v: set_global("_asset_pool", v),
         "bvh": lambda v: set_global("_bvh_pool", v),
+        "bvh_parallel": lambda v: set_global("_bvh_parallel_pool", v),
     }
     p = pools[name]()
     if p is None or p._shutdown:
@@ -63,6 +66,10 @@ def asset() -> ThreadPoolExecutor:
 
 def bvh() -> ThreadPoolExecutor:
     return _get_or_create("bvh", max_workers=2)
+
+
+def bvh_parallel() -> ThreadPoolExecutor:
+    return _get_or_create("bvh_parallel", max_workers=min(8, max(4, os.cpu_count() or 4)))
 
 
 def mesh_import() -> ProcessPoolExecutor:

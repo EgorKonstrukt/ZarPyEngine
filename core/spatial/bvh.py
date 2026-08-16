@@ -11,6 +11,7 @@ import threading
 from concurrent.futures import Future, as_completed
 from typing import Union
 from core.ecs.pool import bvh as _get_bvh_pool
+from core.ecs.pool import bvh_parallel as _get_bvh_parallel_pool
 
 _LEAF_SIZE = 8
 _MAX_DEPTH = 48
@@ -257,14 +258,14 @@ class BVH:
                 left_tris = tris[left_mask]
                 right_tris = tris[~left_mask]
 
-            use_parallel = depth < 2 and n >= _PAR_THRESH
+            use_parallel = depth == 0 and n >= _PAR_THRESH
             if use_parallel:
                 with ctx.lock:
                     ni = ctx.node_count
                     ctx.node_count += 1
                 ctx.nodes[ni, 0:3] = bmin
                 ctx.nodes[ni, 3:6] = bmax
-                pool = _get_bvh_pool()
+                pool = _get_bvh_parallel_pool()
                 lf = pool.submit(_sah_build, left_tris, depth + 1)
                 rf = pool.submit(_sah_build, right_tris, depth + 1)
                 ctx.nodes[ni, 6] = float(lf.result())

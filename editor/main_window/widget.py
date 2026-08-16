@@ -346,7 +346,9 @@ class EditorMainWindow(QMainWindow):
             vp = getattr(self._engine, 'viewport', None)
             render_fps = vp._fps if vp and hasattr(vp, '_fps') else 0.0
             tps = self._engine.tps
-            self._status_fps_lbl.setText(f"FPS: {render_fps:.0f} | TPS: {tps:.0f}")
+            s = f"FPS: {render_fps:.0f} | TPS: {tps:.0f}"
+            if s != self._status_fps_lbl.text():
+                self._status_fps_lbl.setText(s)
         if self._status_gpu_name_lbl:
             try:
                 vp = getattr(self._engine, 'viewport', None)
@@ -369,9 +371,13 @@ class EditorMainWindow(QMainWindow):
 
     def _on_hw_updated(self, cpu, ram_used, ram_total, gpu, vram_used, vram_total):
         if self._status_cpu_lbl:
-            self._status_cpu_lbl.setText(f"CPU: {cpu:.0f}%")
+            s = f"CPU: {cpu:.0f}%"
+            if s != self._status_cpu_lbl.text():
+                self._status_cpu_lbl.setText(s)
         if self._status_ram_lbl:
-            self._status_ram_lbl.setText(f"RAM: {ram_used:.0f} / {ram_total:.0f} MB")
+            s = f"RAM: {ram_used:.0f} / {ram_total:.0f} MB"
+            if s != self._status_ram_lbl.text():
+                self._status_ram_lbl.setText(s)
 
     def closeEvent(self, event: QCloseEvent):
         if self._engine.play_mode:

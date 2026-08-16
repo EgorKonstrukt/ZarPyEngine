@@ -220,6 +220,19 @@ class InspectorPanel(QDockWidget):
     def set_entity(self, entity: Optional[Entity]):
         if self._locked:
             return
+        if entity is self._entity and not self._animator_mode and not self._asset_path:
+            self._selected_entities = [entity] if entity else []
+            if entity:
+                self._updating = True
+                try:
+                    self._active_cb.setChecked(entity.active)
+                    self._name_edit.setText(entity.name)
+                    self._tag_edit.setText(", ".join(entity.tags))
+                    self._layer_sb.setValue(entity.layer)
+                finally:
+                    self._updating = False
+            self._refresh_transform()
+            return
         self._animator_mode = False
         self._animator_state = None
         self._animator_transition = None
@@ -231,6 +244,13 @@ class InspectorPanel(QDockWidget):
 
     def set_selected_entities(self, entities: list):
         if self._locked:
+            return
+        cur = self._selected_entities
+        if (not self._animator_mode and not self._asset_path
+                and len(entities) == len(cur)
+                and all(a is b for a, b in zip(entities, cur))):
+            self._entity = entities[0] if entities else None
+            self._refresh_transform()
             return
         self._animator_mode = False
         self._animator_state = None

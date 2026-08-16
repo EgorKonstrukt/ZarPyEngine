@@ -387,6 +387,8 @@ class TracemallocPanel(QDockWidget):
             f"collected={n_collected}  cycles={len(new_garbage)}")
 
     def _refresh(self):
+        if not self.isVisible():
+            return
         self._refresh_tick += 1
         tick = self._refresh_tick
 
@@ -397,8 +399,7 @@ class TracemallocPanel(QDockWidget):
                 self._update_tracemalloc()
 
         if tick % 3 == 0:
-            if self.isVisible():
-                self._update_object_counts()
+            self._update_object_counts()
 
     def _update_gc_stats(self):
         counts = gc.get_count()

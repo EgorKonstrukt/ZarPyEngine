@@ -191,7 +191,9 @@ def get_global_config() -> Config:
                 "tick_rate": 120.0,
                 "fixed_tick_rate": 60.0,
                 "max_lights": 8,
-                "light_scale": 1.0
+                "light_scale": 1.0,
+                "play_viewport_throttle": "editor",
+                "play_viewport_throttle_step": 2
             },
             "gizmo": {
                 "handle_size": 0.1,
