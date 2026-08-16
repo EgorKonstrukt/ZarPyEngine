@@ -1048,6 +1048,7 @@ class ComponentWidget(QWidget):
 
     def _build_list_field_standalone(self, field, prop_name):
         c = self._component
+        self._list_submesh_names = self._get_submesh_names()
         old = getattr(self, "_list_container", None)
         if old is not None:
             old.setParent(None)
@@ -1080,10 +1081,6 @@ class ComponentWidget(QWidget):
                 if w is not header and w is not None:
                     w.deleteLater()
             items = getattr(c, prop_name, [])
-            min_len = self._list_min_length(prop_name)
-            if min_len and len(items) < min_len:
-                items = list(items) + [{} for _ in range(min_len - len(items))]
-                setattr(c, prop_name, items)
             element_fields = self._get_list_element_fields(prop_name)
             for idx, elem in enumerate(items):
                 row = self._build_list_row_standalone(prop_name, idx, elem, element_fields)
@@ -1093,14 +1090,18 @@ class ComponentWidget(QWidget):
 
     def _list_item_label(self, prop_name, index):
         if type(self._component).__name__ == "MeshRenderer" and prop_name == "materials":
-            names = self._get_submesh_names()
+            names = getattr(self, "_list_submesh_names", None)
+            if names is None:
+                names = self._get_submesh_names()
             if names and len(names) > 1:
                 return names[index] if (index < len(names) and names[index]) else f"Submesh {index}"
         return ""
 
     def _list_min_length(self, prop_name):
         if type(self._component).__name__ == "MeshRenderer" and prop_name == "materials":
-            names = self._get_submesh_names()
+            names = getattr(self, "_list_submesh_names", None)
+            if names is None:
+                names = self._get_submesh_names()
             if names and len(names) > 1:
                 return len(names)
         return 0
