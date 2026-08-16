@@ -14,8 +14,11 @@ if TYPE_CHECKING:
 
 
 _GUI_COMP_NAMES: list[str] = []
+_GUI_COMP_TYPES: frozenset = frozenset()
 _LAYOUT_COMP_NAMES: list[str] = []
+_LAYOUT_COMP_TYPES: frozenset = frozenset()
 _LAYOUT_ELEMENT_NAME: str = ""
+_LAYOUT_ELEMENT_TYPE = None
 
 
 def _get_gui_comp_names() -> list[str]:
@@ -26,12 +29,28 @@ def _get_gui_comp_names() -> list[str]:
     return _GUI_COMP_NAMES
 
 
+def _get_gui_comp_types() -> frozenset:
+    global _GUI_COMP_TYPES
+    if not _GUI_COMP_TYPES:
+        from core.components.gui import _ensure_component_map
+        _GUI_COMP_TYPES = frozenset(_ensure_component_map().values())
+    return _GUI_COMP_TYPES
+
+
 def _get_layout_comp_names() -> list[str]:
     global _LAYOUT_COMP_NAMES
     if not _LAYOUT_COMP_NAMES:
         from core.components.gui import LAYOUT_COMP_NAMES as _LCN
         _LAYOUT_COMP_NAMES = list(_LCN)
     return _LAYOUT_COMP_NAMES
+
+
+def _get_layout_comp_types() -> frozenset:
+    global _LAYOUT_COMP_TYPES
+    if not _LAYOUT_COMP_TYPES:
+        from core.components import gui as _gui_mod
+        _LAYOUT_COMP_TYPES = frozenset(getattr(_gui_mod, n) for n in _get_layout_comp_names())
+    return _LAYOUT_COMP_TYPES
 
 
 def _get_layout_element_name() -> str:
@@ -42,11 +61,20 @@ def _get_layout_element_name() -> str:
     return _LAYOUT_ELEMENT_NAME
 
 
+def _get_layout_element_type():
+    global _LAYOUT_ELEMENT_TYPE
+    if _LAYOUT_ELEMENT_TYPE is None:
+        from core.components import gui as _gui_mod
+        _LAYOUT_ELEMENT_TYPE = getattr(_gui_mod, _get_layout_element_name())
+    return _LAYOUT_ELEMENT_TYPE
+
+
 def _find_gui_comp(entity: Entity):
-    for name in _get_gui_comp_names():
-        comp = entity.get_component_by_name(name)
-        if comp:
-            return comp
+    gui_types = _get_gui_comp_types()
+    type_map = entity._type_map
+    for cls in type_map:
+        if cls in gui_types:
+            return type_map[cls][0]
     return None
 
 
@@ -96,6 +124,18 @@ class GuiCanvasSystem:
     def sync_all(self, scene, canvas: GuiCanvas):
         if not scene:
             return
+        gui_types = _get_gui_comp_types()
+        has_gui = False
+        for entity in scene.get_all_entities():
+            type_map = entity._type_map
+            for cls in type_map:
+                if cls in gui_types:
+                    has_gui = True
+                    break
+            if has_gui:
+                break
+        if not has_gui:
+            return
         for entity in _sorted_by_depth(scene):
             comp = _find_gui_comp(entity)
             if not comp or not entity.active:
@@ -107,6 +147,15 @@ class GuiCanvasSystem:
             self._sync_layout_for(entity, canvas)
 
     def _sync_layout_for(self, entity, canvas):
+        layout_types = _get_layout_comp_types()
+        type_map = entity._type_map
+        has_layout = False
+        for cls in type_map:
+            if cls in layout_types:
+                has_layout = True
+                break
+        if not has_layout:
+            return
         for lname in _get_layout_comp_names():
             lc = entity.get_component_by_name(lname)
             if lc and hasattr(lc, '_sync_layout'):

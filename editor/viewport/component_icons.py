@@ -48,6 +48,25 @@ def get_or_create_icon_texture(vp, comp_type_name: str, icon_color: tuple, icon_
     return vp._renderer.create_icon_texture_from_data(rgba, size, size, key)
 
 
+def _icon_entities(scene):
+    from core.components.transform import Transform
+    rv = getattr(scene, '_render_version', 0)
+    cached = getattr(scene, '_icon_entities_cache', None)
+    if cached is not None and cached[0] == rv:
+        return cached[1]
+    result = []
+    for e in scene.get_all_entities():
+        if not e.active:
+            continue
+        if len(e._components) <= 1:
+            continue
+        if Transform not in e._type_map:
+            continue
+        result.append(e)
+    scene._icon_entities_cache = (rv, result)
+    return result
+
+
 def render_component_icons_gl(vp):
     scene = vp._engine.scene
     if not scene or not vp._gizmo_icons_visible:
@@ -72,15 +91,8 @@ def render_component_icons_gl(vp):
     near_fade_start = cfg.get("gizmo.icon_near_fade_start", 0.25)
     near_fade_end = cfg.get("gizmo.icon_near_fade_end", 2.5)
     groups: dict = {}
-    for entity in scene.get_all_entities():
-        if not entity.active:
-            continue
-        if len(entity._components) <= 1:
-            continue
-        t = entity._type_map.get(Transform)
-        if not t:
-            continue
-        t = t[0]
+    for entity in _icon_entities(scene):
+        t = entity._type_map[Transform][0]
         dist = (t.position - cam_pos).length()
         screen_scale = ref_distance / max(dist, 0.001)
         icon_size = max(min_size, min(max_size, base_size * screen_scale))

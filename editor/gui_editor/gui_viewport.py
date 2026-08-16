@@ -144,6 +144,8 @@ class GuiEditorViewport(QWidget):
     def _sync_scene(self):
         if not self._engine or not hasattr(self._engine, 'scene') or not self._engine.scene:
             return
+        if not self.isVisible():
+            return
         GuiCanvasSystem.instance().sync_all(self._engine.scene, self._canvas)
 
     def _on_palette_add(self, widget_type: str):

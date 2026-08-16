@@ -343,7 +343,30 @@ class HierarchyPanel(QDockWidget):
         self._update_scene_header()
         self._refresh()
     def _on_history_changed(self, cmd=None):
-        QTimer.singleShot(0, self._refresh)
+        if self._scene is None:
+            return
+        rv = getattr(self._scene, '_render_version', -1)
+        if rv == self._last_render_version:
+            return
+        now = time.perf_counter()
+        if now - getattr(self, '_last_refresh_time', 0.0) >= 0.5:
+            self._last_refresh_time = now
+            self._refresh()
+            return
+        if getattr(self, '_hc_refresh_timer', None) is None:
+            self._hc_refresh_timer = QTimer(self)
+            self._hc_refresh_timer.setSingleShot(True)
+            self._hc_refresh_timer.setInterval(60)
+            self._hc_refresh_timer.timeout.connect(self._on_history_changed_debounced)
+        self._hc_refresh_timer.start()
+
+    def _on_history_changed_debounced(self):
+        now = time.perf_counter()
+        if now - getattr(self, '_last_refresh_time', 0.0) < 0.5:
+            self._hc_refresh_timer.start()
+            return
+        self._last_refresh_time = now
+        self._refresh()
 
     def _refresh(self):
         if not self._scene:
