@@ -275,8 +275,8 @@ def make_resource_picker(path: str, filter_str: str, callback: Callable[[str], N
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
-    clear_btn.setVisible(bool(path))
     layout.addWidget(clear_btn)
+    clear_btn.setVisible(bool(path))
     return w
 
 def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None]) -> QWidget:
@@ -360,8 +360,8 @@ def make_gameobject_picker(entity_id: str, scene, callback: Callable[[str], None
     def _clear():
         _update_entity_display("")
     clear_btn.clicked.connect(_clear)
-    clear_btn.setVisible(bool(entity_id))
     layout.addWidget(clear_btn)
+    clear_btn.setVisible(bool(entity_id))
     return w
 
 def make_resource_type_picker(path: str, resource_type: str, callback: Callable[[str], None]) -> QWidget:
@@ -417,8 +417,8 @@ def make_resource_type_picker(path: str, resource_type: str, callback: Callable[
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
-    clear_btn.setVisible(bool(path))
     layout.addWidget(clear_btn)
+    clear_btn.setVisible(bool(path))
     return w
 
 def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None]) -> QWidget:
@@ -482,8 +482,8 @@ def make_asset_picker(path: str, asset_type: str, callback: Callable[[str], None
     def _clear():
         _update_display("")
     clear_btn.clicked.connect(_clear)
-    clear_btn.setVisible(bool(path))
     layout.addWidget(clear_btn)
+    clear_btn.setVisible(bool(path))
     return w
 
 def _create_asset_dialog(parent, asset_type: str, callback: Callable[[str], None]):
