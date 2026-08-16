@@ -58,11 +58,20 @@ def _icon_entities(scene):
     for e in scene.get_all_entities():
         if not e.active:
             continue
-        if len(e._components) <= 1:
+        tlist = e._type_map.get(Transform)
+        if not tlist:
             continue
-        if Transform not in e._type_map:
-            continue
-        result.append(e)
+        icons = []
+        for clist in e._type_map.values():
+            comp = clist[0]
+            if isinstance(comp, Transform):
+                continue
+            icon = getattr(comp, 'gizmo_icon', None)
+            if not icon:
+                continue
+            icons.append((comp, icon, getattr(comp, '_gizmo_icon_path', None)))
+        if icons:
+            result.append((tlist[0], icons))
     scene._icon_entities_cache = (rv, result)
     return result
 
@@ -71,7 +80,6 @@ def render_component_icons_gl(vp):
     scene = vp._engine.scene
     if not scene or not vp._gizmo_icons_visible:
         return
-    from core.components.transform import Transform
     from core.config.config import get_global_config
     cfg = get_global_config()
     if not cfg.get("gizmo.show_icons", True):
@@ -91,8 +99,7 @@ def render_component_icons_gl(vp):
     near_fade_start = cfg.get("gizmo.icon_near_fade_start", 0.25)
     near_fade_end = cfg.get("gizmo.icon_near_fade_end", 2.5)
     groups: dict = {}
-    for entity in _icon_entities(scene):
-        t = entity._type_map[Transform][0]
+    for t, icons in _icon_entities(scene):
         dist = (t.position - cam_pos).length()
         screen_scale = ref_distance / max(dist, 0.001)
         icon_size = max(min_size, min(max_size, base_size * screen_scale))
@@ -105,14 +112,8 @@ def render_component_icons_gl(vp):
             continue
         y_off = 0
         sz = icon_size * dpr
-        for comp in entity.get_all_components():
-            if isinstance(comp, Transform):
-                continue
-            icon = comp.gizmo_icon
-            if not icon:
-                continue
+        for comp, icon, icon_path in icons:
             r, g, b, label = icon
-            icon_path = getattr(comp, '_gizmo_icon_path', None)
             key = type(comp).__name__
             grp = groups.get(key)
             if grp is None:
