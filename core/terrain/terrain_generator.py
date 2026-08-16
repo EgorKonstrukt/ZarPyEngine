@@ -12,6 +12,7 @@ import moderngl
 from dataclasses import dataclass, field
 from typing import Optional
 from core.foundation.logger import Logger
+from core.shaders.compute_shader import compile_compute_shader
 
 _SHADER_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "terrain_gen.compute")
 
@@ -167,11 +168,7 @@ class TerrainGenerator:
             Logger.error("TerrainGenerator: invalid shader file")
             return
         source = content[start + len("GLSLPROGRAM"):end].strip()
-        try:
-            self._program = self._ctx.compute_shader(source)
-        except Exception as e:
-            Logger.error(f"TerrainGenerator: failed to compile compute shader: {e}", e)
-            self._program = None
+        self._program = compile_compute_shader(self._ctx, source, _SHADER_PATH)
 
     def _cache_uniform_names(self):
         if self._float_uniforms or self._int_uniforms:

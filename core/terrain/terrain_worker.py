@@ -12,6 +12,7 @@ import numpy as np
 import moderngl
 from dataclasses import dataclass
 from core.foundation.logger import Logger
+from core.shaders.compute_shader import compile_compute_shader
 
 _SHADER_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "shaders", "terrain_gen.compute")
 
@@ -82,11 +83,7 @@ class TerrainGenWorker:
             Logger.error("TerrainGenWorker: invalid shader file")
             return
         source = content[start + len("GLSLPROGRAM"):end].strip()
-        try:
-            self._program = self._ctx.compute_shader(source)
-        except Exception as e:
-            Logger.error(f"TerrainGenWorker: failed to compile compute shader: {e}", e)
-            self._program = None
+        self._program = compile_compute_shader(self._ctx, source, _SHADER_PATH)
 
     def _cache_uniform_names(self):
         if self._float_uniforms or self._int_uniforms:

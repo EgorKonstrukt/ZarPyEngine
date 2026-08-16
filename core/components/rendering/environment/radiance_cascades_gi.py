@@ -9,13 +9,17 @@
 # Implements temporal reprojection and edge-aware denoising (PoE2-style)
 
 from __future__ import annotations
+
 import os
-import numpy as np
-import moderngl
 from typing import Optional
-from core.ecs.ecs import Component, ComponentRegistry
+
+import moderngl
+import numpy as np
+
 from core.components.inspector_meta import FieldType, InspectorField
+from core.ecs.ecs import Component, ComponentRegistry
 from core.foundation.logger import Logger
+from core.shaders.compute_shader import compile_compute_shader
 
 
 @ComponentRegistry.register
@@ -109,7 +113,7 @@ class RadianceCascadesGI(Component):
                 Logger.error("Invalid .compute file: no GLSLPROGRAM/ENDGLSL")
                 return None
             source = src[glsl_start + len("GLSLPROGRAM"):glsl_end].strip()
-            return ctx.compute_shader(source)
+            return compile_compute_shader(ctx, source, abs_path)
         except Exception as e:
             Logger.error(f"Failed to compile compute shader: {e}")
             return None

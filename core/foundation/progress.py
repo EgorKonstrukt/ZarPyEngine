@@ -11,6 +11,7 @@ import time
 
 _tasks: dict[str, dict] = {}
 _notifications: list[dict] = []
+_completed: list[dict] = []
 _lock = threading.Lock()
 
 
@@ -58,13 +59,26 @@ def task_set_detail(task_id: str, detail: str | None) -> None:
 
 def task_complete(task_id: str) -> None:
     with _lock:
-        _tasks.pop(task_id, None)
+        task = _tasks.pop(task_id, None)
+        if task is not None:
+            _completed.append({
+                "title": task["title"],
+                "duration": time.monotonic() - task["started"],
+                "time": time.monotonic(),
+            })
+            del _completed[:-8]
 
 
 def clear() -> None:
     with _lock:
         _tasks.clear()
         _notifications.clear()
+        _completed.clear()
+
+
+def snapshot_completed() -> list[dict]:
+    with _lock:
+        return list(_completed)
 
 
 def notify_error(message: str) -> None:

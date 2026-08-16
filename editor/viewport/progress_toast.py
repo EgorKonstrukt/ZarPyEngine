@@ -8,9 +8,17 @@ from __future__ import annotations
 
 import time
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+)
 from PyQt6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -26,6 +34,9 @@ _MAX_HISTORY = 3
 _POLL_MS = 60
 _HISTORY_TTL = 6.0
 _ERROR_TTL = 8.0
+_SLIDE_X = 24
+_FADE_IN_MS = 220
+_FADE_OUT_MS = 160
 
 _CARD_QSS = """
 QFrame#ProgressCard {
@@ -97,8 +108,28 @@ class ProgressToast(QWidget):
 
         self._rows: dict[str, tuple[QWidget, QLabel, QLabel, QLabel, QProgressBar]] = {}
         self._row_ids: list[str] = []
-        self._seen: dict[str, tuple[str, float]] = {}
         self._history: list[tuple[str, float, float]] = []
+
+        self._anim_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._anim_effect)
+        self._anim_effect.setOpacity(0.0)
+
+        self._fade_in = QPropertyAnimation(self._anim_effect, b"opacity", self)
+        self._fade_in.setDuration(_FADE_IN_MS)
+        self._fade_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_in.setStartValue(0.0)
+        self._fade_in.setEndValue(1.0)
+
+        self._fade_out = QPropertyAnimation(self._anim_effect, b"opacity", self)
+        self._fade_out.setDuration(_FADE_OUT_MS)
+        self._fade_out.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._fade_out.setStartValue(1.0)
+        self._fade_out.setEndValue(0.0)
+        self._fade_out.finished.connect(self._hide_done)
+
+        self._slide = QPropertyAnimation(self, b"pos", self)
+        self._slide.setDuration(_FADE_IN_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -227,14 +258,12 @@ class ProgressToast(QWidget):
     def _tick(self):
         now = time.monotonic()
         tasks = progress.snapshot()
-        active_ids = {t["id"] for t in tasks}
-        for tid in [k for k in self._seen if k not in active_ids]:
-            title, started = self._seen.pop(tid)
-            self._history.insert(0, (title, now - started, now))
-        del self._history[_MAX_HISTORY:]
-        self._history = [h for h in self._history if now - h[2] < _HISTORY_TTL]
-        for t in tasks:
-            self._seen[t["id"]] = (t["title"], t["started"])
+        completed = progress.snapshot_completed()
+        self._history = [
+            (c["title"], c["duration"], c["time"])
+            for c in sorted(completed, key=lambda c: c["time"], reverse=True)
+            if now - c["time"] < _HISTORY_TTL
+        ][:_MAX_HISTORY]
         errors = [n for n in progress.snapshot_notifications() if now - n["time"] < _ERROR_TTL][-3:]
 
         if [t["id"] for t in tasks][:_MAX_ROWS] != self._row_ids:
@@ -253,14 +282,45 @@ class ProgressToast(QWidget):
 
         if tasks or self._history or errors:
             self.adjustSize()
-            self.reposition()
-            self.show()
+            if self._slide.state() != QAbstractAnimation.State.Running:
+                self.reposition()
+            self._show_animated()
         elif self.isVisible():
-            self.hide()
+            self._hide_animated()
 
-    def reposition(self) -> None:
+    def _show_animated(self):
+        if self.isHidden():
+            self.show()
+            self._fade_out.stop()
+            self._anim_effect.setOpacity(0.0)
+            start = self.pos() + QPoint(_SLIDE_X, 0)
+            self.move(start)
+            self._slide.setStartValue(start)
+            self._slide.setEndValue(self._target_pos())
+            self._slide.start()
+            self._fade_in.start()
+        elif self._fade_out.state() == QAbstractAnimation.State.Running:
+            self._fade_out.stop()
+            self._anim_effect.setOpacity(1.0)
+        elif self._anim_effect.opacity() != 1.0 and self._fade_in.state() != QAbstractAnimation.State.Running:
+            self._anim_effect.setOpacity(1.0)
+
+    def _hide_animated(self):
+        if self._fade_out.state() != QAbstractAnimation.State.Running:
+            self._slide.stop()
+            self._fade_in.stop()
+            self._fade_out.start()
+
+    def _hide_done(self):
+        self.hide()
+        self._anim_effect.setOpacity(1.0)
+
+    def _target_pos(self) -> QPoint:
         parent = self.parentWidget()
         if parent is None:
-            return
-        self.move(max(0, parent.width() - self.width() - _MARGIN),
-                  max(0, parent.height() - self.height() - _MARGIN))
+            return QPoint(0, 0)
+        return QPoint(max(0, parent.width() - self.width() - _MARGIN),
+                      max(0, parent.height() - self.height() - _MARGIN))
+
+    def reposition(self) -> None:
+        self.move(self._target_pos())

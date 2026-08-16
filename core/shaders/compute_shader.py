@@ -5,13 +5,32 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+
 import os
 import re
-import numpy as np
-import moderngl
-from typing import Optional, Any
 from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import moderngl
+import numpy as np
+
 from core.foundation.logger import Logger
+from core.foundation.progress import notify_error, task_complete, task_start
+
+
+def compile_compute_shader(ctx: moderngl.Context, source: str,
+                           title_hint: str = "compute") -> moderngl.ComputeShader | None:
+    label = os.path.basename(title_hint)
+    task_id = f"compute:{title_hint}"
+    task_start(task_id, f"Compiling compute {label}...", fraction=None)
+    try:
+        return ctx.compute_shader(source)
+    except moderngl.Error as e:
+        Logger.error(f"Failed to compile compute shader '{label}': {e}", e)
+        notify_error(f"Failed to compile compute {label}")
+        return None
+    finally:
+        task_complete(task_id)
 
 
 @dataclass
@@ -176,12 +195,10 @@ class ComputeShader:
         cs._properties = props
         cs._source = source
 
-        try:
-            cs._program = ctx.compute_shader(source)
-            cs._parse_local_size(source)
-        except Exception as e:
-            Logger.error(f"Failed to compile compute shader '{path}': {e}", e)
+        cs._program = compile_compute_shader(ctx, source, path)
+        if cs._program is None:
             return None
+        cs._parse_local_size(source)
 
         return cs
 

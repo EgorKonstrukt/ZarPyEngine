@@ -5,6 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import math
 import os
 import numpy as np
 import moderngl
@@ -17,7 +18,7 @@ from core.components.lighting.light import Light, LightType
 
 from core.maths.math3d import Mat4, Vec3
 from core.foundation.logger import Logger
-import math
+from core.shaders.compute_shader import compile_compute_shader
 
 _INST_STRIDE = 46
 _MAX_INSTANCES = 256
@@ -146,7 +147,9 @@ class RaytracingRenderer(Component):
                     Logger.error("Invalid .compute file: no GLSLPROGRAM/ENDGLSL")
                     return False
                 source = src[glsl_start + len("GLSLPROGRAM"):glsl_end].strip()
-                self._program = ctx.compute_shader(source)
+                self._program = compile_compute_shader(ctx, source, path)
+                if self._program is None:
+                    return False
             except Exception as e:
                 Logger.error(f"Failed to compile compute shader: {e}")
                 return False
@@ -235,7 +238,9 @@ class RaytracingRenderer(Component):
                     Logger.error("Invalid SkyEnv.compute: no GLSLPROGRAM/ENDGLSL")
                     return False
                 source = src[glsl_start + len("GLSLPROGRAM"):glsl_end].strip()
-                self._sky_env_prog = ctx.compute_shader(source)
+                self._sky_env_prog = compile_compute_shader(ctx, source, env_path)
+                if self._sky_env_prog is None:
+                    return False
             except Exception as e:
                 Logger.error(f"Failed to compile SkyEnv compute shader: {e}")
                 return False

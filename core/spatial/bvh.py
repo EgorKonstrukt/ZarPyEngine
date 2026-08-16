@@ -26,7 +26,7 @@ _PAR_THRESH = 50000
 
 
 class _BuildCtx:
-    __slots__ = ('last_frac', 'last_t', 'lock', 'node_count', 'nodes',
+    __slots__ = ('last_frac', 'last_t', 'lock', 'n_verts', 'node_count', 'nodes',
                  'progress_done', 'task_id', 'total_tris', 'tri_indices', 'tri_offset')
 
     def __init__(self, max_nodes, max_tris):
@@ -37,6 +37,7 @@ class _BuildCtx:
         self.lock = threading.Lock()
         self.progress_done = 0
         self.total_tris = 0
+        self.n_verts = 0
         self.task_id = ""
         self.last_frac = 0.0
         self.last_t = 0.0
@@ -60,7 +61,8 @@ def _report_build_progress(ctx):
     if frac - ctx.last_frac >= 0.02 or now - ctx.last_t >= 0.25:
         ctx.last_frac = frac
         ctx.last_t = now
-        detail = f"{_fmt_count(ctx.progress_done)} / {_fmt_count(ctx.total_tris)} tris"
+        detail = (f"{_fmt_count(ctx.progress_done)} / {_fmt_count(ctx.total_tris)} tris"
+                  f" · {_fmt_count(ctx.n_verts)} verts")
         task_update(ctx.task_id, frac, detail=detail)
 
 
@@ -189,9 +191,10 @@ class BVH:
 
         ctx = _BuildCtx(n_tris * 2 + 1, n_tris)
         ctx.total_tris = n_tris
+        ctx.n_verts = len(self._vertices.reshape(-1, 3))
         ctx.task_id = str(self._vert_key)
         ctx.last_t = time.monotonic()
-        task_update(ctx.task_id, 0.0, detail=f"0 / {_fmt_count(n_tris)} tris",
+        task_update(ctx.task_id, 0.0, detail=f"0 / {_fmt_count(n_tris)} tris · {_fmt_count(ctx.n_verts)} verts",
                     total=n_tris, units="tris")
 
         def _alloc_node(ctx):
