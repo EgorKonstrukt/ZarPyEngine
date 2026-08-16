@@ -34,9 +34,11 @@ _MAX_HISTORY = 3
 _POLL_MS = 60
 _HISTORY_TTL = 6.0
 _ERROR_TTL = 8.0
-_SLIDE_X = 24
-_FADE_IN_MS = 220
-_FADE_OUT_MS = 160
+_SLIDE_X = 64
+_FADE_IN_MS = 260
+_FADE_OUT_MS = 200
+_SLIDE_IN_MS = 360
+_SLIDE_OUT_MS = 200
 
 _CARD_QSS = """
 QFrame#ProgressCard {
@@ -122,14 +124,14 @@ class ProgressToast(QWidget):
 
         self._fade_out = QPropertyAnimation(self._anim_effect, b"opacity", self)
         self._fade_out.setDuration(_FADE_OUT_MS)
-        self._fade_out.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._fade_out.setEasingCurve(QEasingCurve.Type.OutQuad)
         self._fade_out.setStartValue(1.0)
         self._fade_out.setEndValue(0.0)
         self._fade_out.finished.connect(self._hide_done)
 
         self._slide = QPropertyAnimation(self, b"pos", self)
-        self._slide.setDuration(_FADE_IN_MS)
-        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._slide.setDuration(_SLIDE_IN_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -292,27 +294,37 @@ class ProgressToast(QWidget):
         if self.isHidden():
             self.show()
             self._fade_out.stop()
+            self._slide.stop()
             self._anim_effect.setOpacity(0.0)
-            start = self.pos() + QPoint(_SLIDE_X, 0)
+            start = self._target_pos() + QPoint(_SLIDE_X, 0)
             self.move(start)
+            self._slide.setDuration(_SLIDE_IN_MS)
+            self._slide.setEasingCurve(QEasingCurve.Type.OutBack)
             self._slide.setStartValue(start)
             self._slide.setEndValue(self._target_pos())
             self._slide.start()
             self._fade_in.start()
-        elif self._fade_out.state() == QAbstractAnimation.State.Running:
-            self._fade_out.stop()
-            self._anim_effect.setOpacity(1.0)
-        elif self._anim_effect.opacity() != 1.0 and self._fade_in.state() != QAbstractAnimation.State.Running:
-            self._anim_effect.setOpacity(1.0)
+        else:
+            if self._fade_out.state() == QAbstractAnimation.State.Running:
+                self._fade_out.stop()
+                self._slide.stop()
+                self._anim_effect.setOpacity(1.0)
+                self.reposition()
 
     def _hide_animated(self):
         if self._fade_out.state() != QAbstractAnimation.State.Running:
-            self._slide.stop()
             self._fade_in.stop()
+            start = self.pos()
+            self._slide.setDuration(_SLIDE_OUT_MS)
+            self._slide.setEasingCurve(QEasingCurve.Type.InOutQuad)
+            self._slide.setStartValue(start)
+            self._slide.setEndValue(start + QPoint(_SLIDE_X, 0))
+            self._slide.start()
             self._fade_out.start()
 
     def _hide_done(self):
         self.hide()
+        self._slide.stop()
         self._anim_effect.setOpacity(1.0)
 
     def _target_pos(self) -> QPoint:
