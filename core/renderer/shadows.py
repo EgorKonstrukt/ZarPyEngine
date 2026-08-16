@@ -446,33 +446,57 @@ class ShadowRenderer:
             near_z = split_far
 
     def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray], depth_span: float) -> np.ndarray:
-        corners_np = np.array(corners, dtype=np.float64)
-        center = np.mean(corners_np, axis=0)
-        radius = 0.0
-        for c in corners_np:
-            radius = max(radius, float(np.linalg.norm(c - center)))
+        n = len(corners)
+        cx = cy = cz = 0.0
+        for c in corners:
+            cx += c[0]
+            cy += c[1]
+            cz += c[2]
+        cx /= n
+        cy /= n
+        cz /= n
+        radius2 = 0.0
+        for c in corners:
+            dx = c[0] - cx
+            dy = c[1] - cy
+            dz = c[2] - cz
+            r2 = dx * dx + dy * dy + dz * dz
+            if r2 > radius2:
+                radius2 = r2
+        radius = math.sqrt(radius2)
         radius = max(radius, 0.25)
         radius = math.ceil(radius * 16.0) / 16.0
-        light_pos = Vec3(*center) - light_dir * max(radius * 2.0, depth_span + 10.0)
+        light_pos = Vec3(cx, cy, cz) - light_dir * max(radius * 2.0, depth_span + 10.0)
         light_up = Vec3(0.0, 1.0, 0.0)
         if abs(light_dir.dot(light_up)) > 0.999:
             light_up = Vec3(0.0, 0.0, 1.0)
-        view = Mat4.look_at(light_pos, Vec3(*center), light_up)
-        center_light = np.append(center, 1.0) @ view._d
+        view = Mat4.look_at(light_pos, Vec3(cx, cy, cz), light_up)
+        m = [list(map(float, row)) for row in view._d.tolist()]
+        center_light = (
+            cx * m[0][0] + cy * m[1][0] + cz * m[2][0] + m[3][0],
+            cx * m[0][1] + cy * m[1][1] + cz * m[2][1] + m[3][1],
+            cx * m[0][2] + cy * m[1][2] + cz * m[2][2] + m[3][2],
+            cx * m[0][3] + cy * m[1][3] + cz * m[2][3] + m[3][3],
+        )
         texel_size = (radius * 2.0) / max(1, self._shadow_resolution)
-        center_light[0] = math.floor(center_light[0] / texel_size) * texel_size
-        center_light[1] = math.floor(center_light[1] / texel_size) * texel_size
-        left = center_light[0] - radius
-        right = center_light[0] + radius
-        bottom = center_light[1] - radius
-        top = center_light[1] + radius
-        corners_light = []
+        cx_l = math.floor(center_light[0] / texel_size) * texel_size
+        cy_l = math.floor(center_light[1] / texel_size) * texel_size
+        left = cx_l - radius
+        right = cx_l + radius
+        bottom = cy_l - radius
+        top = cy_l + radius
+        min_z = 1e300
+        max_z = -1e300
         for c in corners:
-            p = np.append(c, 1.0) @ view._d
-            corners_light.append(p[:3] / p[3])
-        corners_light = np.array(corners_light)
-        min_z = float(np.min(corners_light[:, 2]))
-        max_z = float(np.max(corners_light[:, 2]))
+            px = c[0] * m[0][0] + c[1] * m[1][0] + c[2] * m[2][0] + m[3][0]
+            py = c[0] * m[0][1] + c[1] * m[1][1] + c[2] * m[2][1] + m[3][1]
+            pz = c[0] * m[0][2] + c[1] * m[1][2] + c[2] * m[2][2] + m[3][2]
+            pw = c[0] * m[0][3] + c[1] * m[1][3] + c[2] * m[2][3] + m[3][3]
+            pz = pz / pw if pw != 0.0 else 0.0
+            if pz < min_z:
+                min_z = pz
+            if pz > max_z:
+                max_z = pz
         z_margin = max(depth_span * 0.45, 6.0)
         n_val = max(-max_z - z_margin, 0.01)
         f_val = max(-min_z + z_margin, n_val + 0.01)

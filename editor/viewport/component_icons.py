@@ -15,6 +15,10 @@ from PyQt6.QtGui import QFont as QF, QImage, QPainter as QP, QBrush as QB, QColo
 
 
 def get_or_create_icon_texture(vp, comp_type_name: str, icon_color: tuple, icon_label: str, icon_path: Optional[str]) -> Optional[Any]:
+    key = f"__comp_icon_{comp_type_name}"
+    tex = vp._renderer._icon_textures.get(key)
+    if tex:
+        return tex
     if not icon_path:
         auto_path = os.path.join(os.path.dirname(__file__), '..', 'gizmo_icons', f'{comp_type_name}.png')
         if os.path.exists(auto_path):
@@ -22,11 +26,8 @@ def get_or_create_icon_texture(vp, comp_type_name: str, icon_color: tuple, icon_
     if icon_path:
         tex = vp._renderer.create_icon_texture_from_png(icon_path)
         if tex:
+            vp._renderer._icon_textures[key] = tex
             return tex
-    key = f"__comp_icon_{comp_type_name}"
-    tex = vp._renderer._icon_textures.get(key)
-    if tex:
-        return tex
     r, g, b = icon_color
     size = 32
     qimg = QImage(size, size, QImage.Format.Format_RGBA8888)
@@ -45,7 +46,9 @@ def get_or_create_icon_texture(vp, comp_type_name: str, icon_color: tuple, icon_
         p.drawText(QRect(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, icon_label[0].upper())
     p.end()
     rgba = qimg.bits().asstring(size * size * 4)
-    return vp._renderer.create_icon_texture_from_data(rgba, size, size, key)
+    tex = vp._renderer.create_icon_texture_from_data(rgba, size, size, key)
+    vp._renderer._icon_textures[key] = tex
+    return tex
 
 
 def _icon_entities(scene):
