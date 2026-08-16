@@ -6,12 +6,16 @@
 
 from __future__ import annotations
 
-import numpy as np
 import threading
-from concurrent.futures import Future, as_completed
+import time
+from concurrent.futures import Future
 from typing import Union
+
+import numpy as np
+
 from core.ecs.pool import bvh as _get_bvh_pool
 from core.ecs.pool import bvh_parallel as _get_bvh_parallel_pool
+from core.foundation.progress import task_complete, task_start, task_update
 
 _LEAF_SIZE = 8
 _MAX_DEPTH = 48
@@ -22,7 +26,8 @@ _PAR_THRESH = 50000
 
 
 class _BuildCtx:
-    __slots__ = ('nodes', 'tri_indices', 'node_count', 'tri_offset', 'lock')
+    __slots__ = ('last_frac', 'last_t', 'lock', 'node_count', 'nodes',
+                 'progress_done', 'task_id', 'total_tris', 'tri_indices', 'tri_offset')
 
     def __init__(self, max_nodes, max_tris):
         self.nodes = np.empty((max_nodes, 8), dtype=np.float32)
@@ -30,6 +35,33 @@ class _BuildCtx:
         self.node_count = 0
         self.tri_offset = 0
         self.lock = threading.Lock()
+        self.progress_done = 0
+        self.total_tris = 0
+        self.task_id = ""
+        self.last_frac = 0.0
+        self.last_t = 0.0
+
+
+def _fmt_count(n: int) -> str:
+    if n >= 1_000_000:
+        v = n / 1_000_000
+        return f"{int(v)}M" if v == int(v) else f"{v:.1f}M"
+    if n >= 1_000:
+        v = n / 1_000
+        return f"{int(v)}k" if v == int(v) else f"{v:.1f}k"
+    return str(n)
+
+
+def _report_build_progress(ctx):
+    if ctx.total_tris <= 0:
+        return
+    frac = ctx.progress_done / ctx.total_tris
+    now = time.monotonic()
+    if frac - ctx.last_frac >= 0.02 or now - ctx.last_t >= 0.25:
+        ctx.last_frac = frac
+        ctx.last_t = now
+        detail = f"{_fmt_count(ctx.progress_done)} / {_fmt_count(ctx.total_tris)} tris"
+        task_update(ctx.task_id, frac, detail=detail)
 
 
 def _surface_area(bmin, bmax):
@@ -156,6 +188,11 @@ class BVH:
         sys.setrecursionlimit(1000000)
 
         ctx = _BuildCtx(n_tris * 2 + 1, n_tris)
+        ctx.total_tris = n_tris
+        ctx.task_id = str(self._vert_key)
+        ctx.last_t = time.monotonic()
+        task_update(ctx.task_id, 0.0, detail=f"0 / {_fmt_count(n_tris)} tris",
+                    total=n_tris, units="tris")
 
         def _alloc_node(ctx):
             with ctx.lock:
@@ -172,9 +209,11 @@ class BVH:
             with ctx.lock:
                 tri_start = ctx.tri_offset
                 ctx.tri_offset += len(tris)
+                ctx.progress_done += len(tris)
             ctx.nodes[ni, 6] = float(tri_start)
             ctx.nodes[ni, 7] = -float(len(tris)) - 1.0
             ctx.tri_indices[tri_start:tri_start + len(tris)] = tris.astype(np.uint32)
+            _report_build_progress(ctx)
             return ni
 
         def _sah_build(tris, depth=0):
@@ -596,11 +635,16 @@ _BVH_LOCK = threading.Lock()
 
 
 
-def _build_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH:
-    return BVH(vertices, indices)
+def _build_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None) -> BVH:
+    task_id = str(id(vertices))
+    task_start(task_id, title or "Building BVH...", fraction=0.0)
+    try:
+        return BVH(vertices, indices)
+    finally:
+        task_complete(task_id)
 
 
-def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> None:
+def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None) -> None:
     """Trigger async BVH pre-build. Safe to call from any thread."""
     key = id(vertices)
     with _BVH_LOCK:
@@ -610,7 +654,7 @@ def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> None:
             _BVH_CACHE[key] = None
             return
         pool = _get_bvh_pool()
-        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices)
+        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices, title)
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:

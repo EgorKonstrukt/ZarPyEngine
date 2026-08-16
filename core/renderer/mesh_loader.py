@@ -3,19 +3,39 @@
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2026 Zarrakun
-
 from __future__ import annotations
+
 import os
-import numpy as np
 import threading
 from typing import Optional
+
+import numpy as np
+
 from core.engine.engine import Engine
 from core.foundation.logger import Logger
+from core.foundation.progress import (
+    notify_error,
+    task_complete,
+    task_start,
+    task_update,
+)
 from core.renderer.mesh_data import MeshData
-from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh
-from core.ecs.pool import asset as _get_asset_pool
+from core.renderer.meshes import (
+    make_cube_mesh,
+    make_plane_mesh,
+    make_quad_mesh,
+    make_sphere_mesh,
+)
 
 _MAX_PENDING_PER_FRAME = 16
+
+
+def _display_name(path: str) -> str:
+    return os.path.basename(path.replace("\\", "/")) or path
+
+
+def _mesh_load_task(cache_key: str) -> str:
+    return f"mesh_load:{cache_key}"
 
 _ERROR_MESH_PATH = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "3d_models", "ERRORText.fbx"))
 
@@ -73,6 +93,7 @@ class MeshLoader:
                     self._pending_cache_keys.add(cache_key)
                     with self._async_lock:
                         self._pending_async_loads += 1
+                    task_start(_mesh_load_task(cache_key), f"Loading {_display_name(name)}...", fraction=None)
                     self._load_async(name, "", cache_key, scale, center_pivot, flip_uvs)
                 return None
         else:
@@ -80,6 +101,7 @@ class MeshLoader:
                 self._pending_cache_keys.add(cache_key)
                 with self._async_lock:
                     self._pending_async_loads += 1
+                task_start(_mesh_load_task(cache_key), f"Loading {_display_name(file_path)}...", fraction=None)
                 self._load_async(name, file_path, cache_key, scale, center_pivot, flip_uvs)
             return None
         self._apply_transforms(m, cache_key, scale, center_pivot, flip_uvs)
@@ -110,7 +132,8 @@ class MeshLoader:
             m.build_outline_vao(self._ctx, self._outline_prog)
         self._meshes[cache_key] = m
         from core.spatial.bvh import prebuild_mesh_bvh
-        prebuild_mesh_bvh(m.vertices, m.indices)
+        mesh_name = _display_name(cache_key.split("|")[0])
+        prebuild_mesh_bvh(m.vertices, m.indices, title=f"Building BVH {mesh_name}...")
 
     def _resolve_path(self, key: str, file_path: str) -> str:
         if file_path and os.path.exists(file_path):
@@ -176,34 +199,46 @@ class MeshLoader:
         path = self._resolve_path(key, file_path)
         if not path:
             Logger.warning(f"Mesh not found: {key}, using error fallback")
+            notify_error(f"Mesh not found: {_display_name(key)}")
             path = _ERROR_MESH_PATH
+        if path != _ERROR_MESH_PATH:
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = None
+            if size:
+                task_update(_mesh_load_task(cache_key), total=float(size), units="bytes")
         from core.assets.asset_importer import load_obj_future, load_mesh_future
         lower_path = path.lower()
 
         def _io_done(fut):
             try:
-                import_data = fut.result()
-            except Exception:
-                import_data = None
-            is_error = (path == _ERROR_MESH_PATH)
-            if not is_error and (import_data is None or len(import_data.vertices) == 0):
-                Logger.warning(f"Failed to load mesh, falling back to error mesh")
-                from core.assets.asset_importer import load_mesh
-                import_data = load_mesh(_ERROR_MESH_PATH)
-                is_error = True
-            if is_error and import_data is not None and len(import_data.vertices) > 0:
-                verts = import_data.vertices.reshape(-1, 3).astype(np.float32)
-                norms = import_data.normals.reshape(-1, 3).astype(np.float32)
-                rot = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-                verts = verts @ rot.T
-                norms = norms @ rot.T
-                s = np.array([0.25 / 9.0, 1.0 / 9.0, 1.0 / 9.0], dtype=np.float32)
-                import_data.vertices = (verts * s).ravel().astype(np.float32)
-                import_data.normals = norms.ravel().astype(np.float32)
-                import_data.is_error_mesh = True
-            with self._async_lock:
-                self._pending_mesh_queue.append((cache_key, import_data, scale, cp, fuvs))
-            self._on_async_load_complete()
+                try:
+                    import_data = fut.result()
+                except Exception:
+                    import_data = None
+                is_error = (path == _ERROR_MESH_PATH)
+                if not is_error and (import_data is None or len(import_data.vertices) == 0):
+                    Logger.warning(f"Failed to load mesh, falling back to error mesh")
+                    notify_error(f"Failed to load {_display_name(key)}")
+                    from core.assets.asset_importer import load_mesh
+                    import_data = load_mesh(_ERROR_MESH_PATH)
+                    is_error = True
+                if is_error and import_data is not None and len(import_data.vertices) > 0:
+                    verts = import_data.vertices.reshape(-1, 3).astype(np.float32)
+                    norms = import_data.normals.reshape(-1, 3).astype(np.float32)
+                    rot = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+                    verts = verts @ rot.T
+                    norms = norms @ rot.T
+                    s = np.array([0.25 / 9.0, 1.0 / 9.0, 1.0 / 9.0], dtype=np.float32)
+                    import_data.vertices = (verts * s).ravel().astype(np.float32)
+                    import_data.normals = norms.ravel().astype(np.float32)
+                    import_data.is_error_mesh = True
+                with self._async_lock:
+                    self._pending_mesh_queue.append((cache_key, import_data, scale, cp, fuvs))
+                self._on_async_load_complete()
+            finally:
+                task_complete(_mesh_load_task(cache_key))
         if lower_path.endswith(".obj"):
             fut = load_obj_future(path)
         else:

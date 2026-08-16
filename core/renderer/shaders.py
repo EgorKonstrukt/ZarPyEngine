@@ -5,11 +5,15 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+
 import os
 import re
-import moderngl
 from typing import Optional
+
+import moderngl
+
 from core.foundation.logger import Logger
+from core.foundation.progress import notify_error, task_complete, task_start
 from core.renderer.mesh_data import SHADER_DIR
 
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,7 +52,12 @@ class ShaderManager:
             return self._compile_shader_file(shader_path)
         return self._compile_vert_frag(shader_path)
 
+    def _compile_task(self, shader_path: str) -> str:
+        return f"shader:{shader_path}"
+
     def _compile_vert_frag(self, shader_path: str) -> Optional[moderngl.Program]:
+        task_id = self._compile_task(shader_path)
+        task_start(task_id, f"Compiling shader {os.path.basename(shader_path)}...", fraction=None)
         try:
             base = os.path.join(SHADER_DIR, shader_path)
             vert_file = f"{base}.vert"
@@ -69,37 +78,48 @@ class ShaderManager:
             return prog
         except Exception as e:
             Logger.error(f"Failed to compile shader '{shader_path}': {e}", e)
+            notify_error(f"Failed to compile shader {os.path.basename(shader_path)}")
             self._cache[shader_path] = None
             return None
+        finally:
+            task_complete(task_id)
 
     def _compile_shader_file(self, shader_path: str) -> Optional[moderngl.Program]:
         """Compile a .shader file containing GLSLPROGRAM...ENDGLSL blocks."""
-        from core.assets.material import _extract_glsl_from_shader
-        resolved = _resolve_shader_path(shader_path)
+        task_id = self._compile_task(shader_path)
+        task_start(task_id, f"Compiling shader {os.path.basename(shader_path)}...", fraction=None)
         try:
-            with open(resolved, "r", encoding="utf-8") as f:
-                text = f.read()
-        except Exception as e:
-            Logger.error(f"Failed to read '{shader_path}': {e}", e)
-            self._cache[shader_path] = None
-            return None
-        result = _extract_glsl_from_shader(text)
-        if not result:
-            Logger.error(f"No valid GLSL found in '{shader_path}'")
-            self._cache[shader_path] = None
-            return None
-        vert_src, frag_src = result
-        vert_src = self._inject_instancing_vertex(vert_src)
-        frag_src = self._inject_area_shadows(frag_src)
-        frag_src = self._inject_caustics(frag_src)
-        try:
-            prog = self._ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
-            self._cache[shader_path] = prog
-            return prog
-        except Exception as e:
-            Logger.error(f"Failed to compile shader '{shader_path}': {e}", e)
-            self._cache[shader_path] = None
-            return None
+            from core.assets.material import _extract_glsl_from_shader
+            resolved = _resolve_shader_path(shader_path)
+            try:
+                with open(resolved, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except Exception as e:
+                Logger.error(f"Failed to read '{shader_path}': {e}", e)
+                notify_error(f"Failed to compile shader {os.path.basename(shader_path)}")
+                self._cache[shader_path] = None
+                return None
+            result = _extract_glsl_from_shader(text)
+            if not result:
+                Logger.error(f"No valid GLSL found in '{shader_path}'")
+                notify_error(f"No valid GLSL in {os.path.basename(shader_path)}")
+                self._cache[shader_path] = None
+                return None
+            vert_src, frag_src = result
+            vert_src = self._inject_instancing_vertex(vert_src)
+            frag_src = self._inject_area_shadows(frag_src)
+            frag_src = self._inject_caustics(frag_src)
+            try:
+                prog = self._ctx.program(vertex_shader=vert_src, fragment_shader=frag_src)
+                self._cache[shader_path] = prog
+                return prog
+            except Exception as e:
+                Logger.error(f"Failed to compile shader '{shader_path}': {e}", e)
+                notify_error(f"Failed to compile shader {os.path.basename(shader_path)}")
+                self._cache[shader_path] = None
+                return None
+        finally:
+            task_complete(task_id)
 
     @staticmethod
     def _inject_instancing_vertex(src: str) -> str:

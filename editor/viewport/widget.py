@@ -34,6 +34,7 @@ from core.input.constants import (KEY_Q, KEY_W, KEY_E, KEY_R, KEY_F, KEY_DELETE,
                               KEY_SPACE, KEY_S, KEY_D, KEY_A, MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE,
                               MOUSE_L, MOUSE_R, MOUSE_M)
 from editor.viewport.overlay_widget import OverlayWidget
+from editor.viewport.progress_toast import ProgressToast
 
 from editor.viewport.rendering import (
     render_component_gizmos,
@@ -232,6 +233,7 @@ class SceneViewport(QOpenGLWidget):
         self._gizmo_visible = True
         self._gizmo_icons_visible = True
         self._overlay_widget = OverlayWidget(self, self)
+        self._progress_toast = ProgressToast(self)
         try:
             from core.config.config import get_global_config
             get_global_config().on_changed(self._on_overlay_config_changed)
