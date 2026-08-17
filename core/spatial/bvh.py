@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from concurrent.futures import Future
-from typing import Union
 
 import numpy as np
+import xxhash
 
 from core.ecs.pool import bvh as _get_bvh_pool
 from core.ecs.pool import bvh_parallel as _get_bvh_parallel_pool
@@ -23,6 +24,7 @@ _SAH_BINS = 12
 _SAH_TRAV = 1.0
 _SAH_HIT = 1.0
 _PAR_THRESH = 50000
+_BVH_CACHE_VERSION = 1
 
 
 class _BuildCtx:
@@ -144,16 +146,18 @@ def _moller_trumbore(ox, oy, oz, dx, dy, dz, ax, ay, az, bx, by, bz, cx, cy, cz)
 
 class BVH:
     __slots__ = ('_nodes', '_tri_indices', '_tri_bmin', '_tri_bmax', '_centroids',
-                 '_vertices', '_indices', '_vert_key', '_idx_key', '_cached_depths',
-                 '_node_views', '_tri_v0', '_tri_v1', '_tri_v2')
+                 '_vertices', '_indices', '_vert_key', '_idx_key', '_task_id',
+                 '_cached_depths', '_node_views', '_tri_v0', '_tri_v1', '_tri_v2')
 
-    def __init__(self, vertices: np.ndarray, indices: np.ndarray):
+    def __init__(self, vertices: np.ndarray, indices: np.ndarray,
+                 task_id: str | None = None):
         self._vertices = vertices
         self._indices = indices
         self._cached_depths: list[int] | None = None
         self._node_views: list | None = None
         self._vert_key = id(vertices)
         self._idx_key = id(indices)
+        self._task_id = task_id or str(self._vert_key)
 
         n_tris = len(indices) // 3
         if n_tris == 0:
@@ -185,6 +189,29 @@ class BVH:
         self._tri_v1 = tri_u32[slot_idx + 1]
         self._tri_v2 = tri_u32[slot_idx + 2]
 
+    @classmethod
+    def from_cache(cls, nodes: np.ndarray, tri_indices: np.ndarray,
+                   vertices: np.ndarray, indices: np.ndarray) -> BVH:
+        bvh = object.__new__(cls)
+        bvh._nodes = nodes
+        bvh._tri_indices = tri_indices
+        bvh._vertices = vertices
+        bvh._indices = indices
+        bvh._vert_key = id(vertices)
+        bvh._idx_key = id(indices)
+        bvh._task_id = ""
+        bvh._cached_depths = None
+        bvh._node_views = None
+        bvh._tri_bmin = np.empty((0, 3), dtype=np.float32)
+        bvh._tri_bmax = np.empty((0, 3), dtype=np.float32)
+        bvh._centroids = np.empty((0, 3), dtype=np.float32)
+        tri_u32 = np.asarray(indices, dtype=np.uint32)
+        slot_idx = tri_indices.astype(np.intp) * 3
+        bvh._tri_v0 = tri_u32[slot_idx]
+        bvh._tri_v1 = tri_u32[slot_idx + 1]
+        bvh._tri_v2 = tri_u32[slot_idx + 2]
+        return bvh
+
     def _build(self, tri_order, n_tris):
         import sys
         sys.setrecursionlimit(1000000)
@@ -192,7 +219,7 @@ class BVH:
         ctx = _BuildCtx(n_tris * 2 + 1, n_tris)
         ctx.total_tris = n_tris
         ctx.n_verts = len(self._vertices.reshape(-1, 3))
-        ctx.task_id = str(self._vert_key)
+        ctx.task_id = self._task_id
         ctx.last_t = time.monotonic()
         task_update(ctx.task_id, 0.0, detail=f"0 / {_fmt_count(n_tris)} tris · {_fmt_count(ctx.n_verts)} verts",
                     total=n_tris, units="tris")
@@ -633,41 +660,115 @@ except ImportError:
     _raycast_mod = None
 
 
-_BVH_CACHE: dict[int, Union[BVH, Future, None]] = {}
+_BVH_CACHE: dict[str, BVH | Future | None] = {}
 _BVH_LOCK = threading.Lock()
 
 
+def _bvh_cache_key(vertices: np.ndarray, indices: np.ndarray) -> str:
+    h = xxhash.xxh128()
+    h.update(vertices.data)
+    h.update(indices.data)
+    return h.hexdigest()
 
-def _build_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None) -> BVH:
-    task_id = str(id(vertices))
+
+def _bvh_cache_dir() -> str | None:
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if eng is None:
+            return None
+        root = eng.project_root
+        d = os.path.join(root, "cache", "bvh")
+        os.makedirs(d, exist_ok=True)
+        return d
+    except (ImportError, OSError, AttributeError, TypeError):
+        return None
+
+def _save_bvh_disk(key: str, bvh: BVH, cache_dir: str) -> None:
+    prefix = f"v{_BVH_CACHE_VERSION}_{key}"
+    nodes_path = os.path.join(cache_dir, prefix + "_n.npy")
+    tmp_nodes = nodes_path + ".tmp"
+    tris_path = os.path.join(cache_dir, prefix + "_t.npy")
+    tmp_tris = tris_path + ".tmp"
+    try:
+        np.save(tmp_nodes, bvh._nodes, allow_pickle=False)
+        np.save(tmp_tris, bvh._tri_indices, allow_pickle=False)
+        os.replace(tmp_nodes + ".npy", nodes_path)
+        os.replace(tmp_tris + ".npy", tris_path)
+    except (OSError, ValueError):
+        for p in (tmp_nodes + ".npy", tmp_tris + ".npy", tmp_nodes, tmp_tris):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def _load_bvh_disk(key: str, cache_dir: str,
+                   vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
+    prefix = f"v{_BVH_CACHE_VERSION}_{key}"
+    nodes_path = os.path.join(cache_dir, prefix + "_n.npy")
+    tris_path = os.path.join(cache_dir, prefix + "_t.npy")
+    try:
+        nodes = np.load(nodes_path, allow_pickle=False)
+        tri_indices = np.load(tris_path, allow_pickle=False)
+    except (OSError, ValueError):
+        return None
+    return BVH.from_cache(np.array(nodes), tri_indices, vertices, indices)
+
+
+
+def _build_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None,
+               cache_key: str | None = None) -> BVH:
+    task_id = cache_key or str(id(vertices))
     task_start(task_id, title or "Building BVH...", fraction=0.0)
     try:
-        return BVH(vertices, indices)
+        bvh = BVH(vertices, indices, task_id=task_id)
+        if cache_key:
+            cache_dir = _bvh_cache_dir()
+            if cache_dir:
+                _save_bvh_disk(cache_key, bvh, cache_dir)
+        return bvh
     finally:
         task_complete(task_id)
 
 
 def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None) -> None:
     """Trigger async BVH pre-build. Safe to call from any thread."""
-    key = id(vertices)
+    if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+        key = _bvh_cache_key(
+            np.zeros(3, dtype=np.float32) if vertices is None else vertices,
+            np.zeros(3, dtype=np.uint32) if indices is None else indices,
+        )
+        with _BVH_LOCK:
+            _BVH_CACHE[key] = None
+        return
+    key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key in _BVH_CACHE:
             return
-        if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
-            _BVH_CACHE[key] = None
-            return
+        cache_dir = _bvh_cache_dir()
+        if cache_dir:
+            cached = _load_bvh_disk(key, cache_dir, vertices, indices)
+            if cached is not None:
+                _BVH_CACHE[key] = cached
+                return
         pool = _get_bvh_pool()
-        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices, title)
+        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices, title, key)
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
-    key = id(vertices)
+    if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+        return None
+    key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key not in _BVH_CACHE:
-            if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
-                _BVH_CACHE[key] = None
-            else:
-                _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices)
+            cache_dir = _bvh_cache_dir()
+            if cache_dir:
+                cached = _load_bvh_disk(key, cache_dir, vertices, indices)
+                if cached is not None:
+                    _BVH_CACHE[key] = cached
+                    return cached
+            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices, cache_key=key)
         entry = _BVH_CACHE[key]
     if isinstance(entry, Future):
         if entry.done():
@@ -683,13 +784,18 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
 
 
 def get_mesh_bvh_sync(vertices: np.ndarray, indices: np.ndarray, timeout: float = 60.0) -> BVH | None:
-    key = id(vertices)
+    if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
+        return None
+    key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key not in _BVH_CACHE:
-            if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
-                _BVH_CACHE[key] = None
-            else:
-                _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices)
+            cache_dir = _bvh_cache_dir()
+            if cache_dir:
+                cached = _load_bvh_disk(key, cache_dir, vertices, indices)
+                if cached is not None:
+                    _BVH_CACHE[key] = cached
+                    return cached
+            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices, cache_key=key)
         entry = _BVH_CACHE[key]
     if isinstance(entry, Future):
         try:
