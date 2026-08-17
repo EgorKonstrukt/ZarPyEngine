@@ -275,7 +275,7 @@ class RaytracingRenderer(Component):
         bvh_flat = np.asarray(bvh.flatten_for_gpu(), dtype=np.float32)
         nn = bvh_flat.shape[0]
         internal_mask = bvh_flat[:, 7] >= 0
-        root = bvh.nodes[-1]
+        root = bvh.nodes[int(getattr(bvh, '_root_idx', len(bvh.nodes) - 1))]
         lbmin = np.asarray(root.bmin, dtype=np.float32)
         lbmax = np.asarray(root.bmax, dtype=np.float32)
         return vert8, idx_local, bvh_flat, internal_mask, nn, nt, nv, bvh, lbmin, lbmax
@@ -299,7 +299,7 @@ class RaytracingRenderer(Component):
             else:
                 blk = bvh_flat
             bvh_np[bo:bo + nn] = blk
-            offsets.append((vo, io, bo, nn, nt))
+            offsets.append((vo, io, bo, nn, nt, int(getattr(_bvh, '_root_idx', nn - 1)) + bo))
             vo += nv; io += nt; bo += nn
         self._vert_np = vert_np
         self._idx_np = idx_np.reshape(-1)
@@ -428,7 +428,7 @@ class RaytracingRenderer(Component):
         inst_np[:, :16] = wm_f32.reshape(n_inst, 16)
         inst_np[:, 16:32] = inv_w_f32.reshape(n_inst, 16)
 
-        _bvh_roots = np.array([float(offsets[i][2] + offsets[i][3] - 1) for i in range(n_inst)])
+        _bvh_roots = np.array([float(offsets[i][5]) for i in range(n_inst)])
         _vert_offs = np.array([float(offsets[i][0]) for i in range(n_inst)])
         _idx_offs = np.array([float(offsets[i][1]) for i in range(n_inst)])
         _mat_idxs = np.array([float(material_map.get(instances[i][1], 0)) for i in range(n_inst)])

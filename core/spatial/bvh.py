@@ -43,7 +43,7 @@ _SAH_BINS = 12
 _SAH_TRAV = 1.0
 _SAH_HIT = 1.0
 _PAR_THRESH = 50000
-_BVH_CACHE_VERSION = 2
+_BVH_CACHE_VERSION = 3
 
 
 def _spread_bits_vec(v: np.ndarray) -> np.ndarray:
@@ -292,7 +292,6 @@ class BVH:
         bvh._tri_v0 = tri_u32[slot_idx]
         bvh._tri_v1 = tri_u32[slot_idx + 1]
         bvh._tri_v2 = tri_u32[slot_idx + 2]
-        bvh._root_idx = len(nodes) - 1
         return bvh
 
     def _build(self, tri_order, n_tris):
@@ -490,8 +489,9 @@ class BVH:
             bmin, bmax = self._tri_bmin[0], self._tri_bmax[0]
             self._nodes = np.array([[bmin[0], bmin[1], bmin[2],
                                      bmax[0], bmax[1], bmax[2],
-                                     0.0, -1.0]], dtype=np.float32)
+                                     0.0, -2.0]], dtype=np.float32)
             self._tri_indices = ctx.tri_indices[:1]
+            self._root_idx = 0
             return
 
         max_nodes = n_tris * 2
@@ -867,6 +867,7 @@ except ImportError:
 
 _BVH_CACHE: dict[str, BVH | Future | None] = {}
 _BVH_LOCK = threading.Lock()
+_BVH_CACHE_RUNTIME_VERSION: int = _BVH_CACHE_VERSION
 
 
 def _bvh_cache_key(vertices: np.ndarray, indices: np.ndarray) -> str:
@@ -993,8 +994,14 @@ def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | No
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
+    global _BVH_CACHE_RUNTIME_VERSION
     if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
         return None
+    with _BVH_LOCK:
+        if _BVH_CACHE_RUNTIME_VERSION != _BVH_CACHE_VERSION:
+            _BVH_CACHE.clear()
+            _BVH_CACHE_RUNTIME_VERSION = _BVH_CACHE_VERSION
+            _bvh_log(f"CACHE CLEAR version bump {_BVH_CACHE_RUNTIME_VERSION} -> {_BVH_CACHE_VERSION}")
     key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key not in _BVH_CACHE:
@@ -1039,8 +1046,14 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
 
 
 def get_mesh_bvh_sync(vertices: np.ndarray, indices: np.ndarray, timeout: float = 60.0) -> BVH | None:
+    global _BVH_CACHE_RUNTIME_VERSION
     if vertices is None or len(vertices) < 3 or indices is None or len(indices) < 3:
         return None
+    with _BVH_LOCK:
+        if _BVH_CACHE_RUNTIME_VERSION != _BVH_CACHE_VERSION:
+            _BVH_CACHE.clear()
+            _BVH_CACHE_RUNTIME_VERSION = _BVH_CACHE_VERSION
+            _bvh_log(f"SYNC CACHE CLEAR version bump")
     key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key not in _BVH_CACHE:

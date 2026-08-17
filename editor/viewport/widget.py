@@ -382,27 +382,24 @@ class SceneViewport(QOpenGLWidget):
         mesh = _get_mesh_for(sel, mf.mesh_name or "cube", mf.mesh_path)
         if not mesh or mesh.vertices is None or len(mesh.vertices) < 3:
             return
-        from core.spatial.bvh import get_mesh_bvh, build_bvh_arrays
+        from core.spatial.bvh import get_mesh_bvh
         bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
         if not bvh or not bvh.nodes:
             return
-        starts, ends, colors = build_bvh_arrays(bvh, max_depth=4)
-        if starts is None:
-            return
-        from core.components.transform import Transform
         tr = sel.transform
         if not tr:
             return
-        wm = tr.world_matrix._d
-        ones = np.ones((starts.shape[0], 1), dtype=np.float32)
-        ws_h = np.concatenate([starts, ones], axis=1)
-        we_h = np.concatenate([ends, ones], axis=1)
-        ws = (ws_h @ wm)[:, :3]
-        we = (we_h @ wm)[:, :3]
+        wm = tr.world_matrix
         fw, fh = self._get_physical_dims()
         vp_mat = self._cam.get_view_matrix() * self._cam.get_projection_matrix(
             fw / max(1, fh))
-        self._renderer.render_gizmo_arrays(ws, we, colors, vp_mat, fw, fh, thickness_multiplier=1.5)
+        if not hasattr(self, '_bvh_dbg'):
+            from core.renderer.bvh_debug import BVHDebugRenderer
+            self._bvh_dbg = BVHDebugRenderer()
+        try:
+            self._bvh_dbg.render(self._ctx, bvh, wm, vp_mat, max_depth=4)
+        except Exception:
+            pass
 
     def _on_fov_changed(self, value: float):
         self._cam._fov = value

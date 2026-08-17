@@ -303,9 +303,11 @@ def _test_mesh_hit(wm, ro, rd, mesh):
         from core.spatial.bvh import get_mesh_bvh
         bvh = get_mesh_bvh(verts, indices)
         if bvh and bvh.nodes:
-            return bvh.intersect(local_o[0], local_o[1], local_o[2],
-                                 local_d[0], local_d[1], local_d[2],
-                                 verts, indices)
+            d = bvh.intersect(local_o[0], local_o[1], local_o[2],
+                              local_d[0], local_d[1], local_d[2],
+                              verts, indices)
+            if d > 0:
+                return d
         if _raycast_cy is not None:
             return _raycast_cy.triangles_intersect(
                 verts.reshape(-1), indices,
