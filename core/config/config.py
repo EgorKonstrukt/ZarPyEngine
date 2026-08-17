@@ -193,7 +193,8 @@ def get_global_config() -> Config:
                 "max_lights": 8,
                 "light_scale": 1.0,
                 "play_viewport_throttle": "editor",
-                "play_viewport_throttle_step": 2
+                "play_viewport_throttle_step": 2,
+                "bvh_build_mode": "fast",
             },
             "gizmo": {
                 "handle_size": 0.1,

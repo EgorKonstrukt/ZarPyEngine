@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import threading
 import time
 
@@ -13,6 +14,9 @@ _tasks: dict[str, dict] = {}
 _notifications: list[dict] = []
 _completed: list[dict] = []
 _lock = threading.Lock()
+
+_PROGRESS_QUEUE: multiprocessing.managers.SyncManager.Queue | None = None
+_reader_thread: threading.Thread | None = None
 
 
 def task_start(task_id: str, title: str, fraction: float | None = None,
@@ -112,3 +116,37 @@ def snapshot() -> list[dict]:
             }
             for tid, t in items
         ]
+
+
+def _reader_loop(queue: multiprocessing.Queue) -> None:
+    _FN = {
+        "start": task_start,
+        "update": task_update,
+        "set_title": task_set_title,
+        "set_detail": task_set_detail,
+        "complete": task_complete,
+    }
+    while True:
+        try:
+            msg = queue.get()
+        except (EOFError, OSError):
+            break
+        if msg is None:
+            break
+        fn = _FN.get(msg[0])
+        if fn is not None:
+            try:
+                fn(*msg[1], **msg[2])
+            except Exception:
+                pass
+
+
+def get_progress_queue():
+    global _PROGRESS_QUEUE, _reader_thread
+    if _PROGRESS_QUEUE is None:
+        mgr = multiprocessing.Manager()
+        _PROGRESS_QUEUE = mgr.Queue()
+        _reader_thread = threading.Thread(target=_reader_loop, args=(_PROGRESS_QUEUE,),
+                                          daemon=True, name="bvh-progress-reader")
+        _reader_thread.start()
+    return _PROGRESS_QUEUE

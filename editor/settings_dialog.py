@@ -790,6 +790,12 @@ class SettingsDialog(QDialog):
             cb.setCurrentText(self._config.get(key, "inverse_distance_clamped"))
             cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             return cb
+        if key == "rendering.bvh_build_mode":
+            cb = QComboBox()
+            cb.addItems(["fast", "accurate"])
+            cb.setCurrentText(self._config.get(key, "fast"))
+            cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
+            return cb
         if key == "audio.device_name":
             container = QWidget()
             hl = QHBoxLayout(container)

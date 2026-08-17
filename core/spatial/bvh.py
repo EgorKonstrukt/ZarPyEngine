@@ -17,14 +17,51 @@ import xxhash
 from core.ecs.pool import bvh as _get_bvh_pool
 from core.ecs.pool import bvh_parallel as _get_bvh_parallel_pool
 from core.foundation.progress import task_complete, task_start, task_update
+from core.foundation.progress import get_progress_queue
 
-_LEAF_SIZE = 8
+_BVH_LOG = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")),
+                        "zarin_bvh_log.txt")
+try:
+    with open(_BVH_LOG, "w", encoding="utf-8") as _lf:
+        _lf.write(f"=== BVH LOG RESET ===\n")
+except OSError:
+    pass
+
+
+def _bvh_log(msg: str) -> None:
+    try:
+        with open(_BVH_LOG, "a", encoding="utf-8") as _f:
+            _f.write(f"{time.monotonic():.3f} {msg}\n")
+    except OSError:
+        pass
+
+_bvh_progress_queue: object | None = None
+
+_LEAF_SIZE = 32
 _MAX_DEPTH = 48
 _SAH_BINS = 12
 _SAH_TRAV = 1.0
 _SAH_HIT = 1.0
 _PAR_THRESH = 50000
-_BVH_CACHE_VERSION = 1
+_BVH_CACHE_VERSION = 2
+
+
+def _spread_bits_vec(v: np.ndarray) -> np.ndarray:
+    v = v.astype(np.uint64)
+    v = (v | (v << 16)) & np.uint64(0x0000FFFF0000FFFF)
+    v = (v | (v << 8)) & np.uint64(0x00FF00FF00FF00FF)
+    v = (v | (v << 4)) & np.uint64(0x0F0F0F0F0F0F0F0F)
+    v = (v | (v << 2)) & np.uint64(0x3333333333333333)
+    v = (v | (v << 1)) & np.uint64(0x5555555555555555)
+    return v.astype(np.uint32)
+
+
+def _get_bvh_build_mode() -> str:
+    try:
+        from core.config.config import get_global_config
+        return get_global_config().get("rendering.bvh_build_mode", "fast")
+    except Exception:
+        return "fast"
 
 
 class _BuildCtx:
@@ -55,6 +92,31 @@ def _fmt_count(n: int) -> str:
     return str(n)
 
 
+def _pq_put(msg):
+    q = _bvh_progress_queue
+    if q is not None:
+        try:
+            q.put_nowait(msg)
+        except Exception:
+            pass
+
+
+def _bvh_task_update(task_id, fraction=None, detail=None, total=None, units=None):
+    if _bvh_progress_queue is not None:
+        kw = {}
+        if fraction is not None:
+            kw["fraction"] = fraction
+        if detail is not None:
+            kw["detail"] = detail
+        if total is not None:
+            kw["total"] = total
+        if units is not None:
+            kw["units"] = units
+        _pq_put(("update", (task_id,), kw))
+    else:
+        task_update(task_id, fraction=fraction, detail=detail, total=total, units=units)
+
+
 def _report_build_progress(ctx):
     if ctx.total_tris <= 0:
         return
@@ -65,7 +127,7 @@ def _report_build_progress(ctx):
         ctx.last_t = now
         detail = (f"{_fmt_count(ctx.progress_done)} / {_fmt_count(ctx.total_tris)} tris"
                   f" · {_fmt_count(ctx.n_verts)} verts")
-        task_update(ctx.task_id, frac, detail=detail)
+        _bvh_task_update(ctx.task_id, frac, detail=detail)
 
 
 def _surface_area(bmin, bmax):
@@ -144,10 +206,24 @@ def _moller_trumbore(ox, oy, oz, dx, dy, dz, ax, ay, az, bx, by, bz, cx, cy, cz)
     return t if t > 0 else -1.0
 
 
+def _find_morton_split(sorted_morton: np.ndarray, start: int, end: int) -> int:
+    common = int(sorted_morton[start] ^ sorted_morton[end - 1])
+    if common == 0:
+        return (start + end) // 2
+    split_bit = 63 - (common.bit_length() - 1)
+    split_mask = np.uint64(1 << split_bit)
+    masks = sorted_morton[start:end] & split_mask
+    indices = np.flatnonzero(masks)
+    if len(indices) > 0:
+        return start + int(indices[0])
+    return (start + end) // 2
+
+
 class BVH:
     __slots__ = ('_nodes', '_tri_indices', '_tri_bmin', '_tri_bmax', '_centroids',
                  '_vertices', '_indices', '_vert_key', '_idx_key', '_task_id',
-                 '_cached_depths', '_node_views', '_tri_v0', '_tri_v1', '_tri_v2')
+                 '_cached_depths', '_node_views', '_tri_v0', '_tri_v1', '_tri_v2',
+                 '_root_idx')
 
     def __init__(self, vertices: np.ndarray, indices: np.ndarray,
                  task_id: str | None = None):
@@ -169,6 +245,7 @@ class BVH:
             self._tri_v0 = np.array([], dtype=np.uint32)
             self._tri_v1 = np.array([], dtype=np.uint32)
             self._tri_v2 = np.array([], dtype=np.uint32)
+            self._root_idx = 0
             return
 
         verts3 = vertices.reshape(-1, 3)
@@ -181,7 +258,10 @@ class BVH:
         self._centroids = (v0 + v1 + v2) / 3.0
 
         tri_order = np.arange(n_tris, dtype=np.intp)
-        self._build(tri_order, n_tris)
+        if _get_bvh_build_mode() == "fast":
+            self._build_lbvh(tri_order, n_tris)
+        else:
+            self._build(tri_order, n_tris)
 
         tri_u32 = np.asarray(indices, dtype=np.uint32)
         slot_idx = self._tri_indices.astype(np.intp) * 3
@@ -191,7 +271,8 @@ class BVH:
 
     @classmethod
     def from_cache(cls, nodes: np.ndarray, tri_indices: np.ndarray,
-                   vertices: np.ndarray, indices: np.ndarray) -> BVH:
+                   vertices: np.ndarray, indices: np.ndarray,
+                   root_idx: int = -1) -> BVH:
         bvh = object.__new__(cls)
         bvh._nodes = nodes
         bvh._tri_indices = tri_indices
@@ -205,11 +286,13 @@ class BVH:
         bvh._tri_bmin = np.empty((0, 3), dtype=np.float32)
         bvh._tri_bmax = np.empty((0, 3), dtype=np.float32)
         bvh._centroids = np.empty((0, 3), dtype=np.float32)
+        bvh._root_idx = root_idx if root_idx >= 0 else len(nodes) - 1
         tri_u32 = np.asarray(indices, dtype=np.uint32)
         slot_idx = tri_indices.astype(np.intp) * 3
         bvh._tri_v0 = tri_u32[slot_idx]
         bvh._tri_v1 = tri_u32[slot_idx + 1]
         bvh._tri_v2 = tri_u32[slot_idx + 2]
+        bvh._root_idx = len(nodes) - 1
         return bvh
 
     def _build(self, tri_order, n_tris):
@@ -221,8 +304,9 @@ class BVH:
         ctx.n_verts = len(self._vertices.reshape(-1, 3))
         ctx.task_id = self._task_id
         ctx.last_t = time.monotonic()
-        task_update(ctx.task_id, 0.0, detail=f"0 / {_fmt_count(n_tris)} tris · {_fmt_count(ctx.n_verts)} verts",
-                    total=n_tris, units="tris")
+        _bvh_task_update(ctx.task_id, 0.0,
+                         detail=f"0 / {_fmt_count(n_tris)} tris · {_fmt_count(ctx.n_verts)} verts",
+                         total=n_tris, units="tris")
 
         def _alloc_node(ctx):
             with ctx.lock:
@@ -369,6 +453,125 @@ class BVH:
         _sah_build(tri_order)
         self._nodes = ctx.nodes[:ctx.node_count]
         self._tri_indices = ctx.tri_indices[:ctx.tri_offset]
+        self._root_idx = ctx.node_count - 1
+
+    def _build_lbvh(self, tri_order, n_tris):
+        verts3 = self._vertices.reshape(-1, 3)
+        tri_i = self._indices.reshape(n_tris, 3).astype(np.intp)
+        v0 = verts3[tri_i[:, 0]]
+        v1 = verts3[tri_i[:, 1]]
+        v2 = verts3[tri_i[:, 2]]
+
+        scene_min = np.minimum(np.minimum(v0, v1), v2).min(axis=0)
+        scene_max = np.maximum(np.maximum(v0, v1), v2).max(axis=0)
+        scene_ext = np.maximum(scene_max - scene_min, 1e-10)
+        centroids = (v0 + v1 + v2) * (1.0 / 3.0)
+        norm = (centroids - scene_min) / scene_ext
+        bits = 10
+        scale = float((1 << bits) - 1)
+        cx = np.floor(norm[:, 0] * scale).astype(np.uint32)
+        cy = np.floor(norm[:, 1] * scale).astype(np.uint32)
+        cz = np.floor(norm[:, 2] * scale).astype(np.uint32)
+        morton = _spread_bits_vec(cx) | (_spread_bits_vec(cy) << 1) | (_spread_bits_vec(cz) << 2)
+        morton_u64 = morton.astype(np.uint64)
+
+        order = np.argsort(morton_u64, kind='stable')
+        sorted_tris = tri_order[order]
+        sorted_morton = morton_u64[order]
+
+        if n_tris == 1:
+            ctx = _BuildCtx(1, 1)
+            ctx.total_tris = 1
+            ctx.n_verts = len(self._vertices.reshape(-1, 3))
+            ctx.task_id = self._task_id
+            ctx.tri_indices[0] = sorted_tris[0]
+            ctx.progress_done = 1
+            _report_build_progress(ctx)
+            bmin, bmax = self._tri_bmin[0], self._tri_bmax[0]
+            self._nodes = np.array([[bmin[0], bmin[1], bmin[2],
+                                     bmax[0], bmax[1], bmax[2],
+                                     0.0, -1.0]], dtype=np.float32)
+            self._tri_indices = ctx.tri_indices[:1]
+            return
+
+        max_nodes = n_tris * 2
+        node_bmin = np.empty((max_nodes, 3), dtype=np.float32)
+        node_bmax = np.empty((max_nodes, 3), dtype=np.float32)
+        left_child = np.full(max_nodes, -1, dtype=np.int32)
+        right_child = np.full(max_nodes, -1, dtype=np.int32)
+        leaf_flag = np.ones(max_nodes, dtype=bool)
+        leaf_tri_start = np.full(max_nodes, -1, dtype=np.int32)
+        leaf_tri_count = np.zeros(max_nodes, dtype=np.int32)
+        node_count = 0
+
+        ctx = _BuildCtx(max_nodes, n_tris)
+        ctx.total_tris = n_tris
+        ctx.n_verts = len(self._vertices.reshape(-1, 3))
+        ctx.task_id = self._task_id
+        ctx.last_t = time.monotonic()
+        _bvh_task_update(ctx.task_id, 0.0,
+                         detail=f"0 / {_fmt_count(n_tris)} tris · {_fmt_count(ctx.n_verts)} verts",
+                         total=n_tris, units="tris")
+
+        td_build_stack = [(0, n_tris, -1, False)]
+        while td_build_stack:
+            start, end, parent_idx, is_right = td_build_stack.pop()
+            count = end - start
+            ni = node_count
+            node_count += 1
+            if parent_idx >= 0:
+                if is_right:
+                    right_child[parent_idx] = ni
+                else:
+                    left_child[parent_idx] = ni
+
+            if count <= _LEAF_SIZE:
+                leaf_flag[ni] = True
+                tri_range = sorted_tris[start:end]
+                node_bmin[ni] = self._tri_bmin[tri_range].min(axis=0)
+                node_bmax[ni] = self._tri_bmax[tri_range].max(axis=0)
+                leaf_tri_start[ni] = start
+                leaf_tri_count[ni] = count
+                ctx.progress_done += count
+                _report_build_progress(ctx)
+            else:
+                leaf_flag[ni] = False
+                split = _find_morton_split(sorted_morton, start, end)
+                td_build_stack.append((split, end, ni, True))
+                td_build_stack.append((start, split, ni, False))
+
+        root = 0
+        nodes_out = np.empty((node_count, 8), dtype=np.float32)
+        tri_offset = 0
+
+        _flatten_stack = [(root, False)]
+        while _flatten_stack:
+            ni, visited_right = _flatten_stack.pop()
+            if leaf_flag[ni]:
+                tc = int(leaf_tri_count[ni])
+                nodes_out[ni, 0:3] = node_bmin[ni]
+                nodes_out[ni, 3:6] = node_bmax[ni]
+                nodes_out[ni, 6] = float(tri_offset)
+                nodes_out[ni, 7] = float(-tc - 1)
+                ts = int(leaf_tri_start[ni])
+                ctx.tri_indices[tri_offset:tri_offset + tc] = sorted_tris[ts:ts + tc]
+                tri_offset += tc
+                continue
+            lc = int(left_child[ni])
+            rc = int(right_child[ni])
+            if not visited_right:
+                nodes_out[ni, 6] = float(lc)
+                nodes_out[ni, 7] = float(rc)
+                _flatten_stack.append((ni, True))
+                _flatten_stack.append((rc, False))
+                _flatten_stack.append((lc, False))
+            else:
+                np.minimum(nodes_out[lc, 0:3], nodes_out[rc, 0:3], out=nodes_out[ni, 0:3])
+                np.maximum(nodes_out[lc, 3:6], nodes_out[rc, 3:6], out=nodes_out[ni, 3:6])
+
+        self._nodes = nodes_out[:node_count]
+        self._tri_indices = ctx.tri_indices[:tri_offset]
+        self._root_idx = 0
 
     def intersect(self, ox: float, oy: float, oz: float,
                   dx: float, dy: float, dz: float,
@@ -383,13 +586,14 @@ class BVH:
                 and v_arr.dtype == np.float32 and v_arr.flags.c_contiguous):
             return _raycast_mod.bvh_intersect(
                 nodes, self._tri_v0, self._tri_v1, self._tri_v2,
-                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz)
+                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz,
+                self._root_idx)
         verts3 = v_arr.reshape(-1, 3)
 
         best_t = float('inf')
         stack = np.empty(64, dtype=np.intp)
         sp = 0
-        stack[sp] = len(nodes) - 1
+        stack[sp] = self._root_idx
         sp += 1
 
         while sp > 0:
@@ -469,12 +673,13 @@ class BVH:
                 and v_arr.dtype == np.float32 and v_arr.flags.c_contiguous):
             return _raycast_mod.bvh_intersect_any(
                 nodes, self._tri_v0, self._tri_v1, self._tri_v2,
-                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz)
+                np.ascontiguousarray(v_arr).reshape(-1), ox, oy, oz, dx, dy, dz,
+                self._root_idx)
         verts3 = v_arr.reshape(-1, 3)
 
         stack = np.empty(64, dtype=np.intp)
         sp = 0
-        stack[sp] = len(nodes) - 1
+        stack[sp] = self._root_idx
         sp += 1
 
         while sp > 0:
@@ -604,7 +809,7 @@ class BVH:
                 return d
             return max(_max_depth(int(nd[6]), d + 1), _max_depth(int(nd[7]), d + 1))
 
-        return _max_depth(len(nodes) - 1, 0)
+        return _max_depth(self._root_idx, 0)
 
     @property
     def node_depths(self) -> list[int]:
@@ -690,13 +895,18 @@ def _save_bvh_disk(key: str, bvh: BVH, cache_dir: str) -> None:
     tmp_nodes = nodes_path + ".tmp"
     tris_path = os.path.join(cache_dir, prefix + "_t.npy")
     tmp_tris = tris_path + ".tmp"
+    root_path = os.path.join(cache_dir, prefix + "_r.npy")
+    tmp_root = root_path + ".tmp"
     try:
         np.save(tmp_nodes, bvh._nodes, allow_pickle=False)
         np.save(tmp_tris, bvh._tri_indices, allow_pickle=False)
+        np.save(tmp_root, np.array(bvh._root_idx, dtype=np.int32), allow_pickle=False)
         os.replace(tmp_nodes + ".npy", nodes_path)
         os.replace(tmp_tris + ".npy", tris_path)
+        os.replace(tmp_root + ".npy", root_path)
     except (OSError, ValueError):
-        for p in (tmp_nodes + ".npy", tmp_tris + ".npy", tmp_nodes, tmp_tris):
+        for p in (tmp_nodes + ".npy", tmp_tris + ".npy", tmp_root + ".npy",
+                   tmp_nodes, tmp_tris, tmp_root):
             try:
                 os.remove(p)
             except OSError:
@@ -708,28 +918,48 @@ def _load_bvh_disk(key: str, cache_dir: str,
     prefix = f"v{_BVH_CACHE_VERSION}_{key}"
     nodes_path = os.path.join(cache_dir, prefix + "_n.npy")
     tris_path = os.path.join(cache_dir, prefix + "_t.npy")
+    root_path = os.path.join(cache_dir, prefix + "_r.npy")
     try:
         nodes = np.load(nodes_path, allow_pickle=False)
         tri_indices = np.load(tris_path, allow_pickle=False)
     except (OSError, ValueError):
         return None
-    return BVH.from_cache(np.array(nodes), tri_indices, vertices, indices)
+    root_idx = len(nodes) - 1
+    try:
+        root_idx = int(np.load(root_path, allow_pickle=False))
+    except (OSError, ValueError):
+        pass
+    return BVH.from_cache(np.array(nodes), tri_indices, vertices, indices, root_idx)
 
 
 
 def _build_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None,
-               cache_key: str | None = None) -> BVH:
+               cache_key: str | None = None,
+               progress_queue: object | None = None):
+    global _bvh_progress_queue
+    _bvh_progress_queue = progress_queue
     task_id = cache_key or str(id(vertices))
-    task_start(task_id, title or "Building BVH...", fraction=0.0)
+    _bvh_log(f"BUILD start key={task_id} verts={len(vertices)} idx={len(indices)}")
+    if progress_queue is not None:
+        _pq_put(("start", (task_id, title or "Building BVH..."),
+                 {"fraction": 0.0}))
+    else:
+        task_start(task_id, title or "Building BVH...", fraction=0.0)
     try:
         bvh = BVH(vertices, indices, task_id=task_id)
-        if cache_key:
-            cache_dir = _bvh_cache_dir()
-            if cache_dir:
-                _save_bvh_disk(cache_key, bvh, cache_dir)
-        return bvh
+        result = bvh._nodes.copy(), bvh._tri_indices.copy(), bvh._root_idx
+        _bvh_log(f"BUILD done key={task_id} nodes={result[0].shape[0]}")
+        return result
+    except Exception as exc:
+        _bvh_log(f"BUILD FAIL key={task_id} {type(exc).__name__}: {exc}")
+        return None
     finally:
-        task_complete(task_id)
+        _bvh_progress_queue = None
+        try:
+            if progress_queue is not None:
+                progress_queue.put_nowait(("complete", (task_id,), {}))
+        except Exception:
+            pass
 
 
 def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | None = None) -> None:
@@ -741,19 +971,25 @@ def prebuild_mesh_bvh(vertices: np.ndarray, indices: np.ndarray, title: str | No
         )
         with _BVH_LOCK:
             _BVH_CACHE[key] = None
+        _bvh_log(f"PREBUILD skip (tiny mesh)")
         return
     key = _bvh_cache_key(vertices, indices)
     with _BVH_LOCK:
         if key in _BVH_CACHE:
+            _bvh_log(f"PREBUILD key={key} ALREADY_CACHED")
             return
         cache_dir = _bvh_cache_dir()
         if cache_dir:
             cached = _load_bvh_disk(key, cache_dir, vertices, indices)
             if cached is not None:
                 _BVH_CACHE[key] = cached
+                _bvh_log(f"PREBUILD key={key} DISK_HIT")
                 return
         pool = _get_bvh_pool()
-        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices, title, key)
+        pq = get_progress_queue()
+        _bvh_log(f"PREBUILD key={key} SUBMIT verts={len(vertices)} idx={len(indices)} pool={type(pool).__name__}")
+        _BVH_CACHE[key] = pool.submit(_build_bvh, vertices, indices, title, key,
+                                       progress_queue=pq)
 
 
 def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
@@ -767,19 +1003,38 @@ def get_mesh_bvh(vertices: np.ndarray, indices: np.ndarray) -> BVH | None:
                 cached = _load_bvh_disk(key, cache_dir, vertices, indices)
                 if cached is not None:
                     _BVH_CACHE[key] = cached
+                    _bvh_log(f"GET key={key} DISK HIT")
                     return cached
-            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices, cache_key=key)
+            _bvh_log(f"GET key={key} SUBMIT verts={len(vertices)} idx={len(indices)}")
+            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices,
+                                                     cache_key=key,
+                                                     progress_queue=get_progress_queue())
         entry = _BVH_CACHE[key]
     if isinstance(entry, Future):
         if entry.done():
             try:
                 result = entry.result()
-            except Exception:
+            except Exception as exc:
+                _bvh_log(f"GET key={key} FUTURE FAIL: {type(exc).__name__}: {exc}")
                 result = None
+            if isinstance(result, tuple) and len(result) == 3:
+                result = BVH.from_cache(result[0], result[1], vertices, indices, result[2])
+            elif isinstance(result, tuple):
+                result = BVH.from_cache(result[0], result[1], vertices, indices)
             with _BVH_LOCK:
                 _BVH_CACHE[key] = result
+            if result is not None:
+                cache_dir = _bvh_cache_dir()
+                if cache_dir:
+                    _save_bvh_disk(key, result, cache_dir)
+                _bvh_log(f"GET key={key} BUILT nodes={result.node_count()}")
+            else:
+                _bvh_log(f"GET key={key} result=None")
             return result
+        _bvh_log(f"GET key={key} PENDING")
         return None
+    if entry is None:
+        _bvh_log(f"GET key={key} CACHED_NONE")
     return entry
 
 
@@ -795,15 +1050,28 @@ def get_mesh_bvh_sync(vertices: np.ndarray, indices: np.ndarray, timeout: float 
                 if cached is not None:
                     _BVH_CACHE[key] = cached
                     return cached
-            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices, cache_key=key)
+            _bvh_log(f"SYNC key={key} SUBMIT verts={len(vertices)} idx={len(indices)}")
+            _BVH_CACHE[key] = _get_bvh_pool().submit(_build_bvh, vertices, indices,
+                                                     cache_key=key,
+                                                     progress_queue=get_progress_queue())
         entry = _BVH_CACHE[key]
     if isinstance(entry, Future):
         try:
             result = entry.result(timeout=timeout)
-        except Exception:
+        except Exception as exc:
+            _bvh_log(f"SYNC key={key} FUTURE FAIL: {type(exc).__name__}: {exc}")
             result = None
+        if isinstance(result, tuple) and len(result) == 3:
+            result = BVH.from_cache(result[0], result[1], vertices, indices, result[2])
+        elif isinstance(result, tuple):
+            result = BVH.from_cache(result[0], result[1], vertices, indices)
         with _BVH_LOCK:
             _BVH_CACHE[key] = result
+        if result is not None:
+            cache_dir = _bvh_cache_dir()
+            if cache_dir:
+                _save_bvh_disk(key, result, cache_dir)
+            _bvh_log(f"SYNC key={key} BUILT nodes={result.node_count()}")
         return result
     return entry
 
@@ -865,7 +1133,7 @@ def _compute_node_depths(bvh):
             walk(int(nd[7]), d + 1)
 
     if len(nodes) > 0:
-        walk(len(nodes) - 1, 0)
+        walk(bvh._root_idx, 0)
     return depths
 
 
