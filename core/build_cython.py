@@ -39,6 +39,7 @@ EXTENSIONS = [
     _ext("core._skinning", "_skinning.pyx"),
     _ext("core._audio_dsp_cy", "_audio_dsp.pyx"),
     _ext("core._raycast", "_raycast.pyx"),
+    _ext("core._shadow_batch", "_shadow_batch.pyx"),
 ]
 
 def build():

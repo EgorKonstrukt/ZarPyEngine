@@ -1,0 +1,97 @@
+#version 460 core
+layout(local_size_x = 3) in;
+
+layout(std430, binding = 0) readonly buffer CascadeInput {
+    vec4 frustum_corners[8];
+    vec4 light_dir_depth;
+    uvec4 params;
+};
+
+layout(std430, binding = 1) writeonly buffer CascadeOutput {
+    mat4 cascade_vps[3];
+    vec4 cascade_splits;
+};
+
+void main() {
+    uint ci = gl_LocalInvocationIndex.x;
+    if (ci >= 3u) return;
+
+    float split_far;
+    if (ci == 0u) split_far = frustum_corners[1].z;
+    else if (ci == 1u) split_far = frustum_corners[2].z;
+    else split_far = frustum_corners[3].z;
+
+    vec3 ld = light_dir_depth.xyz;
+    float depth_span = light_dir_depth.w;
+
+    vec3 center = vec3(0.0);
+    for (uint i = 0u; i < 8u; i++) {
+        center += frustum_corners[i].xyz;
+    }
+    center /= 8.0;
+
+    float radius2 = 0.0;
+    for (uint i = 0u; i < 8u; i++) {
+        vec3 d = frustum_corners[i].xyz - center;
+        radius2 = max(radius2, dot(d, d));
+    }
+
+    float radius = max(sqrt(radius2), 0.25);
+    radius = ceil(radius * 16.0) / 16.0;
+
+    vec3 light_pos = center - ld * max(radius * 2.0, depth_span + 10.0);
+
+    vec3 up = vec3(0.0, 1.0, 0.0);
+    if (abs(dot(ld, up)) > 0.999) up = vec3(0.0, 0.0, 1.0);
+
+    vec3 f = normalize(center - light_pos);
+    vec3 s = normalize(cross(f, up));
+    vec3 u = cross(s, f);
+
+    mat4 view = mat4(
+        vec4(s.x, u.x, -f.x, 0.0),
+        vec4(s.y, u.y, -f.y, 0.0),
+        vec4(s.z, u.z, -f.z, 0.0),
+        vec4(-dot(s, light_pos), -dot(u, light_pos), dot(f, light_pos), 1.0)
+    );
+
+    float cl_x = center.x * view[0][0] + center.y * view[1][0] + center.z * view[2][0] + view[3][0];
+    float cl_y = center.x * view[0][1] + center.y * view[1][1] + center.z * view[2][1] + view[3][1];
+
+    float shadow_res = float(params.x);
+    float texel_size = (radius * 2.0) / max(shadow_res, 1.0);
+    float cx_l = floor(cl_x / texel_size) * texel_size;
+    float cy_l = floor(cl_y / texel_size) * texel_size;
+
+    float left = cx_l - radius;
+    float right = cx_l + radius;
+    float bottom = cy_l - radius;
+    float top = cy_l + radius;
+
+    float min_z = 1e30;
+    float max_z = -1e30;
+    for (uint i = 0u; i < 8u; i++) {
+        vec3 p = frustum_corners[i].xyz;
+        float pz = p.x * view[0][2] + p.y * view[1][2] + p.z * view[2][2] + view[3][2];
+        float pw = p.x * view[0][3] + p.y * view[1][3] + p.z * view[2][3] + view[3][3];
+        pz = pz / max(pw, 0.001);
+        min_z = min(min_z, pz);
+        max_z = max(max_z, pz);
+    }
+
+    float z_margin = max(depth_span * 0.45, 6.0);
+    float n_val = max(-max_z - z_margin, 0.01);
+    float f_val = max(-min_z + z_margin, n_val + 0.01);
+
+    mat4 proj = mat4(0.0);
+    proj[0][0] = 2.0 / (right - left);
+    proj[0][3] = -(right + left) / (right - left);
+    proj[1][1] = 2.0 / (top - bottom);
+    proj[1][3] = -(top + bottom) / (top - bottom);
+    proj[2][2] = 2.0 / (f_val - n_val);
+    proj[2][3] = -(f_val + n_val) / (f_val - n_val);
+    proj[3][3] = 1.0;
+
+    cascade_vps[ci] = view * proj;
+    cascade_splits[ci] = split_far;
+}

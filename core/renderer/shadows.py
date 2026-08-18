@@ -1,9 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
-# Copyright (c) 2026 Zarrakun
-
 from __future__ import annotations
 import math
 import numpy as np
@@ -19,6 +13,27 @@ from core.renderer.mesh_data import MeshData
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 
+try:
+    from core._shadow_batch import (
+        compute_frustum_corners_out,
+        build_directional_cascade_fast,
+        pack_model_matrices_f32,
+        frustum_cull_shadow_groups,
+        pack_cascade_vps_transposed,
+        compute_frustum_corners,
+        build_directional_cascade,
+        compute_cascade_distances,
+        pack_cascade_matrices_f32,
+        pack_cascade_splits_f32,
+        pack_point_vps_f32,
+        build_shadow_groups as cy_build_shadow_groups,
+        face_cull_point_shadow,
+    )
+    _HAS_CYTHON = True
+except ImportError:
+    _HAS_CYTHON = False
+
+
 def _shadow_supports_instancing(prog: moderngl.Program) -> bool:
     try:
         locs = prog._attribute_locations
@@ -28,6 +43,7 @@ def _shadow_supports_instancing(prog: moderngl.Program) -> bool:
         return True
     except Exception:
         return False
+
 
 def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
                                 mesh, instance_vbo: moderngl.Buffer) -> moderngl.VertexArray:
@@ -114,6 +130,13 @@ class ShadowRenderer:
         self._vp_f32_buf = np.zeros((4, 4), dtype=np.float32)
         self._shadow_groups_key: int = 0
         self._shadow_groups_ref: Any = None
+        self._inv_view_buf = np.zeros((4, 4), dtype=np.float64)
+        self._frustum_corners_buf = np.zeros((8, 3), dtype=np.float64)
+        self._cascade_vps_raw = np.zeros((3, 4, 4), dtype=np.float64)
+        self._model_pack_buf: Optional[np.ndarray] = None
+        self._model_pack_buf_cap: int = 0
+        self._temporal_frame: int = 0
+        self._temporal_skip_idx: int = -1
         self._create_csm_resources()
 
     def _create_csm_resources(self):
@@ -210,13 +233,23 @@ class ShadowRenderer:
         key = id(renderable_shadow)
         if key == self._shadow_groups_key and self._shadow_groups_cache is not None:
             return self._shadow_groups_cache
-        groups = defaultdict(list)
-        for mesh, tr in renderable_shadow:
-            groups[id(mesh)].append((mesh, tr))
+        if _HAS_CYTHON:
+            groups = cy_build_shadow_groups(renderable_shadow)
+        else:
+            groups = defaultdict(list)
+            for mesh, tr in renderable_shadow:
+                groups[id(mesh)].append((mesh, tr))
         self._shadow_groups_cache = groups
         self._shadow_groups_key = key
         self._shadow_groups_ref = renderable_shadow
         return groups
+
+    def _ensure_model_pack_buf(self, needed_count: int):
+        if self._model_pack_buf is not None and self._model_pack_buf_cap >= needed_count * 16:
+            return
+        cap = max(64, needed_count) * 16
+        self._model_pack_buf = np.zeros(cap, dtype=np.float32)
+        self._model_pack_buf_cap = cap
 
     def _build_shadow_instance_vbo(self, key: tuple[int, int],
                                    model_matrices: list) -> moderngl.Buffer:
@@ -224,11 +257,17 @@ class ShadowRenderer:
         cached = self._shadow_inst_vbo.get(key)
         if cached is not None and self._shadow_inst_vbo_fp.get(key) == fp:
             return cached
-        try:
-            from core._render_utils import batch_mat4_to_f32_flat
-            data = batch_mat4_to_f32_flat(model_matrices).tobytes()
-        except ImportError:
-            data = Mat4.batch_to_f32(model_matrices).tobytes()
+        n = len(model_matrices)
+        self._ensure_model_pack_buf(n)
+        if _HAS_CYTHON:
+            pack_model_matrices_f32(model_matrices, self._model_pack_buf)
+            data = self._model_pack_buf[:n * 16].tobytes()
+        else:
+            try:
+                from core._render_utils import batch_mat4_to_f32_flat
+                data = batch_mat4_to_f32_flat(model_matrices).tobytes()
+            except ImportError:
+                data = Mat4.batch_to_f32(model_matrices).tobytes()
         if cached is not None:
             if cached.size >= len(data):
                 try:
@@ -241,8 +280,10 @@ class ShadowRenderer:
             self._shadow_inst_vbo.pop(key, None)
             vao_del = self._shadow_vao_cache.pop(key, None)
             if vao_del is not None:
-                try: vao_del.release()
-                except Exception: pass
+                try:
+                    vao_del.release()
+                except Exception:
+                    pass
         vbo = self._ctx.buffer(data)
         self._shadow_inst_vbo[key] = vbo
         self._shadow_inst_vbo_fp[key] = fp
@@ -272,6 +313,8 @@ class ShadowRenderer:
         self._render_geometry_with_groups(vp, fbo, groups, resolution)
 
     def _render_geometry_with_groups(self, vp: np.ndarray, fbo, groups: dict, resolution: int = 1024):
+        if not groups:
+            return
         fbo.clear(depth=1.0)
         fbo.use()
         self._ctx.viewport = (0, 0, resolution, resolution)
@@ -416,7 +459,101 @@ class ShadowRenderer:
             self._has_area_shadow = False
         return shadow_groups
 
-    def _get_frustum_corners(self, near_z: float, far_z: float, cam_fov: float, aspect: float, inv_view: np.ndarray) -> list[np.ndarray]:
+    def _cascade_distances(self, cam_near: float, cam_far: float) -> list[float]:
+        near_z = max(cam_near, 0.01)
+        far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
+        span = far_z - near_z
+        first = near_z + span * 0.14
+        second = near_z + span * 0.38
+        return [first, max(first + 0.1, second), far_z]
+
+    def _render_directional_shadow(self, sun_transform, shadow_groups,
+                                   cam_near, cam_far, cam_fov, aspect, view_mat):
+        light_dir = sun_transform.forward.normalized()
+        ld_x, ld_y, ld_z = light_dir.x, light_dir.y, light_dir.z
+        inv_view = np.linalg.inv(view_mat._d)
+        splits = self._cascade_distances(cam_near, cam_far)
+        self._cascade_splits = splits
+        near_z = max(cam_near, 0.01)
+        shadow_res = self._shadow_resolution
+        prog = self._prog
+        prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
+        first_cascade = True
+
+        self._temporal_skip_idx = 1 if (self._temporal_frame & 1) else 2
+        self._temporal_frame += 1
+
+        for ci in range(3):
+            if _HAS_CYTHON:
+                compute_frustum_corners_out(
+                    near_z, splits[ci], cam_fov, aspect,
+                    inv_view, self._frustum_corners_buf
+                )
+                build_directional_cascade_fast(
+                    ld_x, ld_y, ld_z,
+                    self._frustum_corners_buf, splits[ci] - near_z, shadow_res,
+                    self._cascade_vps_raw[ci]
+                )
+                np.copyto(self._vp_f32_buf, self._cascade_vps_raw[ci])
+            else:
+                corners = self._get_frustum_corners(near_z, splits[ci], cam_fov, aspect, inv_view)
+                vp = self._build_directional_cascade(light_dir, corners, splits[ci] - near_z)
+                np.copyto(self._vp_f32_buf, vp)
+            self._light_space_matrices[ci] = self._vp_f32_buf.copy()
+
+            if ci == self._temporal_skip_idx:
+                near_z = splits[ci]
+                continue
+
+            if _HAS_CYTHON and shadow_groups:
+                culled = frustum_cull_shadow_groups(shadow_groups, self._vp_f32_buf)
+            else:
+                culled = shadow_groups
+
+            if culled:
+                if first_cascade:
+                    self._shadow_fbos[ci].clear(depth=1.0)
+                    self._shadow_fbos[ci].use()
+                    self._ctx.viewport = (0, 0, shadow_res, shadow_res)
+                    self._ctx.enable(moderngl.DEPTH_TEST)
+                    self._ctx.depth_mask = True
+                    self._ctx.disable(moderngl.CULL_FACE)
+                    prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
+                    first_cascade = False
+                else:
+                    self._shadow_fbos[ci].clear(depth=1.0)
+                    self._shadow_fbos[ci].use()
+                    prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
+
+                supports_instancing = _shadow_supports_instancing(prog)
+                for mesh_id, group in culled.items():
+                    mesh, _ = group[0]
+                    n = len(group)
+                    if supports_instancing:
+                        key = (mesh_id, id(prog))
+                        model_mats = [tr.world_matrix for _, tr in group]
+                        vbo = self._build_shadow_instance_vbo(key, model_mats)
+                        vao = self._get_shadow_vao(prog, mesh, vbo)
+                        if "u_use_instancing" in prog:
+                            prog["u_use_instancing"].value = 1
+                        vao.render(instances=n)
+                    else:
+                        if "u_use_instancing" in prog:
+                            prog["u_use_instancing"].value = 0
+                        for _, tr in group:
+                            prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
+                            mesh.render(prog)
+                self._maybe_render_skinned(self._vp_f32_buf, self._shadow_fbos[ci], shadow_res)
+
+            near_z = splits[ci]
+
+        if not first_cascade:
+            self._ctx.enable(moderngl.CULL_FACE)
+
+    def _get_frustum_corners(self, near_z: float, far_z: float, cam_fov: float,
+                             aspect: float, inv_view: np.ndarray) -> list[np.ndarray]:
+        if _HAS_CYTHON:
+            return compute_frustum_corners(near_z, far_z, cam_fov, aspect, inv_view)
         tan_half_fov = math.tan(math.radians(cam_fov) * 0.5)
         corners = []
         for z in (near_z, far_z):
@@ -430,32 +567,8 @@ class ShadowRenderer:
                     corners.append(world_pt[:3])
         return corners
 
-    def _cascade_distances(self, cam_near: float, cam_far: float) -> list[float]:
-        near_z = max(cam_near, 0.01)
-        far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
-        span = far_z - near_z
-        first = near_z + span * 0.14
-        second = near_z + span * 0.38
-        return [first, max(first + 0.1, second), far_z]
-
-    def _render_directional_shadow(self, sun_transform, shadow_groups,
-                                   cam_near, cam_far, cam_fov, aspect, view_mat):
-        light_dir = sun_transform.forward.normalized()
-        inv_view = np.linalg.inv(view_mat._d)
-        splits = self._cascade_distances(cam_near, cam_far)
-        self._cascade_splits = splits
-        near_z = max(cam_near, 0.01)
-        for cascade_idx, split_far in enumerate(splits):
-            corners = self._get_frustum_corners(near_z, split_far, cam_fov, aspect, inv_view)
-            vp = self._build_directional_cascade(light_dir, corners, split_far - near_z)
-            vp32 = self._vp_f32_buf
-            np.copyto(vp32, vp)
-            self._light_space_matrices[cascade_idx] = vp32.copy()
-            self._render_geometry_with_groups(vp32, self._shadow_fbos[cascade_idx], shadow_groups, resolution=self._shadow_resolution)
-            self._maybe_render_skinned(vp32, self._shadow_fbos[cascade_idx], self._shadow_resolution)
-            near_z = split_far
-
-    def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray], depth_span: float) -> np.ndarray:
+    def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray],
+                                   depth_span: float) -> np.ndarray:
         n = len(corners)
         cx = cy = cz = 0.0
         for c in corners:
@@ -541,8 +654,13 @@ class ShadowRenderer:
             view_np = view._d
             vp = (view_np @ proj_np).astype(np.float32)
             self._point_light_vps[face_idx] = vp
-            self._render_geometry_with_groups(vp, self._point_shadow_fbos[face_idx], shadow_groups, resolution=self._point_shadow_resolution)
-            self._maybe_render_skinned(vp, self._point_shadow_fbos[face_idx], self._point_shadow_resolution)
+            if _HAS_CYTHON and shadow_groups:
+                culled = frustum_cull_shadow_groups(shadow_groups, vp)
+            else:
+                culled = shadow_groups
+            if culled:
+                self._render_geometry_with_groups(vp, self._point_shadow_fbos[face_idx], culled, resolution=self._point_shadow_resolution)
+                self._maybe_render_skinned(vp, self._point_shadow_fbos[face_idx], self._point_shadow_resolution)
 
     def _render_spot_shadow(self, spot_light, spot_transform, shadow_groups, lights):
         if not self._spot_shadow_map:
@@ -634,7 +752,9 @@ class ShadowRenderer:
                 prog["u_light_space_matrices"].write(cm.tobytes())
             if "u_cascade_splits" in prog:
                 cs = self._cascade_splits_buf
-                cs[0] = self._cascade_splits[0]; cs[1] = self._cascade_splits[1]; cs[2] = self._cascade_splits[2]
+                cs[0] = self._cascade_splits[0]
+                cs[1] = self._cascade_splits[1]
+                cs[2] = self._cascade_splits[2]
                 prog["u_cascade_splits"].write(cs.tobytes())
             for ci in range(3):
                 tex_unit = 3 + ci
@@ -663,7 +783,9 @@ class ShadowRenderer:
             if "u_point_light_pos" in prog:
                 pp = self._point_pos_buf
                 pa = self._point_light_world_pos.to_array()
-                pp[0] = pa[0]; pp[1] = pa[1]; pp[2] = pa[2]
+                pp[0] = pa[0]
+                pp[1] = pa[1]
+                pp[2] = pa[2]
                 prog["u_point_light_pos"].write(pp.tobytes())
             if "u_point_light_range" in prog:
                 prog["u_point_light_range"].value = float(self._point_light_range)
@@ -698,7 +820,8 @@ class ShadowRenderer:
                 prog["u_area_light_fov_scale"].value = float(self._area_light_fov_scale)
             if "u_area_light_near_far" in prog:
                 af = self._area_nearfar_buf
-                af[0] = self._area_light_near; af[1] = self._area_light_far
+                af[0] = self._area_light_near
+                af[1] = self._area_light_far
                 prog["u_area_light_near_far"].write(af.tobytes())
             if "u_area_shadow_light_index" in prog:
                 prog["u_area_shadow_light_index"].value = self._area_light_idx if self._area_light_idx >= 0 else -1
