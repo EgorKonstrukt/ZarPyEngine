@@ -480,9 +480,6 @@ class ShadowRenderer:
         prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
         first_cascade = True
 
-        self._temporal_skip_idx = 1 if (self._temporal_frame & 1) else 2
-        self._temporal_frame += 1
-
         for ci in range(3):
             if _HAS_CYTHON:
                 compute_frustum_corners_out(
@@ -500,10 +497,6 @@ class ShadowRenderer:
                 vp = self._build_directional_cascade(light_dir, corners, splits[ci] - near_z)
                 np.copyto(self._vp_f32_buf, vp)
             self._light_space_matrices[ci] = self._vp_f32_buf.copy()
-
-            if ci == self._temporal_skip_idx:
-                near_z = splits[ci]
-                continue
 
             if _HAS_CYTHON and shadow_groups:
                 culled = frustum_cull_shadow_groups(shadow_groups, self._vp_f32_buf)
