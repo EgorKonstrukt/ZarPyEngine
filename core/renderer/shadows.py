@@ -84,7 +84,7 @@ class ShadowRenderer:
         self._shadow_fbos: list[Any] = []
         self._cascade_splits: list[float] = [1000000.0] * 3
         self._light_space_matrices: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(3)]
-        self._point_shadow_resolution: int = 1024
+        self._point_shadow_resolution: int = self._shadow_resolution
         self._point_shadow_maps: list[Any] = []
         self._point_shadow_fbos: list[Any] = []
         self._point_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(6)]
@@ -648,6 +648,28 @@ class ShadowRenderer:
             self._create_point_shadow_resources()
         light_pos = point_transform.position
         light_range = max(point_light.range, 0.1)
+        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        lr2 = light_range * light_range
+        self._has_point_shadow = True
+        self._point_light_world_pos = light_pos
+        self._point_light_range = light_range
+        self._point_light_idx = next(
+            (i for i, (l, lt) in enumerate(lights) if l is point_light and lt is point_transform), -1
+        )
+        filtered = {}
+        for mid, group in shadow_groups.items():
+            near = []
+            for mesh, tr in group:
+                p = tr.world_matrix._d
+                dx = p[3][0] - lp_x
+                dy = p[3][1] - lp_y
+                dz = p[3][2] - lp_z
+                if dx * dx + dy * dy + dz * dz <= lr2:
+                    near.append((mesh, tr))
+            if near:
+                filtered[mid] = near
+        if not filtered:
+            return
         face_configs = [
             (Vec3(1, 0, 0), Vec3(0, -1, 0)),
             (Vec3(-1, 0, 0), Vec3(0, -1, 0)),
@@ -658,26 +680,55 @@ class ShadowRenderer:
         ]
         near_plane = 0.1
         far_plane = light_range
-        proj = Mat4.perspective(90.0, 1.0, near_plane, far_plane)
-        proj_np = proj._d
-        self._has_point_shadow = True
-        self._point_light_world_pos = light_pos
-        self._point_light_range = light_range
-        self._point_light_idx = next(
-            (i for i, (l, lt) in enumerate(lights) if l is point_light and lt is point_transform), -1
-        )
+        proj_np = Mat4.perspective(90.0, 1.0, near_plane, far_plane)._d
+        prog = self._prog
+        shadow_res = self._point_shadow_resolution
+        supports_instancing = _shadow_supports_instancing(prog)
+        any_rendered = False
         for face_idx, (face_dir, face_up) in enumerate(face_configs):
-            view = Mat4.look_at(light_pos, light_pos + face_dir, face_up)
-            view_np = view._d
-            vp = (view_np @ proj_np).astype(np.float32)
+            vp = (Mat4.look_at(light_pos, light_pos + face_dir, face_up)._d @ proj_np).astype(np.float32)
             self._point_light_vps[face_idx] = vp
-            if _HAS_CYTHON and shadow_groups:
-                culled = frustum_cull_shadow_groups(shadow_groups, vp)
+            if _HAS_CYTHON:
+                culled = frustum_cull_shadow_groups(filtered, vp)
             else:
-                culled = shadow_groups
-            if culled:
-                self._render_geometry_with_groups(vp, self._point_shadow_fbos[face_idx], culled, resolution=self._point_shadow_resolution)
-                self._maybe_render_skinned(vp, self._point_shadow_fbos[face_idx], self._point_shadow_resolution)
+                culled = filtered
+            if not culled:
+                continue
+            fbo = self._point_shadow_fbos[face_idx]
+            if not any_rendered:
+                fbo.clear(depth=1.0)
+                fbo.use()
+                self._ctx.viewport = (0, 0, shadow_res, shadow_res)
+                self._ctx.enable(moderngl.DEPTH_TEST)
+                self._ctx.depth_mask = True
+                self._ctx.disable(moderngl.CULL_FACE)
+                prog["u_light_vp"].write(vp.tobytes())
+                if supports_instancing:
+                    if "u_use_instancing" in prog:
+                        prog["u_use_instancing"].value = 1
+                else:
+                    if "u_use_instancing" in prog:
+                        prog["u_use_instancing"].value = 0
+                any_rendered = True
+            else:
+                fbo.clear(depth=1.0)
+                fbo.use()
+                prog["u_light_vp"].write(vp.tobytes())
+            for mesh_id, group in culled.items():
+                mesh, _ = group[0]
+                n = len(group)
+                if supports_instancing:
+                    key = (mesh_id, id(prog))
+                    model_mats = [tr.world_matrix for _, tr in group]
+                    vbo = self._build_shadow_instance_vbo(key, model_mats)
+                    vao = self._get_shadow_vao(prog, mesh, vbo)
+                    vao.render(instances=n)
+                else:
+                    for _, tr in group:
+                        prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
+                        mesh.render(prog)
+        if any_rendered:
+            self._ctx.enable(moderngl.CULL_FACE)
 
     def _render_spot_shadow(self, spot_light, spot_transform, shadow_groups, lights):
         if not self._spot_shadow_map:
@@ -688,6 +739,23 @@ class ShadowRenderer:
         spot_fov = max(spot_light.spot_angle * 2.0, 1.0)
         near_plane = 0.1
         far_plane = light_range
+        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        lr2 = light_range * light_range
+        filtered = {}
+        for mid, group in shadow_groups.items():
+            near = []
+            for mesh, tr in group:
+                p = tr.world_matrix._d
+                dx = p[3][0] - lp_x
+                dy = p[3][1] - lp_y
+                dz = p[3][2] - lp_z
+                if dx * dx + dy * dy + dz * dz <= lr2:
+                    near.append((mesh, tr))
+            if near:
+                filtered[mid] = near
+        if not filtered:
+            self._has_spot_shadow = False
+            return
         view = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())
         proj = Mat4.perspective(spot_fov, 1.0, near_plane, far_plane)
         vp = (view._d @ proj._d).astype(np.float32)
@@ -696,8 +764,13 @@ class ShadowRenderer:
         self._spot_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is spot_light and lt is spot_transform), -1
         )
-        self._render_geometry_with_groups(vp, self._spot_shadow_fbo, shadow_groups, resolution=self._shadow_resolution)
-        self._maybe_render_skinned(vp, self._spot_shadow_fbo, self._shadow_resolution)
+        if _HAS_CYTHON:
+            culled = frustum_cull_shadow_groups(filtered, vp)
+        else:
+            culled = filtered
+        if culled:
+            self._render_geometry_with_groups(vp, self._spot_shadow_fbo, culled, resolution=self._shadow_resolution)
+            self._maybe_render_skinned(vp, self._spot_shadow_fbo, self._shadow_resolution)
 
     def _render_area_shadow(self, area_light, area_transform, shadow_groups, lights):
         if not self._area_shadow_map:
