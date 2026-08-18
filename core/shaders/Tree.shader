@@ -170,6 +170,8 @@ Shader "Zarin/Tree"
 
             #version 460 core
             #define MAX_LIGHTS 8
+            #define MAX_POINT_SHADOWS 4
+            #define MAX_SPOT_SHADOWS 4
             #define CASCADE_COUNT 3
             #define PI 3.14159265359
             #define EPS 0.0001
@@ -224,21 +226,16 @@ Shader "Zarin/Tree"
             uniform float u_cascade_splits[CASCADE_COUNT];
             uniform float u_shadow_bias;
             uniform int u_cascade_count;
-            uniform sampler2D u_point_shadow_map_0;
-            uniform sampler2D u_point_shadow_map_1;
-            uniform sampler2D u_point_shadow_map_2;
-            uniform sampler2D u_point_shadow_map_3;
-            uniform sampler2D u_point_shadow_map_4;
-            uniform sampler2D u_point_shadow_map_5;
-            uniform mat4 u_point_light_vps[6];
-            uniform vec3 u_point_light_pos;
-            uniform float u_point_light_range;
+            uniform sampler2D u_point_shadow_maps[MAX_POINT_SHADOWS * 6];
+            uniform mat4 u_point_shadow_vps[MAX_POINT_SHADOWS * 6];
+            uniform vec3 u_point_shadow_light_positions[MAX_POINT_SHADOWS];
+            uniform float u_point_shadow_light_ranges[MAX_POINT_SHADOWS];
             uniform int u_point_shadow_count;
-            uniform int u_point_shadow_light_index;
-            uniform sampler2D u_spot_shadow_map;
-            uniform mat4 u_spot_light_vp;
+            uniform int u_point_shadow_light_indices[MAX_POINT_SHADOWS];
+            uniform sampler2D u_spot_shadow_maps[MAX_SPOT_SHADOWS];
+            uniform mat4 u_spot_shadow_vps[MAX_SPOT_SHADOWS];
             uniform int u_spot_shadow_count;
-            uniform int u_spot_shadow_light_index;
+            uniform int u_spot_shadow_light_indices[MAX_SPOT_SHADOWS];
             uniform sampler2D u_area_shadow_map;
             uniform mat4 u_area_light_vp;
             uniform float u_area_light_size;

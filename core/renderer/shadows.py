@@ -12,6 +12,8 @@ from core.components.rendering.renderers.mesh_renderer import MeshRenderer
 from core.renderer.mesh_data import MeshData
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
+MAX_POINT_SHADOWS = 4
+MAX_SPOT_SHADOWS = 4
 
 try:
     from core._shadow_batch import (
@@ -87,16 +89,18 @@ class ShadowRenderer:
         self._point_shadow_resolution: int = self._shadow_resolution
         self._point_shadow_maps: list[Any] = []
         self._point_shadow_fbos: list[Any] = []
-        self._point_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(6)]
+        self._point_light_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(MAX_POINT_SHADOWS * 6)]
         self._has_point_shadow: bool = False
-        self._point_light_world_pos: Vec3 = Vec3.zero()
-        self._point_light_range: float = 10.0
-        self._point_light_idx: int = -1
-        self._spot_shadow_map: Optional[Any] = None
-        self._spot_shadow_fbo: Optional[Any] = None
-        self._spot_light_vp: np.ndarray = np.eye(4, dtype=np.float32)
+        self._point_shadow_light_positions: list[Vec3] = [Vec3.zero() for _ in range(MAX_POINT_SHADOWS)]
+        self._point_shadow_light_ranges: list[float] = [10.0] * MAX_POINT_SHADOWS
+        self._point_shadow_light_indices: list[int] = [-1] * MAX_POINT_SHADOWS
+        self._point_shadow_count: int = 0
+        self._spot_shadow_maps: list[Any] = []
+        self._spot_shadow_fbos: list[Any] = []
+        self._spot_shadow_vps: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(MAX_SPOT_SHADOWS)]
         self._has_spot_shadow: bool = False
-        self._spot_light_idx: int = -1
+        self._spot_shadow_light_indices: list[int] = [-1] * MAX_SPOT_SHADOWS
+        self._spot_shadow_count: int = 0
         self._area_shadow_map: Optional[Any] = None
         self._area_shadow_fbo: Optional[Any] = None
         self._area_light_vp: np.ndarray = np.eye(4, dtype=np.float32)
@@ -125,8 +129,12 @@ class ShadowRenderer:
         self._shadow_groups_cache: Optional[dict] = None
         self._cascade_matrices_buf = np.zeros((3, 4, 4), dtype=np.float32)
         self._cascade_splits_buf = np.zeros(3, dtype=np.float32)
-        self._point_vps_buf = np.zeros((6, 4, 4), dtype=np.float32)
-        self._point_pos_buf = np.zeros(3, dtype=np.float32)
+        self._point_vps_buf = np.zeros((MAX_POINT_SHADOWS * 6, 4, 4), dtype=np.float32)
+        self._point_pos_buf = np.zeros((MAX_POINT_SHADOWS, 3), dtype=np.float32)
+        self._point_range_buf = np.zeros(MAX_POINT_SHADOWS, dtype=np.float32)
+        self._point_idx_buf = np.zeros(MAX_POINT_SHADOWS, dtype=np.int32)
+        self._spot_vps_buf = np.zeros((MAX_SPOT_SHADOWS, 4, 4), dtype=np.float32)
+        self._spot_idx_buf = np.zeros(MAX_SPOT_SHADOWS, dtype=np.int32)
         self._area_nearfar_buf = np.zeros(2, dtype=np.float32)
         self._vp_f32_buf = np.zeros((4, 4), dtype=np.float32)
         self._shadow_groups_key: int = 0
@@ -158,6 +166,8 @@ class ShadowRenderer:
             changed = True
         if changed:
             self._create_csm_resources()
+            self._create_point_shadow_resources()
+            self._create_spot_shadow_resources()
 
     def _create_csm_resources(self):
         for sm in self._shadow_maps:
@@ -182,8 +192,20 @@ class ShadowRenderer:
             self._shadow_fbos.append(fbo)
 
     def _create_point_shadow_resources(self):
+        for sm in self._point_shadow_maps:
+            try:
+                sm.release()
+            except Exception:
+                pass
+        for fbo in self._point_shadow_fbos:
+            try:
+                fbo.release()
+            except Exception:
+                pass
+        self._point_shadow_maps = []
+        self._point_shadow_fbos = []
         res = self._point_shadow_resolution
-        for _ in range(6):
+        for _ in range(MAX_POINT_SHADOWS * 6):
             tex = self._ctx.depth_texture((res, res))
             tex.repeat_x = False
             tex.repeat_y = False
@@ -192,12 +214,26 @@ class ShadowRenderer:
             self._point_shadow_fbos.append(fbo)
 
     def _create_spot_shadow_resources(self):
+        for sm in self._spot_shadow_maps:
+            try:
+                sm.release()
+            except Exception:
+                pass
+        for fbo in self._spot_shadow_fbos:
+            try:
+                fbo.release()
+            except Exception:
+                pass
+        self._spot_shadow_maps = []
+        self._spot_shadow_fbos = []
         res = self._shadow_resolution
-        tex = self._ctx.depth_texture((res, res))
-        tex.repeat_x = False
-        tex.repeat_y = False
-        self._spot_shadow_map = tex
-        self._spot_shadow_fbo = self._ctx.framebuffer(depth_attachment=self._spot_shadow_map)
+        for _ in range(MAX_SPOT_SHADOWS):
+            tex = self._ctx.depth_texture((res, res))
+            tex.repeat_x = False
+            tex.repeat_y = False
+            fbo = self._ctx.framebuffer(depth_attachment=tex)
+            self._spot_shadow_maps.append(tex)
+            self._spot_shadow_fbos.append(fbo)
 
     def _create_projector_shadow_resources(self):
         res = self._shadow_resolution
@@ -332,6 +368,23 @@ class ShadowRenderer:
         groups = self._build_shadow_groups(renderable_shadow)
         self._render_geometry_with_groups(vp, fbo, groups, resolution)
 
+    @staticmethod
+    def _filter_by_range(shadow_groups: dict, light_x: float, light_y: float, light_z: float,
+                         range_sq: float) -> dict:
+        result = {}
+        for mid, group in shadow_groups.items():
+            near = []
+            for mesh, tr in group:
+                p = tr.world_matrix._d
+                dx = p[3][0] - light_x
+                dy = p[3][1] - light_y
+                dz = p[3][2] - light_z
+                if dx * dx + dy * dy + dz * dz <= range_sq:
+                    near.append((mesh, tr))
+            if near:
+                result[mid] = near
+        return result
+
     def _render_geometry_with_groups(self, vp: np.ndarray, fbo, groups: dict, resolution: int = 1024):
         if not groups:
             return
@@ -447,34 +500,65 @@ class ShadowRenderer:
         if not renderable_shadow:
             self._cascade_splits = [0.0] * 3
             self._has_point_shadow = False
+            self._point_shadow_count = 0
             self._has_spot_shadow = False
+            self._spot_shadow_count = 0
             self._has_area_shadow = False
             return {}
         shadow_groups = self._build_shadow_groups(renderable_shadow)
         for l, lt in lights:
-            lt_type = l.light_type
-            if lt_type == LightType.DIRECTIONAL and l.cast_shadows:
+            if l.light_type == LightType.DIRECTIONAL and l.cast_shadows:
                 self._render_directional_shadow(lt, shadow_groups,
                                                 cam_near, cam_far, cam_fov, aspect, view_mat)
                 break
         else:
             self._cascade_splits = [0.0] * 3
-        for l, lt in lights:
-            if l.light_type == LightType.POINT and l.cast_shadows:
-                self._render_point_shadow(l, lt, shadow_groups, lights)
-                break
-        else:
-            self._has_point_shadow = False
-        for l, lt in lights:
-            if l.light_type == LightType.SPOT and l.cast_shadows:
-                self._render_spot_shadow(l, lt, shadow_groups, lights)
-                break
-        else:
-            self._has_spot_shadow = False
+
+        inv = view_mat.inverted()
+        cam_pos = Vec3(float(inv._d[3, 0]), float(inv._d[3, 1]), float(inv._d[3, 2]))
+
+        if not self._point_shadow_maps:
+            self._create_point_shadow_resources()
+        point_candidates = [
+            (l, lt, lt.position.distance_to(cam_pos))
+            for l, lt in lights
+            if l.light_type == LightType.POINT and l.cast_shadows
+        ]
+        point_candidates.sort(key=lambda x: x[2])
+        self._point_shadow_count = min(len(point_candidates), MAX_POINT_SHADOWS)
+        for slot in range(self._point_shadow_count):
+            l, lt, _ = point_candidates[slot]
+            self._render_point_shadow_for_slot(slot, l, lt, shadow_groups, lights)
+        for slot in range(self._point_shadow_count, MAX_POINT_SHADOWS):
+            self._point_shadow_light_indices[slot] = -1
+        self._has_point_shadow = self._point_shadow_count > 0
+
+        if not self._spot_shadow_maps:
+            self._create_spot_shadow_resources()
+        spot_candidates = [
+            (l, lt, lt.position.distance_to(cam_pos))
+            for l, lt in lights
+            if l.light_type == LightType.SPOT and l.cast_shadows
+        ]
+        spot_candidates.sort(key=lambda x: x[2])
+        self._spot_shadow_count = min(len(spot_candidates), MAX_SPOT_SHADOWS)
+        for slot in range(self._spot_shadow_count):
+            l, lt, _ = spot_candidates[slot]
+            self._render_spot_shadow_for_slot(slot, l, lt, shadow_groups, lights)
+        for slot in range(self._spot_shadow_count, MAX_SPOT_SHADOWS):
+            self._spot_shadow_light_indices[slot] = -1
+        self._has_spot_shadow = self._spot_shadow_count > 0
+
+        best_area = None
+        best_area_dist = float('inf')
         for l, lt in lights:
             if l.light_type == LightType.AREA and l.cast_shadows:
-                self._render_area_shadow(l, lt, shadow_groups, lights)
-                break
+                d = lt.position.distance_to(cam_pos)
+                if d < best_area_dist:
+                    best_area_dist = d
+                    best_area = (l, lt)
+        if best_area:
+            self._render_area_shadow(best_area[0], best_area[1], shadow_groups, lights)
         else:
             self._has_area_shadow = False
         return shadow_groups
@@ -643,31 +727,17 @@ class ShadowRenderer:
         proj = Mat4.orthographic(left, right, bottom, top, n_val, f_val)
         return view._d @ proj._d
 
-    def _render_point_shadow(self, point_light, point_transform, shadow_groups, lights):
-        if not self._point_shadow_maps:
-            self._create_point_shadow_resources()
+    def _render_point_shadow_for_slot(self, slot, point_light, point_transform, shadow_groups, lights):
         light_pos = point_transform.position
         light_range = max(point_light.range, 0.1)
         lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
         lr2 = light_range * light_range
-        self._has_point_shadow = True
-        self._point_light_world_pos = light_pos
-        self._point_light_range = light_range
-        self._point_light_idx = next(
+        self._point_shadow_light_positions[slot] = light_pos
+        self._point_shadow_light_ranges[slot] = light_range
+        self._point_shadow_light_indices[slot] = next(
             (i for i, (l, lt) in enumerate(lights) if l is point_light and lt is point_transform), -1
         )
-        filtered = {}
-        for mid, group in shadow_groups.items():
-            near = []
-            for mesh, tr in group:
-                p = tr.world_matrix._d
-                dx = p[3][0] - lp_x
-                dy = p[3][1] - lp_y
-                dz = p[3][2] - lp_z
-                if dx * dx + dy * dy + dz * dz <= lr2:
-                    near.append((mesh, tr))
-            if near:
-                filtered[mid] = near
+        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
         if not filtered:
             return
         face_configs = [
@@ -684,17 +754,18 @@ class ShadowRenderer:
         prog = self._prog
         shadow_res = self._point_shadow_resolution
         supports_instancing = _shadow_supports_instancing(prog)
+        base = slot * 6
         any_rendered = False
         for face_idx, (face_dir, face_up) in enumerate(face_configs):
             vp = (Mat4.look_at(light_pos, light_pos + face_dir, face_up)._d @ proj_np).astype(np.float32)
-            self._point_light_vps[face_idx] = vp
+            self._point_light_vps[base + face_idx] = vp
             if _HAS_CYTHON:
                 culled = frustum_cull_shadow_groups(filtered, vp)
             else:
                 culled = filtered
             if not culled:
                 continue
-            fbo = self._point_shadow_fbos[face_idx]
+            fbo = self._point_shadow_fbos[base + face_idx]
             if not any_rendered:
                 fbo.clear(depth=1.0)
                 fbo.use()
@@ -730,9 +801,7 @@ class ShadowRenderer:
         if any_rendered:
             self._ctx.enable(moderngl.CULL_FACE)
 
-    def _render_spot_shadow(self, spot_light, spot_transform, shadow_groups, lights):
-        if not self._spot_shadow_map:
-            self._create_spot_shadow_resources()
+    def _render_spot_shadow_for_slot(self, slot, spot_light, spot_transform, shadow_groups, lights):
         light_pos = spot_transform.position
         light_dir = spot_transform.forward.normalized()
         light_range = max(spot_light.range, 0.1)
@@ -741,27 +810,14 @@ class ShadowRenderer:
         far_plane = light_range
         lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
         lr2 = light_range * light_range
-        filtered = {}
-        for mid, group in shadow_groups.items():
-            near = []
-            for mesh, tr in group:
-                p = tr.world_matrix._d
-                dx = p[3][0] - lp_x
-                dy = p[3][1] - lp_y
-                dz = p[3][2] - lp_z
-                if dx * dx + dy * dy + dz * dz <= lr2:
-                    near.append((mesh, tr))
-            if near:
-                filtered[mid] = near
+        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
         if not filtered:
-            self._has_spot_shadow = False
             return
         view = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())
         proj = Mat4.perspective(spot_fov, 1.0, near_plane, far_plane)
         vp = (view._d @ proj._d).astype(np.float32)
-        self._spot_light_vp = vp
-        self._has_spot_shadow = True
-        self._spot_light_idx = next(
+        self._spot_shadow_vps[slot] = vp
+        self._spot_shadow_light_indices[slot] = next(
             (i for i, (l, lt) in enumerate(lights) if l is spot_light and lt is spot_transform), -1
         )
         if _HAS_CYTHON:
@@ -769,8 +825,8 @@ class ShadowRenderer:
         else:
             culled = filtered
         if culled:
-            self._render_geometry_with_groups(vp, self._spot_shadow_fbo, culled, resolution=self._shadow_resolution)
-            self._maybe_render_skinned(vp, self._spot_shadow_fbo, self._shadow_resolution)
+            self._render_geometry_with_groups(vp, self._spot_shadow_fbos[slot], culled, resolution=self._shadow_resolution)
+            self._maybe_render_skinned(vp, self._spot_shadow_fbos[slot], self._shadow_resolution)
 
     def _render_area_shadow(self, area_light, area_transform, shadow_groups, lights):
         if not self._area_shadow_map:
@@ -801,8 +857,12 @@ class ShadowRenderer:
         self._area_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is area_light and lt is area_transform), -1
         )
-        self._render_geometry_with_groups(vp, self._area_shadow_fbo, shadow_groups, resolution=self._area_shadow_resolution)
-        self._maybe_render_skinned(vp, self._area_shadow_fbo, self._area_shadow_resolution)
+        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        lr2 = light_range * light_range
+        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
+        if filtered:
+            self._render_geometry_with_groups(vp, self._area_shadow_fbo, filtered, resolution=self._area_shadow_resolution)
+            self._maybe_render_skinned(vp, self._area_shadow_fbo, self._area_shadow_resolution)
 
     def render_projector_shadows(self, projectors, renderable_shadow, shadow_groups: dict = None):
         if shadow_groups is None:
@@ -829,7 +889,11 @@ class ShadowRenderer:
             vp = (view._d @ proj._d).astype(np.float32)
             self._projector_light_vps[i] = vp
             self._has_projector_shadow[i] = True
-            self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], shadow_groups, resolution=self._shadow_resolution)
+            lp_x, lp_y, lp_z = light_pos_vec.x, light_pos_vec.y, light_pos_vec.z
+            lr2 = far_plane * far_plane
+            filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
+            if filtered:
+                self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], filtered, resolution=self._shadow_resolution)
 
     def set_uniforms(self, prog):
         has_csm = self._cascade_splits[self._cascade_count - 1] > 0.0
@@ -858,47 +922,62 @@ class ShadowRenderer:
         if "u_shadow_bias" in prog:
             prog["u_shadow_bias"].value = 0.0008
         if self._has_point_shadow and "u_point_shadow_count" in prog:
-            prog["u_point_shadow_count"].value = 1
-            if "u_point_light_vps" in prog:
+            prog["u_point_shadow_count"].value = self._point_shadow_count
+            if "u_point_shadow_vps" in prog:
                 pv = self._point_vps_buf
+                for slot in range(self._point_shadow_count):
+                    base = slot * 6
+                    for fi in range(6):
+                        np.copyto(pv[base + fi], self._point_light_vps[base + fi])
+                prog["u_point_shadow_vps"].write(pv.tobytes())
+            for slot in range(self._point_shadow_count):
+                base = slot * 6
                 for fi in range(6):
-                    np.copyto(pv[fi], self._point_light_vps[fi])
-                prog["u_point_light_vps"].write(pv.tobytes())
-            for fi in range(6):
-                tex_unit = 6 + fi
-                self._point_shadow_maps[fi].use(tex_unit)
-                si = f"u_point_shadow_map_{fi}"
-                if si in prog:
-                    prog[si].value = tex_unit
-            if "u_point_light_pos" in prog:
-                pp = self._point_pos_buf
-                pa = self._point_light_world_pos.to_array()
-                pp[0] = pa[0]
-                pp[1] = pa[1]
-                pp[2] = pa[2]
-                prog["u_point_light_pos"].write(pp.tobytes())
-            if "u_point_light_range" in prog:
-                prog["u_point_light_range"].value = float(self._point_light_range)
-            if "u_point_shadow_light_index" in prog:
-                prog["u_point_shadow_light_index"].value = self._point_light_idx if self._point_light_idx >= 0 else -1
+                    tex_unit = 6 + base + fi
+                    self._point_shadow_maps[base + fi].use(tex_unit)
+                    si = f"u_point_shadow_maps[{base + fi}]"
+                    if si in prog:
+                        prog[si].value = tex_unit
+                if "u_point_shadow_light_positions" in prog:
+                    pa = self._point_shadow_light_positions[slot].to_array()
+                    self._point_pos_buf[slot][0] = pa[0]
+                    self._point_pos_buf[slot][1] = pa[1]
+                    self._point_pos_buf[slot][2] = pa[2]
+                if "u_point_shadow_light_ranges" in prog:
+                    self._point_range_buf[slot] = float(self._point_shadow_light_ranges[slot])
+                if "u_point_shadow_light_indices" in prog:
+                    self._point_idx_buf[slot] = int(self._point_shadow_light_indices[slot])
+            if "u_point_shadow_light_positions" in prog:
+                prog["u_point_shadow_light_positions"].write(self._point_pos_buf[:self._point_shadow_count].tobytes())
+            if "u_point_shadow_light_ranges" in prog:
+                prog["u_point_shadow_light_ranges"].write(self._point_range_buf[:self._point_shadow_count].tobytes())
+            if "u_point_shadow_light_indices" in prog:
+                prog["u_point_shadow_light_indices"].write(self._point_idx_buf[:self._point_shadow_count].tobytes())
         else:
             if "u_point_shadow_count" in prog:
                 prog["u_point_shadow_count"].value = 0
         if self._has_spot_shadow and "u_spot_shadow_count" in prog:
-            prog["u_spot_shadow_count"].value = 1
-            tex_unit = 12
-            self._spot_shadow_map.use(tex_unit)
-            if "u_spot_shadow_map" in prog:
-                prog["u_spot_shadow_map"].value = tex_unit
-            if "u_spot_light_vp" in prog:
-                prog["u_spot_light_vp"].write(self._spot_light_vp.tobytes())
-            if "u_spot_shadow_light_index" in prog:
-                prog["u_spot_shadow_light_index"].value = self._spot_light_idx if self._spot_light_idx >= 0 else -1
+            prog["u_spot_shadow_count"].value = self._spot_shadow_count
+            if "u_spot_shadow_vps" in prog:
+                sv = self._spot_vps_buf
+                for slot in range(self._spot_shadow_count):
+                    np.copyto(sv[slot], self._spot_shadow_vps[slot])
+                prog["u_spot_shadow_vps"].write(sv.tobytes())
+            for slot in range(self._spot_shadow_count):
+                tex_unit = 6 + MAX_POINT_SHADOWS * 6 + slot
+                self._spot_shadow_maps[slot].use(tex_unit)
+                si = f"u_spot_shadow_maps[{slot}]"
+                if si in prog:
+                    prog[si].value = tex_unit
+                if "u_spot_shadow_light_indices" in prog:
+                    self._spot_idx_buf[slot] = int(self._spot_shadow_light_indices[slot])
+            if "u_spot_shadow_light_indices" in prog:
+                prog["u_spot_shadow_light_indices"].write(self._spot_idx_buf[:self._spot_shadow_count].tobytes())
         else:
             if "u_spot_shadow_count" in prog:
                 prog["u_spot_shadow_count"].value = 0
         if self._has_area_shadow and "u_area_shadow_light_index" in prog:
-            tex_unit = 15
+            tex_unit = 34
             self._area_shadow_map.use(tex_unit)
             if "u_area_shadow_map" in prog:
                 prog["u_area_shadow_map"].value = tex_unit
@@ -923,7 +1002,7 @@ class ShadowRenderer:
         for i in range(2):
             suf = f"u_pj_{i}_shadow_map"
             if self._has_projector_shadow[i] and suf in prog:
-                tex_unit = 16 + i
+                tex_unit = 35 + i
                 if i < len(self._projector_shadow_maps):
                     self._projector_shadow_maps[i].use(tex_unit)
                     prog[suf].value = tex_unit
@@ -953,14 +1032,14 @@ class ShadowRenderer:
                 fbo.release()
             except Exception:
                 pass
-        if self._spot_shadow_map:
+        for sm in self._spot_shadow_maps:
             try:
-                self._spot_shadow_map.release()
+                sm.release()
             except Exception:
                 pass
-        if self._spot_shadow_fbo:
+        for fbo in self._spot_shadow_fbos:
             try:
-                self._spot_shadow_fbo.release()
+                fbo.release()
             except Exception:
                 pass
         if self._area_shadow_map:

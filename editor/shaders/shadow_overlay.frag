@@ -6,6 +6,8 @@
 
 #version 460 core
 #define CASCADE_COUNT 3
+#define MAX_POINT_SHADOWS 4
+#define MAX_SPOT_SHADOWS 4
 uniform sampler2D u_scene_color;
 uniform sampler2D u_depth_tex;
 uniform mat4 u_inv_vp;
@@ -17,18 +19,13 @@ uniform float u_cascade_splits[CASCADE_COUNT];
 uniform int u_cascade_count;
 uniform float u_shadow_bias;
 uniform mat4 u_view;
-uniform sampler2D u_point_shadow_map_0;
-uniform sampler2D u_point_shadow_map_1;
-uniform sampler2D u_point_shadow_map_2;
-uniform sampler2D u_point_shadow_map_3;
-uniform sampler2D u_point_shadow_map_4;
-uniform sampler2D u_point_shadow_map_5;
-uniform mat4 u_point_light_vps[6];
-uniform vec3 u_point_light_pos;
-uniform float u_point_light_range;
+uniform sampler2D u_point_shadow_maps[MAX_POINT_SHADOWS * 6];
+uniform mat4 u_point_shadow_vps[MAX_POINT_SHADOWS * 6];
+uniform vec3 u_point_shadow_light_positions[MAX_POINT_SHADOWS];
+uniform float u_point_shadow_light_ranges[MAX_POINT_SHADOWS];
 uniform int u_point_shadow_count;
-uniform sampler2D u_spot_shadow_map;
-uniform mat4 u_spot_light_vp;
+uniform sampler2D u_spot_shadow_maps[MAX_SPOT_SHADOWS];
+uniform mat4 u_spot_shadow_vps[MAX_SPOT_SHADOWS];
 uniform int u_spot_shadow_count;
 in vec2 v_uv;
 out vec4 frag_color;
@@ -75,30 +72,38 @@ float compute_directional_shadow(vec3 world_pos) {
 }
 float compute_point_shadow_pass(vec3 world_pos) {
     if (u_point_shadow_count <= 0) return 1.0;
-    vec3 dir = world_pos - u_point_light_pos;
-    vec3 abs_dir = abs(dir);
-    int face = 0;
-    if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) face = dir.x >= 0 ? 0 : 1;
-    else if (abs_dir.y >= abs_dir.z) face = dir.y >= 0 ? 2 : 3;
-    else face = dir.z >= 0 ? 4 : 5;
-    vec4 light_space_pos = u_point_light_vps[face] * vec4(world_pos, 1.0);
-    vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
-    proj_coords = proj_coords * 0.5 + 0.5;
-    if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-    if (face == 0) return sample_shadow(u_point_shadow_map_0, proj_coords);
-    else if (face == 1) return sample_shadow(u_point_shadow_map_1, proj_coords);
-    else if (face == 2) return sample_shadow(u_point_shadow_map_2, proj_coords);
-    else if (face == 3) return sample_shadow(u_point_shadow_map_3, proj_coords);
-    else if (face == 4) return sample_shadow(u_point_shadow_map_4, proj_coords);
-    return sample_shadow(u_point_shadow_map_5, proj_coords);
+    float result = 1.0;
+    for (int li = 0; li < u_point_shadow_count; li++) {
+        vec3 light_pos = u_point_shadow_light_positions[li];
+        vec3 dir = world_pos - light_pos;
+        vec3 abs_dir = abs(dir);
+        int face = 0;
+        if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) face = dir.x >= 0 ? 0 : 1;
+        else if (abs_dir.y >= abs_dir.z) face = dir.y >= 0 ? 2 : 3;
+        else face = dir.z >= 0 ? 4 : 5;
+        int base = li * 6;
+        vec4 light_space_pos = u_point_shadow_vps[base + face] * vec4(world_pos, 1.0);
+        vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
+        proj_coords = proj_coords * 0.5 + 0.5;
+        if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) continue;
+        float d = length(world_pos - light_pos);
+        float range = u_point_shadow_light_ranges[li];
+        if (d > range) continue;
+        result = min(result, sample_shadow(u_point_shadow_maps[base + face], proj_coords));
+    }
+    return result;
 }
 float compute_spot_shadow_pass(vec3 world_pos) {
     if (u_spot_shadow_count <= 0) return 1.0;
-    vec4 light_space_pos = u_spot_light_vp * vec4(world_pos, 1.0);
-    vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
-    proj_coords = proj_coords * 0.5 + 0.5;
-    if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-    return sample_shadow(u_spot_shadow_map, proj_coords);
+    float result = 1.0;
+    for (int li = 0; li < u_spot_shadow_count; li++) {
+        vec4 light_space_pos = u_spot_shadow_vps[li] * vec4(world_pos, 1.0);
+        vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
+        proj_coords = proj_coords * 0.5 + 0.5;
+        if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) continue;
+        result = min(result, sample_shadow(u_spot_shadow_maps[li], proj_coords));
+    }
+    return result;
 }
 void main() {
     vec3 scene_color = texture(u_scene_color, v_uv).rgb;

@@ -7,6 +7,8 @@
 #version 460 core
 #define MAX_LIGHTS 8
 #define CASCADE_COUNT 3
+#define MAX_POINT_SHADOWS 4
+#define MAX_SPOT_SHADOWS 4
 #define PI 3.14159265359
 in vec3 v_world_pos;
 in vec3 v_normal;
@@ -53,21 +55,16 @@ uniform mat4 u_light_space_matrices[CASCADE_COUNT];
 uniform float u_cascade_splits[CASCADE_COUNT];
 uniform float u_shadow_bias;
 uniform int u_cascade_count;
-uniform sampler2D u_point_shadow_map_0;
-uniform sampler2D u_point_shadow_map_1;
-uniform sampler2D u_point_shadow_map_2;
-uniform sampler2D u_point_shadow_map_3;
-uniform sampler2D u_point_shadow_map_4;
-uniform sampler2D u_point_shadow_map_5;
-uniform mat4 u_point_light_vps[6];
-uniform vec3 u_point_light_pos;
-uniform float u_point_light_range;
+uniform sampler2D u_point_shadow_maps[MAX_POINT_SHADOWS * 6];
+uniform mat4 u_point_shadow_vps[MAX_POINT_SHADOWS * 6];
+uniform vec3 u_point_shadow_light_positions[MAX_POINT_SHADOWS];
+uniform float u_point_shadow_light_ranges[MAX_POINT_SHADOWS];
 uniform int u_point_shadow_count;
-uniform int u_point_shadow_light_index;
-uniform sampler2D u_spot_shadow_map;
-uniform mat4 u_spot_light_vp;
+uniform int u_point_shadow_light_indices[MAX_POINT_SHADOWS];
+uniform sampler2D u_spot_shadow_maps[MAX_SPOT_SHADOWS];
+uniform mat4 u_spot_shadow_vps[MAX_SPOT_SHADOWS];
 uniform int u_spot_shadow_count;
-uniform int u_spot_shadow_light_index;
+uniform int u_spot_shadow_light_indices[MAX_SPOT_SHADOWS];
 uniform sampler2D u_area_shadow_map;
 uniform mat4 u_area_light_vp;
 uniform float u_area_light_size;
@@ -203,9 +200,9 @@ float compute_shadow() {
     else shadow = sample_shadow(u_shadow_map_2, proj_coords);
     return mix(1.0, shadow, fade);
 }
-float compute_point_shadow() {
-    if (u_point_shadow_count <= 0) return 1.0;
-    vec3 dir = v_world_pos - u_point_light_pos;
+float compute_point_shadow_for_light(int li) {
+    vec3 light_pos = u_point_shadow_light_positions[li];
+    vec3 dir = v_world_pos - light_pos;
     vec3 abs_dir = abs(dir);
     int face = 0;
     if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) {
@@ -215,24 +212,19 @@ float compute_point_shadow() {
     } else {
         face = dir.z >= 0 ? 4 : 5;
     }
-    vec4 light_space_pos = u_point_light_vps[face] * vec4(v_world_pos, 1.0);
+    int base = li * 6;
+    vec4 light_space_pos = u_point_shadow_vps[base + face] * vec4(v_world_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
     proj_coords = proj_coords * 0.5 + 0.5;
     if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-    if (face == 0) return sample_shadow(u_point_shadow_map_0, proj_coords);
-    else if (face == 1) return sample_shadow(u_point_shadow_map_1, proj_coords);
-    else if (face == 2) return sample_shadow(u_point_shadow_map_2, proj_coords);
-    else if (face == 3) return sample_shadow(u_point_shadow_map_3, proj_coords);
-    else if (face == 4) return sample_shadow(u_point_shadow_map_4, proj_coords);
-    return sample_shadow(u_point_shadow_map_5, proj_coords);
+    return sample_shadow(u_point_shadow_maps[base + face], proj_coords);
 }
-float compute_spot_shadow() {
-    if (u_spot_shadow_count <= 0) return 1.0;
-    vec4 light_space_pos = u_spot_light_vp * vec4(v_world_pos, 1.0);
+float compute_spot_shadow_for_light(int li) {
+    vec4 light_space_pos = u_spot_shadow_vps[li] * vec4(v_world_pos, 1.0);
     vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
     proj_coords = proj_coords * 0.5 + 0.5;
     if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-    return sample_shadow(u_spot_shadow_map, proj_coords);
+    return sample_shadow(u_spot_shadow_maps[li], proj_coords);
 }
 // @SHADOW_INCLUDE
 vec3 calc_area_light(Light light, vec3 normal, vec3 view_dir, vec3 albedo) {
@@ -337,13 +329,15 @@ void main() {
     vec3 view_dir = normalize(u_camera_pos - v_world_pos);
     vec3 result = u_ambient * albedo;
     float shadow_factor = compute_shadow();
-    float point_shadow_factor = compute_point_shadow();
-    float spot_shadow_factor = compute_spot_shadow();
     for (int i = 0; i < u_light_count && i < MAX_LIGHTS; i++) {
         float sf = 1.0;
         if (i == u_shadow_light_index) sf = min(sf, shadow_factor);
-        if (i == u_point_shadow_light_index) sf = min(sf, point_shadow_factor);
-        if (i == u_spot_shadow_light_index) sf = min(sf, spot_shadow_factor);
+        for (int pi = 0; pi < u_point_shadow_count; pi++) {
+            if (i == u_point_shadow_light_indices[pi]) { sf = min(sf, compute_point_shadow_for_light(pi)); break; }
+        }
+        for (int si = 0; si < u_spot_shadow_count; si++) {
+            if (i == u_spot_shadow_light_indices[si]) { sf = min(sf, compute_spot_shadow_for_light(si)); break; }
+        }
         if (u_lights[i].type == 3) {
             float area_sf = 1.0;
             if (i == u_area_shadow_light_index) area_sf = compute_area_shadow();

@@ -85,6 +85,8 @@ Shader "Zarin/PBR"
 
             #version 460 core
             #define MAX_LIGHTS 8
+            #define MAX_POINT_SHADOWS 4
+            #define MAX_SPOT_SHADOWS 4
             #define CASCADE_COUNT 3
             #define PI 3.14159265359
             #define PI_4 0.78539816339
@@ -164,21 +166,16 @@ Shader "Zarin/PBR"
             uniform float u_cascade_splits[CASCADE_COUNT];
             uniform float u_shadow_bias;
             uniform int u_cascade_count;
-            uniform sampler2D u_point_shadow_map_0;
-            uniform sampler2D u_point_shadow_map_1;
-            uniform sampler2D u_point_shadow_map_2;
-            uniform sampler2D u_point_shadow_map_3;
-            uniform sampler2D u_point_shadow_map_4;
-            uniform sampler2D u_point_shadow_map_5;
-            uniform mat4 u_point_light_vps[6];
-            uniform vec3 u_point_light_pos;
-            uniform float u_point_light_range;
+            uniform sampler2D u_point_shadow_maps[MAX_POINT_SHADOWS * 6];
+            uniform mat4 u_point_shadow_vps[MAX_POINT_SHADOWS * 6];
+            uniform vec3 u_point_shadow_light_positions[MAX_POINT_SHADOWS];
+            uniform float u_point_shadow_light_ranges[MAX_POINT_SHADOWS];
             uniform int u_point_shadow_count;
-            uniform int u_point_shadow_light_index;
-            uniform sampler2D u_spot_shadow_map;
-            uniform mat4 u_spot_light_vp;
+            uniform int u_point_shadow_light_indices[MAX_POINT_SHADOWS];
+            uniform sampler2D u_spot_shadow_maps[MAX_SPOT_SHADOWS];
+            uniform mat4 u_spot_shadow_vps[MAX_SPOT_SHADOWS];
             uniform int u_spot_shadow_count;
-            uniform int u_spot_shadow_light_index;
+            uniform int u_spot_shadow_light_indices[MAX_SPOT_SHADOWS];
 
             uniform sampler2D u_area_shadow_map;
             uniform mat4 u_area_light_vp;
@@ -264,33 +261,28 @@ Shader "Zarin/PBR"
                 return sample_shadow_improved(u_shadow_map_2, proj_coords);
             }
 
-            float compute_point_shadow_improved() {
-                if (u_point_shadow_count <= 0) return 1.0;
-                vec3 dir = v_world_pos - u_point_light_pos;
+            float compute_point_shadow_for_light(int li) {
+                vec3 light_pos = u_point_shadow_light_positions[li];
+                vec3 dir = v_world_pos - light_pos;
                 vec3 abs_dir = abs(dir);
                 int face = 0;
                 if (abs_dir.x >= abs_dir.y && abs_dir.x >= abs_dir.z) face = dir.x >= 0 ? 0 : 1;
                 else if (abs_dir.y >= abs_dir.z) face = dir.y >= 0 ? 2 : 3;
                 else face = dir.z >= 0 ? 4 : 5;
-                vec4 light_space_pos = u_point_light_vps[face] * vec4(v_world_pos, 1.0);
+                int base = li * 6;
+                vec4 light_space_pos = u_point_shadow_vps[base + face] * vec4(v_world_pos, 1.0);
                 vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
                 proj_coords = proj_coords * 0.5 + 0.5;
                 if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-                if (face == 0) return sample_shadow_improved(u_point_shadow_map_0, proj_coords);
-                else if (face == 1) return sample_shadow_improved(u_point_shadow_map_1, proj_coords);
-                else if (face == 2) return sample_shadow_improved(u_point_shadow_map_2, proj_coords);
-                else if (face == 3) return sample_shadow_improved(u_point_shadow_map_3, proj_coords);
-                else if (face == 4) return sample_shadow_improved(u_point_shadow_map_4, proj_coords);
-                return sample_shadow_improved(u_point_shadow_map_5, proj_coords);
+                return sample_shadow_improved(u_point_shadow_maps[base + face], proj_coords);
             }
 
-            float compute_spot_shadow_improved() {
-                if (u_spot_shadow_count <= 0) return 1.0;
-                vec4 light_space_pos = u_spot_light_vp * vec4(v_world_pos, 1.0);
+            float compute_spot_shadow_for_light(int li) {
+                vec4 light_space_pos = u_spot_shadow_vps[li] * vec4(v_world_pos, 1.0);
                 vec3 proj_coords = light_space_pos.xyz / light_space_pos.w;
                 proj_coords = proj_coords * 0.5 + 0.5;
                 if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
-                return sample_shadow_improved(u_spot_shadow_map, proj_coords);
+                return sample_shadow_improved(u_spot_shadow_maps[li], proj_coords);
             }
 
             #define PBR_AREA_SHADOWS
@@ -663,14 +655,16 @@ Shader "Zarin/PBR"
                 float cc_roughness = max(_ClearCoatRoughness, 0.001);
                 result += ibl_contribution(N, V, albedo, roughness, metallic, F0, occlusion, aniso_T, aniso_B, _Anisotropy, _ClearCoat, cc_roughness);
                 float shadow_factor = compute_shadow_improved();
-                float point_shadow_factor = compute_point_shadow_improved();
-                float spot_shadow_factor = compute_spot_shadow_improved();
                 float area_shadow_factor = compute_area_shadow();
                 for (int i = 0; i < u_light_count && i < MAX_LIGHTS; i++) {
                     float sf = 1.0;
                     if (i == u_shadow_light_index) sf = min(sf, shadow_factor);
-                    if (i == u_point_shadow_light_index) sf = min(sf, point_shadow_factor);
-                    if (i == u_spot_shadow_light_index) sf = min(sf, spot_shadow_factor);
+                    for (int pi = 0; pi < u_point_shadow_count; pi++) {
+                        if (i == u_point_shadow_light_indices[pi]) { sf = min(sf, compute_point_shadow_for_light(pi)); break; }
+                    }
+                    for (int si = 0; si < u_spot_shadow_count; si++) {
+                        if (i == u_spot_shadow_light_indices[si]) { sf = min(sf, compute_spot_shadow_for_light(si)); break; }
+                    }
                     if (i == u_area_shadow_light_index) sf = min(sf, area_shadow_factor);
                     if (u_lights[i].type == 3) {
                     result += calc_area_light_pbr(u_lights[i], N, V, albedo, roughness, metallic, F0, aniso_T, aniso_B, _Anisotropy, _SubsurfaceColor, _SubsurfaceAmount) * sf;
