@@ -372,6 +372,12 @@ class Renderer:
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
         self._cascade_count = config.get("rendering.cascade_count", self._cascade_count)
+        if self._shadows:
+            self._shadows.update_settings(
+                shadow_resolution=self._shadow_resolution,
+                shadow_distance=self._shadow_distance,
+                cascade_count=self._cascade_count,
+            )
         self._render_scale = config.get("rendering.render_scale", self._render_scale)
         self._exposure = config.get("rendering.exposure", self._exposure)
         Light.set_light_scale(config.get("rendering.light_scale", 1.0))

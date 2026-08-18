@@ -140,6 +140,25 @@ class ShadowRenderer:
         self._temporal_skip_idx: int = -1
         self._create_csm_resources()
 
+    def update_settings(self, shadow_resolution: int = None, shadow_distance: float = None,
+                        cascade_count: int = None, area_shadow_resolution: int = None):
+        changed = False
+        if shadow_resolution is not None and shadow_resolution != self._shadow_resolution:
+            self._shadow_resolution = shadow_resolution
+            changed = True
+        if shadow_distance is not None and shadow_distance != self._shadow_distance:
+            self._shadow_distance = shadow_distance
+        if cascade_count is not None:
+            cc = max(1, min(cascade_count, 3))
+            if cc != self._cascade_count:
+                self._cascade_count = cc
+                changed = True
+        if area_shadow_resolution is not None and area_shadow_resolution != self._area_shadow_resolution:
+            self._area_shadow_resolution = area_shadow_resolution
+            changed = True
+        if changed:
+            self._create_csm_resources()
+
     def _create_csm_resources(self):
         for sm in self._shadow_maps:
             try:
