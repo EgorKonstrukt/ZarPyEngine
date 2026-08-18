@@ -263,8 +263,9 @@ class Renderer:
         self._culled_visible: int = 0
         self._rt_rays_per_frame: int = 0
         self._render_callback: Optional[Callable] = None
-        self._shadow_resolution: int = 1024
+        self._shadow_resolution: int = 512
         self._shadow_distance: float = 50.0
+        self._cascade_count: int = 2
         self._render_scale: float = 1.0
         self._line_width: float = 0.6667
         self._clear_color: list = [0.18, 0.18, 0.18]
@@ -370,6 +371,7 @@ class Renderer:
         self._max_lights = config.get("rendering.max_lights", self._max_lights)
         self._shadow_resolution = config.get("rendering.shadow_resolution", self._shadow_resolution)
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
+        self._cascade_count = config.get("rendering.cascade_count", self._cascade_count)
         self._render_scale = config.get("rendering.render_scale", self._render_scale)
         self._exposure = config.get("rendering.exposure", self._exposure)
         Light.set_light_scale(config.get("rendering.light_scale", 1.0))
@@ -618,7 +620,7 @@ void main() {
             self._gizmo._line_width = self._line_width
             self._gizmo.initialize_instanced_meshes()
             self._gizmo.initialize_instanced_lines()
-            self._shadows = ShadowRenderer(self._ctx, self._shadow_prog, self._shadow_resolution, self._shadow_distance)
+            self._shadows = ShadowRenderer(self._ctx, self._shadow_prog, self._shadow_resolution, self._shadow_distance, cascade_count=self._cascade_count)
             self._skybox_cube = make_cube_mesh()
             self._skybox_cube.build_gl(self._ctx, self._default_prog)
             self._cloud_quad = make_quad_mesh(2.0)

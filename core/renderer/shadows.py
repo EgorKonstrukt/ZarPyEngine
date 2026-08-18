@@ -72,13 +72,14 @@ def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
 
 class ShadowRenderer:
     def __init__(self, ctx: moderngl.Context, shadow_prog: moderngl.Program,
-                  shadow_resolution: int = 1024, shadow_distance: float = 50.0,
-                  area_shadow_resolution: int = 1024):
+                  shadow_resolution: int = 512, shadow_distance: float = 50.0,
+                  area_shadow_resolution: int = 512, cascade_count: int = 2):
         self._ctx = ctx
         self._prog = shadow_prog
         self._shadow_resolution = shadow_resolution
         self._area_shadow_resolution = area_shadow_resolution
         self._shadow_distance = shadow_distance
+        self._cascade_count = max(1, min(cascade_count, 3))
         self._shadow_maps: list[Any] = []
         self._shadow_fbos: list[Any] = []
         self._cascade_splits: list[float] = [1000000.0] * 3
@@ -153,7 +154,7 @@ class ShadowRenderer:
         self._shadow_maps = []
         self._shadow_fbos = []
         res = self._shadow_resolution
-        for _ in range(3):
+        for _ in range(self._cascade_count):
             tex = self._ctx.depth_texture((res, res))
             tex.repeat_x = False
             tex.repeat_y = False
@@ -463,8 +464,12 @@ class ShadowRenderer:
         near_z = max(cam_near, 0.01)
         far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
         span = far_z - near_z
+        if self._cascade_count <= 1:
+            return [far_z, far_z, far_z]
         first = near_z + span * 0.14
         second = near_z + span * 0.38
+        if self._cascade_count == 2:
+            return [first, far_z, far_z]
         return [first, max(first + 0.1, second), far_z]
 
     def _render_directional_shadow(self, sun_transform, shadow_groups,
@@ -480,7 +485,7 @@ class ShadowRenderer:
         prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
         first_cascade = True
 
-        for ci in range(3):
+        for ci in range(self._cascade_count):
             if _HAS_CYTHON:
                 compute_frustum_corners_out(
                     near_z, splits[ci], cam_fov, aspect,
@@ -735,12 +740,12 @@ class ShadowRenderer:
             self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], shadow_groups, resolution=self._shadow_resolution)
 
     def set_uniforms(self, prog):
-        has_csm = self._cascade_splits[2] > 0.0
+        has_csm = self._cascade_splits[self._cascade_count - 1] > 0.0
         if has_csm and "u_cascade_count" in prog:
-            prog["u_cascade_count"].value = 3
+            prog["u_cascade_count"].value = self._cascade_count
             if "u_light_space_matrices" in prog:
                 cm = self._cascade_matrices_buf
-                for ci in range(3):
+                for ci in range(self._cascade_count):
                     np.copyto(cm[ci], self._light_space_matrices[ci])
                 prog["u_light_space_matrices"].write(cm.tobytes())
             if "u_cascade_splits" in prog:
@@ -749,7 +754,7 @@ class ShadowRenderer:
                 cs[1] = self._cascade_splits[1]
                 cs[2] = self._cascade_splits[2]
                 prog["u_cascade_splits"].write(cs.tobytes())
-            for ci in range(3):
+            for ci in range(self._cascade_count):
                 tex_unit = 3 + ci
                 self._shadow_maps[ci].use(tex_unit)
                 si = f"u_shadow_map_{ci}"
