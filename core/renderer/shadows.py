@@ -948,11 +948,11 @@ class ShadowRenderer:
                 if "u_point_shadow_light_indices" in prog:
                     self._point_idx_buf[slot] = int(self._point_shadow_light_indices[slot])
             if "u_point_shadow_light_positions" in prog:
-                prog["u_point_shadow_light_positions"].write(self._point_pos_buf[:self._point_shadow_count].tobytes())
+                prog["u_point_shadow_light_positions"].write(self._point_pos_buf.tobytes())
             if "u_point_shadow_light_ranges" in prog:
-                prog["u_point_shadow_light_ranges"].write(self._point_range_buf[:self._point_shadow_count].tobytes())
+                prog["u_point_shadow_light_ranges"].write(self._point_range_buf.tobytes())
             if "u_point_shadow_light_indices" in prog:
-                prog["u_point_shadow_light_indices"].write(self._point_idx_buf[:self._point_shadow_count].tobytes())
+                prog["u_point_shadow_light_indices"].write(self._point_idx_buf.tobytes())
         else:
             if "u_point_shadow_count" in prog:
                 prog["u_point_shadow_count"].value = 0
@@ -972,7 +972,7 @@ class ShadowRenderer:
                 if "u_spot_shadow_light_indices" in prog:
                     self._spot_idx_buf[slot] = int(self._spot_shadow_light_indices[slot])
             if "u_spot_shadow_light_indices" in prog:
-                prog["u_spot_shadow_light_indices"].write(self._spot_idx_buf[:self._spot_shadow_count].tobytes())
+                prog["u_spot_shadow_light_indices"].write(self._spot_idx_buf.tobytes())
         else:
             if "u_spot_shadow_count" in prog:
                 prog["u_spot_shadow_count"].value = 0
