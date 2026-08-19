@@ -12,6 +12,7 @@ import random
 import sys
 import time
 import datetime
+import json
 
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QFrame, QTextEdit, QApplication)
@@ -25,6 +26,19 @@ from core.config.constants import APP_VERSION, APP_VERSION_DISPLAY
 MPL_URL = "https://mozilla.org/MPL/2.0/"
 LOGO_W = 256
 _EASTER_CLICKS_NEEDED = 10
+
+
+def _read_engine_optimization() -> dict:
+    try:
+        from pathlib import Path
+        settings = Path.home() / ".zarin" / "settings.json"
+        if settings.exists():
+            with open(settings) as f:
+                data = json.load(f)
+            return data.get("engine", {})
+    except Exception:
+        pass
+    return {}
 
 
 def _render_logo(target_w: int) -> QPixmap | None:
@@ -219,8 +233,42 @@ def _collect_system_info(parent=None) -> str:
     lines.append(f"  Implementation:{sys.version.split('[')[1].split(']')[0] if '[' in sys.version else 'CPython'}")
     gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)()
     lines.append(f"  GIL:           {'Enabled' if gil_enabled else 'Disabled (nogil)'}")
+    jit_enabled = getattr(sys, '_jit_enabled', False)
+    lines.append(f"  JIT:           {'Active' if jit_enabled else 'Off'}")
     lines.append(f"  Executable:    {sys.executable}")
     lines.append(f"  Prefix:        {sys.prefix}")
+    lines.append("")
+    lines.append("[Interpreter Flags]")
+    fl = sys.flags
+    lines.append(f"  debug:                  {fl.debug}")
+    lines.append(f"  inspect:                {fl.inspect}")
+    lines.append(f"  interactive:            {fl.interactive}")
+    lines.append(f"  optimize:               {fl.optimize}")
+    lines.append(f"  dont_write_bytecode:    {fl.dont_write_bytecode}")
+    lines.append(f"  no_user_site:           {fl.no_user_site}")
+    lines.append(f"  no_site:                {fl.no_site}")
+    lines.append(f"  ignore_environment:     {fl.ignore_environment}")
+    lines.append(f"  verbose:                {fl.verbose}")
+    lines.append(f"  bytes_warning:          {fl.bytes_warning}")
+    lines.append(f"  quiet:                  {fl.quiet}")
+    lines.append(f"  hash_randomization:     {fl.hash_randomization}")
+    lines.append(f"  isolated:               {getattr(fl, 'isolated', 'N/A')}")
+    lines.append(f"  dev_mode:               {getattr(fl, 'dev_mode', 'N/A')}")
+    lines.append(f"  utf8_mode:              {getattr(fl, 'utf8_mode', 'N/A')}")
+    lines.append(f"  warn_default_encoding:  {getattr(fl, 'warn_default_encoding', 'N/A')}")
+    lines.append(f"  safe_path:              {getattr(fl, 'safe_path', 'N/A')}")
+    lines.append(f"  int_max_str_digits:     {getattr(fl, 'int_max_str_digits', 'N/A')}")
+    lines.append("")
+
+    lines.append("[Optimization Config]")
+    _eng_cfg = _read_engine_optimization()
+    lines.append(f"  python_jit:             {_eng_cfg.get('python_jit', False)}")
+    lines.append(f"  python_optimize:        {_eng_cfg.get('python_optimize', 0)}")
+    lines.append(f"  python_unbuffered:      {_eng_cfg.get('python_unbuffered', False)}")
+    lines.append(f"  python_no_bytecode:     {_eng_cfg.get('python_no_bytecode', False)}")
+    lines.append(f"  PYTHON_JIT env:         {os.environ.get('PYTHON_JIT', '(unset)')}")
+    lines.append(f"  PYTHONUNBUFFERED env:   {os.environ.get('PYTHONUNBUFFERED', '(unset)')}")
+    lines.append(f"  PYTHONDONTWRITEBYTECODE env: {os.environ.get('PYTHONDONTWRITEBYTECODE', '(unset)')}")
     lines.append("")
 
     gl_info = {}
@@ -480,12 +528,30 @@ class AboutDialog(QDialog):
 
         gil_enabled = getattr(sys, '_is_gil_enabled', lambda: True)()
         gil_status = "No (nogil)" if not gil_enabled else "Yes"
+        jit_enabled = getattr(sys, '_jit_enabled', False)
+        jit_status = "Active" if jit_enabled else "Off"
+        flags = sys.flags
+        debug_flag = "on" if flags.debug else "off"
+        optimize_flag = flags.optimize
+        dev_mode = getattr(flags, 'dev_mode', False)
+        isolated = getattr(flags, 'isolated', False)
+        utf8 = getattr(flags, 'utf8_mode', False)
+        eng_cfg = _read_engine_optimization()
+        jit_cfg = bool(eng_cfg.get("python_jit", False))
+        opt_cfg = int(eng_cfg.get("python_optimize", 0))
+        unbuf_cfg = bool(eng_cfg.get("python_unbuffered", False))
+        nobc_cfg = bool(eng_cfg.get("python_no_bytecode", False))
         info = QLabel(
             f"<b>Tech Stack:</b> Python 3, ModernGL, PyQt6, NumPy, Bullet3 / PhysX<br>"
             f"<b>Plugins:</b> {self._count_plugins()} loaded<br>"
             f"<b>System:</b> {platform.system()} {platform.machine()}<br>"
             f"<b>Python:</b> {sys.version.split()[0]}<br>"
+            f"<b>JIT:</b> {jit_status} (cfg: {'on' if jit_cfg else 'off'})<br>"
             f"<b>GIL:</b> {gil_status}<br>"
+            f"<b>Debug:</b> {debug_flag} &nbsp; <b>Optimize:</b> {optimize_flag} (cfg: {opt_cfg})<br>"
+            f"<b>Unbuffered:</b> {'on' if unbuf_cfg else 'off'} &nbsp; "
+            f"<b>No-Bytecode:</b> {'on' if nobc_cfg else 'off'}<br>"
+            f"<b>Dev:</b> {dev_mode} &nbsp; <b>Isolated:</b> {isolated} &nbsp; <b>UTF-8:</b> {utf8}<br>"
             f"<b>Interpreter:</b> {os.path.basename(sys.executable)}<br>"
             f"<b>Renderer:</b> OpenGL 4.6 Core Profile<br>"
             f"<b>GPU:</b> {self._gpu_name}"

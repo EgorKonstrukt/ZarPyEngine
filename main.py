@@ -17,11 +17,70 @@ try:
 except NameError:
     pass
 
+def _apply_python_optimization():
+    if getattr(sys, "frozen", False):
+        return
+    if os.environ.get("_ZARIN_OPT_REEXEC") == "1":
+        return
+    _eng = {}
+    try:
+        from pathlib import Path
+        _settings = Path.home() / ".zarin" / "settings.json"
+        if _settings.exists():
+            with open(_settings) as _f:
+                _eng = json.load(_f).get("engine", {})
+    except Exception:
+        pass
+    jit_wanted = bool(_eng.get("python_jit", False))
+    opt_wanted = int(_eng.get("python_optimize", 0))
+    unbuf_wanted = bool(_eng.get("python_unbuffered", False))
+    nobc_wanted = bool(_eng.get("python_no_bytecode", False))
+    jit_current = bool(getattr(sys, "_jit_enabled", False))
+    opt_current = int(getattr(sys.flags, "optimize", 0))
+    changed = False
+    new_env = os.environ.copy()
+    new_env["_ZARIN_OPT_REEXEC"] = "1"
+    if jit_wanted and not jit_current:
+        new_env["PYTHON_JIT"] = "1"
+        changed = True
+    elif not jit_wanted and jit_current:
+        new_env["PYTHON_JIT"] = "0"
+        changed = True
+    if unbuf_wanted and "PYTHONUNBUFFERED" not in os.environ:
+        new_env["PYTHONUNBUFFERED"] = "1"
+        changed = True
+    elif not unbuf_wanted and "PYTHONUNBUFFERED" in os.environ:
+        new_env.pop("PYTHONUNBUFFERED", None)
+        changed = True
+    if nobc_wanted and "PYTHONDONTWRITEBYTECODE" not in os.environ:
+        new_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        changed = True
+    elif not nobc_wanted and "PYTHONDONTWRITEBYTECODE" in os.environ:
+        new_env.pop("PYTHONDONTWRITEBYTECODE", None)
+        changed = True
+    if opt_wanted != opt_current:
+        changed = True
+    if not changed:
+        return
+    new_args = [sys.executable]
+    if opt_wanted >= 2:
+        new_args.append("-OO")
+    elif opt_wanted >= 1:
+        new_args.append("-O")
+    new_args.extend(sys.argv)
+    print(f"[Zarin Engine] Relaunching with optimizations (jit={jit_wanted}, opt={opt_wanted}, unbuffered={unbuf_wanted}, no_bytecode={nobc_wanted})...", file=sys.stderr)
+    _proc = subprocess.Popen(new_args, env=new_env)
+    _proc.wait()
+    sys.exit(_proc.returncode)
+
+_apply_python_optimization()
+
 def _check_extensions_missing():
     if getattr(sys, "frozen", False):
         return False
     _dir = os.path.dirname(os.path.abspath(__file__))
     _pyd_dir = os.path.join(_dir, "core")
+    _pyx_dir = os.path.join(_dir, "core", "pyx")
     _mod_names = [
         "_convex_hull", "_bvh_build", "_raytracing_data", "_math_vec",
         "_culling", "_transform_batch", "_render_utils", "_physics_utils",
@@ -33,14 +92,18 @@ def _check_extensions_missing():
     ]
     import importlib.machinery
     _suffixes = importlib.machinery.EXTENSION_SUFFIXES
-    def _has_ext(_m):
+    def _ext_path(_m):
         for _entry in os.listdir(_pyd_dir):
             for _s in _suffixes:
                 if _entry == _m + _s:
-                    return True
-        return False
+                    return os.path.join(_pyd_dir, _entry)
+        return None
     for _m in _mod_names:
-        if not _has_ext(_m):
+        _p = _ext_path(_m)
+        if _p is None:
+            return True
+        _src = os.path.join(_pyx_dir, _m + ".pyx")
+        if os.path.exists(_src) and os.path.getmtime(_src) > os.path.getmtime(_p):
             return True
     return False
 

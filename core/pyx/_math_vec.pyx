@@ -213,6 +213,18 @@ cdef class Vec3:
     def length_sq(self):
         return self._x * self._x + self._y * self._y + self._z * self._z
 
+    def distance_to(self, o):
+        cdef double dx = self._x - o._x
+        cdef double dy = self._y - o._y
+        cdef double dz = self._z - o._z
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    def distance_sq_to(self, o):
+        cdef double dx = self._x - o._x
+        cdef double dy = self._y - o._y
+        cdef double dz = self._z - o._z
+        return dx * dx + dy * dy + dz * dz
+
     def normalized(self):
         l = math.sqrt(self._x * self._x + self._y * self._y + self._z * self._z)
         return Vec3._make(self._x / l, self._y / l, self._z / l) if l > 1e-10 else Vec3()

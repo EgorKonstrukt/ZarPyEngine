@@ -244,7 +244,11 @@ def get_global_config() -> Config:
             },
             "engine": {
                 "time_scale": 1.0,
-                "fixed_update_dt": 0.02
+                "fixed_update_dt": 0.02,
+                "python_jit": False,
+                "python_optimize": 0,
+                "python_unbuffered": False,
+                "python_no_bytecode": False,
             },
             "hierarchy": {
                 "refresh_interval": 500
@@ -284,7 +288,9 @@ def get_global_config() -> Config:
             }
         })
         _global_config._data.pop("physics", None)
-        for _rk in ["editor.theme", "editor.font_size", "editor.ui_scale", "editor.language"]:
+        for _rk in ["editor.theme", "editor.font_size", "editor.ui_scale", "editor.language",
+                     "engine.python_jit", "engine.python_optimize", "engine.python_unbuffered",
+                     "engine.python_no_bytecode"]:
             _global_config.mark_restart(_rk)
     return _global_config
 def get_project_config(project_path: str) -> Config:
