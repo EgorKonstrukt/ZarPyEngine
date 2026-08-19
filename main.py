@@ -17,27 +17,83 @@ try:
 except NameError:
     pass
 
-def _ensure_extensions():
+def _check_extensions_missing():
+    if getattr(sys, "frozen", False):
+        return False
     _dir = os.path.dirname(os.path.abspath(__file__))
-    _pyx = os.path.join(_dir, "core", "_convex_hull.pyx")
-    if not os.path.exists(_pyx):
-        return
-    import glob as _glob
-    if _glob.glob(os.path.join(_dir, "core", "_convex_hull*.pyd")) or _glob.glob(
-        os.path.join(_dir, "core", "_convex_hull*.so")
-    ):
-        return
-    print("[Zarin Engine] Building native extensions...", file=sys.stderr)
+    _pyd_dir = os.path.join(_dir, "core")
+    _mod_names = [
+        "_convex_hull", "_bvh_build", "_raytracing_data", "_math_vec",
+        "_culling", "_transform_batch", "_render_utils", "_physics_utils",
+        "_core_batch", "_types", "_ecs_batch", "_render_batch",
+        "_octree_batch", "_constraint_batch", "_curve_batch",
+        "_constraint_update", "_physics_sync", "_mesh_import",
+        "_skinning", "_audio_dsp_cy", "_raycast", "_shadow_batch",
+        "math_helpers",
+    ]
+    import importlib.machinery
+    _suffixes = importlib.machinery.EXTENSION_SUFFIXES
+    def _has_ext(_m):
+        for _entry in os.listdir(_pyd_dir):
+            for _s in _suffixes:
+                if _entry == _m + _s:
+                    return True
+        return False
+    for _m in _mod_names:
+        if not _has_ext(_m):
+            return True
+    return False
+
+def _build_extensions_with_splash(splash):
+    import re
+    from PyQt6.QtWidgets import QApplication
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    print("[Zarin Engine] Native extensions missing or outdated. Building...", file=sys.stderr)
+    splash.set_progress(0, "Building native extensions...")
+    QApplication.processEvents()
     try:
-        subprocess.check_call(
+        proc = subprocess.Popen(
             [sys.executable, "setup.py", "build_ext", "--inplace"],
             cwd=_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-        print("[Zarin Engine] Extensions built successfully.", file=sys.stderr)
+        total_exts = 23
+        built = 0
+        for line in proc.stdout:
+            stripped = line.rstrip()
+            if not stripped:
+                continue
+            sys.stdout.write(stripped + "\n")
+            sys.stdout.flush()
+            low = stripped.lower()
+            if "compiling" in low and ".pyx" in low:
+                m = re.search(r"(\S+\.pyx)", stripped)
+                name = os.path.basename(m.group(1)) if m else "module"
+                built += 1
+                pct = int(built * 80 / total_exts)
+                splash.set_progress(pct, f"Compiling {name} ({built}/{total_exts})...")
+                QApplication.processEvents()
+            elif "building" in low and "extension" in low:
+                m = re.search(r"building '([^']+)'", stripped)
+                name = m.group(1).split(".")[-1] if m else ""
+                if name:
+                    splash.set_progress(min(95, int(built * 80 / total_exts)),
+                                        f"Building {name}...")
+                    QApplication.processEvents()
+        proc.wait()
+        if proc.returncode == 0:
+            splash.set_progress(100, "Extensions built successfully.")
+            QApplication.processEvents()
+            print("[Zarin Engine] Extensions built successfully.", file=sys.stderr)
+        else:
+            splash.set_progress(100, "Extension build failed.")
+            QApplication.processEvents()
+            print(f"[Zarin Engine] Extension build failed (exit code {proc.returncode}).", file=sys.stderr)
     except Exception as e:
         print(f"[Zarin Engine] Extension build failed: {e}", file=sys.stderr)
-
-_ensure_extensions()
 
 from core.foundation.logger import Logger
 
@@ -104,6 +160,8 @@ def main():
     splash.set_total_steps(8)
     splash.show()
     app.processEvents()
+    if _check_extensions_missing():
+        _build_extensions_with_splash(splash)
     from core.engine.engine import Engine
     splash.advance("Initializing engine core...")
     engine = Engine()

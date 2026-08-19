@@ -3,8 +3,8 @@ moderngl
 numpy
 pyopenal
 pyogg
-pybullet
-ovphysx
+#pybullet
+#ovphysx
 pynput
 msgpack
 cython
