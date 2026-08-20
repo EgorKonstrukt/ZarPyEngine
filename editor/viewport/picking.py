@@ -15,8 +15,6 @@ try:
 except ImportError:
     _raycast_cy = None
 
-_font_atlas_cache: dict[tuple[str, int], "FontAtlas"] = {}
-
 
 def _ray_aabb_min(ox: float, oy: float, oz: float,
                   dx: float, dy: float, dz: float,
@@ -136,20 +134,13 @@ def _world_aabb_of(entity, only_expanded: bool = False) -> tuple | None:
         np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
         expanded = True
     from core.components.rendering.renderers.text_renderer import TextRenderer
-    from core.assets.font_atlas import FontAtlas
+    from core.assets.font_atlas import request_font_atlas
     from core.assets.font_atlas import get_default_font_path as get_def_font
     tr_comp = entity.get_component(TextRenderer)
     if tr_comp and tr_comp.enabled and tr_comp.text:
         fp = tr_comp.font_path or get_def_font()
         base_size = getattr(tr_comp, "atlas_resolution", 128)
-        ak = (fp, base_size)
-        atlas = _font_atlas_cache.get(ak)
-        if atlas is None and fp:
-            try:
-                atlas = FontAtlas(fp, base_size)
-                _font_atlas_cache[ak] = atlas
-            except Exception:
-                pass
+        atlas = request_font_atlas(fp, base_size)
         if atlas is not None:
             inv_lh = 1.0 / atlas.line_height if atlas.line_height > 0 else 1.0
             scale = float(tr_comp.font_size) * inv_lh * 0.01

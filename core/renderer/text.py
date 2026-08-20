@@ -8,10 +8,11 @@ from __future__ import annotations
 import numpy as np
 import moderngl
 from typing import Optional, Any
+from collections import OrderedDict
 from core.maths.math3d import Mat4
 from core.components.rendering.renderers.text_renderer import TextRenderer, TextAlign, TextFilter
 
-from core.assets.font_atlas import FontAtlas
+from core.assets.font_atlas import FontAtlas, request_font_atlas, drop_font_atlas
 
 
 class TextRendererGL:
@@ -22,8 +23,9 @@ class TextRendererGL:
         self._ibo: Optional[moderngl.Buffer] = None
         self._vao: Optional[moderngl.VertexArray] = None
         self._max_chars: int = 4096
-        self._font_atlases: dict[tuple[str, int], FontAtlas] = {}
+        self._font_atlases: "OrderedDict[tuple[str, int], FontAtlas]" = OrderedDict()
         self._tex_cache: dict[tuple[str, int], Any] = {}
+        self._max_atlases: int = 4
         self._verts: Optional[np.ndarray] = None
         self._geom_cache: dict[int, tuple[int, int, float, np.ndarray, int]] = {}
         self._rich_seg_info: list[dict] = []
@@ -88,15 +90,26 @@ class TextRendererGL:
     def get_or_create_atlas(self, font_path: str, base_size: int = 128) -> Optional[FontAtlas]:
         key = (font_path, base_size)
         if key in self._font_atlases:
+            self._font_atlases.move_to_end(key)
             return self._font_atlases[key]
         if not font_path:
             return None
-        try:
-            atlas = FontAtlas(font_path, base_size)
+        atlas = request_font_atlas(font_path, base_size)
+        if atlas is not None:
             self._font_atlases[key] = atlas
-            return atlas
-        except Exception:
-            return None
+            self._evict_atlases_if_needed()
+            drop_font_atlas(font_path, base_size)
+        return atlas
+
+    def _evict_atlases_if_needed(self) -> None:
+        while len(self._font_atlases) > self._max_atlases:
+            old_key, _old_atlas = self._font_atlases.popitem(last=False)
+            tex = self._tex_cache.pop(old_key, None)
+            if tex is not None:
+                try:
+                    tex.release()
+                except Exception:
+                    pass
 
     def _get_atlas(self, font_path: str, base_size: int = 128) -> Optional[FontAtlas]:
         return self.get_or_create_atlas(font_path, base_size)
@@ -114,7 +127,14 @@ class TextRendererGL:
             if anisotropy > 0:
                 tex.anisotropy = anisotropy
             return tex
-        tex = self._ctx.texture((atlas.texture_width, atlas.texture_height), 4, atlas.texture.tobytes())
+        alpha = atlas.alpha
+        if alpha is None:
+            return self._tex_cache.get(key)
+        h, w = alpha.shape
+        rgba = np.empty((h, w, 4), dtype=np.uint8)
+        rgba[:, :, 3] = alpha
+        rgba[:, :, 0:3] = 255
+        tex = self._ctx.texture((atlas.texture_width, atlas.texture_height), 4, rgba.tobytes())
         tex.filter = _FILTER_MAP.get(filter_mode, (moderngl.LINEAR, moderngl.LINEAR))
         tex.repeat_x = False
         tex.repeat_y = False
@@ -122,6 +142,7 @@ class TextRendererGL:
         if anisotropy > 0:
             tex.anisotropy = anisotropy
         self._tex_cache[key] = tex
+        atlas.release_source_images()
         return tex
 
     def _build_line_quads(self, atlas: FontAtlas, text: str, scale: float, pen_x: float, pen_y: float, verts: np.ndarray, base_idx: int, italic: bool = False, z_offset: float = 0.0, bold: bool = False) -> tuple[int, float]:

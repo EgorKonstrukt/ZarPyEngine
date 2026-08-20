@@ -12,7 +12,7 @@ from core.maths.math3d import Mat4, Vec3
 from core.config.config import get_global_config
 from core.ecs.ecs import _GIZMO_PASSES, _GIZMO_PASS_ORDER, Component
 from core.gizmo.pipeline import GizmoPipeline
-from editor.viewport.picking import _font_atlas_cache
+from core.assets.font_atlas import request_font_atlas, get_default_font_path as get_def_font
 
 
 def render_component_gizmos(vp, vp_mat: Mat4):
@@ -182,46 +182,37 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
                 np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
                 expanded = True
         if not expanded:
-            tr_comp = entity.get_component(TextRenderer)
-            if tr_comp and tr_comp.enabled and tr_comp.text:
-                from core.assets.font_atlas import FontAtlas
-                from core.assets.font_atlas import get_default_font_path as get_def_font
-                fp = tr_comp.font_path or get_def_font()
-                base_size = getattr(tr_comp, "atlas_resolution", 128)
-                ak = (fp, base_size)
-                atlas = _font_atlas_cache.get(ak)
-                if atlas is None and fp:
-                    try:
-                        atlas = FontAtlas(fp, base_size)
-                        _font_atlas_cache[ak] = atlas
-                    except Exception:
-                        pass
-                if atlas is not None:
-                    inv_lh = 1.0 / atlas.line_height if atlas.line_height > 0 else 1.0
-                    scale = float(tr_comp.font_size) * inv_lh * 0.01
-                    lines = tr_comp.text.split("\n")
-                    total_w_raw = 0.0
-                    for line in lines:
-                        lw = 0.0
-                        for c in line:
-                            g = atlas.get_glyph(c)
-                            if g:
-                                lw += g["advance"]
-                        if lw > total_w_raw:
-                            total_w_raw = lw
-                    total_w = total_w_raw * scale
-                    line_h = atlas.line_height * scale * tr_comp.line_spacing
-                    total_h = (len(lines) - 1) * line_h + atlas.line_height * scale
-                    hw = total_w * 0.5
-                    hh = total_h * 0.5
-                    wm = t.world_matrix._d
-                    corners = np.array([
-                        [-hw, -hh, 0, 1], [hw, -hh, 0, 1], [hw, hh, 0, 1], [-hw, hh, 0, 1],
-                    ], dtype=np.float32)
-                    pts = corners @ wm
-                    np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
-                    np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
-                    expanded = True
+                tr_comp = entity.get_component(TextRenderer)
+                if tr_comp and tr_comp.enabled and tr_comp.text:
+                    fp = tr_comp.font_path or get_def_font()
+                    base_size = getattr(tr_comp, "atlas_resolution", 128)
+                    atlas = request_font_atlas(fp, base_size)
+                    if atlas is not None:
+                        inv_lh = 1.0 / atlas.line_height if atlas.line_height > 0 else 1.0
+                        scale = float(tr_comp.font_size) * inv_lh * 0.01
+                        lines = tr_comp.text.split("\n")
+                        total_w_raw = 0.0
+                        for line in lines:
+                            lw = 0.0
+                            for c in line:
+                                g = atlas.get_glyph(c)
+                                if g:
+                                    lw += g["advance"]
+                            if lw > total_w_raw:
+                                total_w_raw = lw
+                        total_w = total_w_raw * scale
+                        line_h = atlas.line_height * scale * tr_comp.line_spacing
+                        total_h = (len(lines) - 1) * line_h + atlas.line_height * scale
+                        hw = total_w * 0.5
+                        hh = total_h * 0.5
+                        wm = t.world_matrix._d
+                        corners = np.array([
+                            [-hw, -hh, 0, 1], [hw, -hh, 0, 1], [hw, hh, 0, 1], [-hw, hh, 0, 1],
+                        ], dtype=np.float32)
+                        pts = corners @ wm
+                        np.minimum(bmin, pts[:, :3].min(axis=0), out=bmin)
+                        np.maximum(bmax, pts[:, :3].max(axis=0), out=bmax)
+                        expanded = True
         if not expanded:
             s = t.local_scale
             half = max(max(abs(s.x), abs(s.y), abs(s.z)) * 0.5, 0.5)

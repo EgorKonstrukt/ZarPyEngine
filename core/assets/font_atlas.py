@@ -7,7 +7,10 @@
 from __future__ import annotations
 import os
 import platform
-from typing import Optional
+import threading
+import queue as _queue
+from collections import OrderedDict
+from typing import Optional, Callable
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -71,7 +74,7 @@ def _collect_chars() -> list[str]:
 class FontAtlas:
     font_path: str
     base_size: int
-    texture: Optional[np.ndarray]
+    alpha: Optional[np.ndarray]
     glyphs: dict[str, dict]
     texture_width: int
     texture_height: int
@@ -83,7 +86,7 @@ class FontAtlas:
     def __init__(self, font_path: str, base_size: int = 128):
         self.font_path = font_path
         self.base_size = base_size
-        self.texture = None
+        self.alpha = None
         self.glyphs = {}
         self.texture_width = 0
         self.texture_height = 0
@@ -156,7 +159,7 @@ class FontAtlas:
 
         pad = 2
         if not rendered:
-            self.texture = np.zeros((4, 4, 4), dtype=np.uint8)
+            self.alpha = np.zeros((4, 4), dtype=np.uint8)
             self.texture_width = 4
             self.texture_height = 4
             return
@@ -207,14 +210,24 @@ class FontAtlas:
             bp = 2
             img_w = gw + bp * 2
             img_h = gh + bp * 2
-            arr = np.zeros((img_h, img_w), dtype=np.uint8)
-            for dx in range(-1, 2):
-                for dy in range(-1, 2):
-                    layer = Image.new("L", (img_w, img_h), 0)
-                    d2 = ImageDraw.Draw(layer)
-                    d2.text((bp - x0 + dx, bp - y0 + dy), ch, font=font, fill=255)
-                    arr = np.maximum(arr, np.array(layer))
-            img = Image.fromarray(arr)
+            base = Image.new("L", (img_w, img_h), 0)
+            ImageDraw.Draw(base).text((bp - x0, bp - y0), ch, font=font, fill=255)
+            arr = np.array(base, dtype=np.uint8)
+            h, w = arr.shape
+            dilated = arr.copy()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    src = arr[max(0, -dy):h - dy, max(0, -dx):w - dx]
+                    yy0 = max(0, dy)
+                    yy1 = h + min(0, dy)
+                    xx0 = max(0, dx)
+                    xx1 = w + min(0, dx)
+                    region = dilated[yy0:yy1, xx0:xx1]
+                    if region.shape == src.shape:
+                        np.maximum(region, src, out=region)
+            img = Image.fromarray(dilated)
             bold_rendered.append((ch, img, img_w, img_h, x0, y0))
 
         bold_atlas_w = 1
@@ -283,12 +296,11 @@ class FontAtlas:
 
         self.texture_width = final_w
         self.texture_height = atlas_h
-        arr = np.array(atlas, dtype=np.uint8)
-        self.texture = np.repeat(arr[:, :, np.newaxis], 4, axis=2)
-        self.texture[:, :, 3] = arr
-        for c in range(3):
-            self.texture[:, :, c] = 255
+        self.alpha = np.array(atlas, dtype=np.uint8)
         self._populate_glyph_arrays()
+
+    def release_source_images(self) -> None:
+        self.alpha = None
 
     def _populate_glyph_arrays(self):
         for ch, data in self.glyphs.items():
@@ -365,3 +377,83 @@ class FontAtlas:
 
     def measure_text(self, text: str) -> tuple[float, float]:
         return self.measure_line(text)
+
+
+_font_atlas_max_cached = 3
+_font_atlas_cache: "OrderedDict" = OrderedDict()
+_font_atlas_pending: set = set()
+_font_atlas_lock = threading.Lock()
+_font_atlas_queue: "_queue.Queue" = _queue.Queue()
+_font_atlas_thread = None
+
+
+def _font_atlas_worker() -> None:
+    while True:
+        item = _font_atlas_queue.get()
+        if item is None:
+            _font_atlas_queue.task_done()
+            break
+        key, font_path, base_size = item
+        try:
+            atlas = FontAtlas(font_path, base_size)
+        except Exception:
+            atlas = None
+        with _font_atlas_lock:
+            _font_atlas_pending.discard(key)
+            _font_atlas_cache[key] = atlas
+            _font_atlas_cache.move_to_end(key)
+            while len(_font_atlas_cache) > _font_atlas_max_cached:
+                _font_atlas_cache.popitem(last=False)
+        _font_atlas_queue.task_done()
+
+
+def _ensure_font_atlas_thread() -> None:
+    global _font_atlas_thread
+    if _font_atlas_thread is None:
+        _font_atlas_thread = threading.Thread(
+            target=_font_atlas_worker, daemon=True, name="font-atlas"
+        )
+        _font_atlas_thread.start()
+
+
+def request_font_atlas(font_path: str, base_size: int = 128):
+    if not font_path or not os.path.exists(font_path):
+        resolved = get_default_font_path()
+        if not resolved:
+            return None
+        font_path = resolved
+    key = (font_path, base_size)
+    with _font_atlas_lock:
+        if key in _font_atlas_cache:
+            _font_atlas_cache.move_to_end(key)
+            return _font_atlas_cache[key]
+        if key in _font_atlas_pending:
+            return None
+        _font_atlas_pending.add(key)
+    _ensure_font_atlas_thread()
+    _font_atlas_queue.put((key, font_path, base_size))
+    return None
+
+
+def drop_font_atlas(font_path: str, base_size: int = 128) -> None:
+    key = (font_path, base_size)
+    with _font_atlas_lock:
+        _font_atlas_cache.pop(key, None)
+
+
+def get_cached_font_atlas(font_path: str, base_size: int = 128):
+    if not font_path:
+        return None
+    with _font_atlas_lock:
+        a = _font_atlas_cache.get((font_path, base_size))
+        if a is not None:
+            _font_atlas_cache.move_to_end((font_path, base_size))
+        return a
+
+
+def shutdown_font_atlas_loader() -> None:
+    with _font_atlas_lock:
+        if _font_atlas_thread is None:
+            return
+    _font_atlas_queue.put(None)
+    _font_atlas_thread.join(timeout=2.0)
