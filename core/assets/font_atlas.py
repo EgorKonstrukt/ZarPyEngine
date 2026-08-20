@@ -193,25 +193,15 @@ class FontAtlas:
         regular_h = row_y + row_h + pad
 
         bold_rendered: list[tuple[str, Image.Image, int, int, int, int]] = []
-        for ch in chars:
+        bpad = 1
+        for ch, img, iw, ih, bbox_x0, bbox_y0 in rendered:
             if ch == " ":
                 sw = max(int(space_advance) + 2, 4)
-                img = Image.new("L", (sw, 2), 0)
-                bold_rendered.append((ch, img, sw, 2, 0, 0))
+                bold_img = Image.new("L", (sw + bpad * 2, 2 + bpad * 2), 0)
+                bold_rendered.append((ch, bold_img, sw + bpad * 2, 2 + bpad * 2, 0, 0))
                 continue
-            bbox = font.getbbox(ch)
-            if bbox is None:
-                continue
-            x0, y0, x1, y1 = bbox
-            gw = x1 - x0
-            gh = y1 - y0
-            if gw <= 0 or gh <= 0:
-                continue
-            bp = 2
-            img_w = gw + bp * 2
-            img_h = gh + bp * 2
-            base = Image.new("L", (img_w, img_h), 0)
-            ImageDraw.Draw(base).text((bp - x0, bp - y0), ch, font=font, fill=255)
+            base = Image.new("L", (iw + bpad * 2, ih + bpad * 2), 0)
+            base.paste(img, (bpad, bpad))
             arr = np.array(base, dtype=np.uint8)
             h, w = arr.shape
             dilated = arr.copy()
@@ -227,8 +217,8 @@ class FontAtlas:
                     region = dilated[yy0:yy1, xx0:xx1]
                     if region.shape == src.shape:
                         np.maximum(region, src, out=region)
-            img = Image.fromarray(dilated)
-            bold_rendered.append((ch, img, img_w, img_h, x0, y0))
+            bold_img = Image.fromarray(dilated)
+            bold_rendered.append((ch, bold_img, iw + bpad * 2, ih + bpad * 2, bbox_x0, bbox_y0))
 
         bold_atlas_w = 1
         while bold_atlas_w < total_width:
