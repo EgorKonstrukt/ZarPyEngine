@@ -931,14 +931,13 @@ class ShadowRenderer:
                     for fi in range(6):
                         np.copyto(pv[base + fi], self._point_light_vps[base + fi])
                 prog["u_point_shadow_vps"].write(pv.tobytes())
+            point_units = [0] * (MAX_POINT_SHADOWS * 6)
             for slot in range(self._point_shadow_count):
                 base = slot * 6
                 for fi in range(6):
                     tex_unit = 6 + base + fi
                     self._point_shadow_maps[base + fi].use(tex_unit)
-                    si = f"u_point_shadow_maps[{base + fi}]"
-                    if si in prog:
-                        prog[si].value = tex_unit
+                    point_units[base + fi] = tex_unit
                 if "u_point_shadow_light_positions" in prog:
                     pa = self._point_shadow_light_positions[slot].to_array()
                     self._point_pos_buf[slot][0] = pa[0]
@@ -948,6 +947,8 @@ class ShadowRenderer:
                     self._point_range_buf[slot] = float(self._point_shadow_light_ranges[slot])
                 if "u_point_shadow_light_indices" in prog:
                     self._point_idx_buf[slot] = int(self._point_shadow_light_indices[slot])
+            if "u_point_shadow_maps" in prog:
+                prog["u_point_shadow_maps"].value = point_units
             if "u_point_shadow_light_positions" in prog:
                 prog["u_point_shadow_light_positions"].write(self._point_pos_buf.tobytes())
             if "u_point_shadow_light_ranges" in prog:
@@ -964,14 +965,15 @@ class ShadowRenderer:
                 for slot in range(self._spot_shadow_count):
                     np.copyto(sv[slot], self._spot_shadow_vps[slot])
                 prog["u_spot_shadow_vps"].write(sv.tobytes())
+            spot_units = [0] * MAX_SPOT_SHADOWS
             for slot in range(self._spot_shadow_count):
                 tex_unit = 6 + MAX_POINT_SHADOWS * 6 + slot
                 self._spot_shadow_maps[slot].use(tex_unit)
-                si = f"u_spot_shadow_maps[{slot}]"
-                if si in prog:
-                    prog[si].value = tex_unit
+                spot_units[slot] = tex_unit
                 if "u_spot_shadow_light_indices" in prog:
                     self._spot_idx_buf[slot] = int(self._spot_shadow_light_indices[slot])
+            if "u_spot_shadow_maps" in prog:
+                prog["u_spot_shadow_maps"].value = spot_units
             if "u_spot_shadow_light_indices" in prog:
                 prog["u_spot_shadow_light_indices"].write(self._spot_idx_buf.tobytes())
         else:
