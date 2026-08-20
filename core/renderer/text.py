@@ -272,6 +272,8 @@ class TextRendererGL:
         prog = self._prog
         if vi == 0:
             return
+        if tex is None:
+            return
         if "u_color" in prog:
             prog["u_color"].write(np.array(color, dtype=np.float32).tobytes())
         if "u_solid" in prog:
@@ -507,6 +509,8 @@ class TextRendererGL:
             if atlas is None:
                 continue
             tex = self._ensure_texture(atlas, tr.filter_mode, tr.anisotropy)
+            if tex is None:
+                continue
             self._ensure_capacity(len(tr.text))
             model_f32 = t.world_matrix.to_f32()
             if "u_model" in prog:
