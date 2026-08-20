@@ -583,6 +583,32 @@ class ComponentWidget(QWidget):
         if toggle_field:
             self._toggle_rows.setdefault(toggle_field, []).append(cell if cell is not None else widget)
 
+    def _enum_spec(self, field, value):
+        options = list(field.enum_options or [])
+        enum_cls = field.enum_class
+        if not options and enum_cls is not None:
+            options = [e.name for e in enum_cls]
+        current = ""
+        if value is not None:
+            if enum_cls is not None and isinstance(value, enum_cls):
+                current = value.name
+            elif enum_cls is not None and isinstance(value, str):
+                if value in enum_cls.__members__:
+                    current = enum_cls[value].name
+                else:
+                    for e in enum_cls:
+                        if e.value == value:
+                            current = e.name
+                            break
+                    else:
+                        current = value
+            else:
+                current = str(value)
+        return options, enum_cls, current
+
+    def _enum_value(self, enum_cls, text):
+        return enum_cls[text] if enum_cls is not None else text
+
     def _build_field_from_meta(self, field):
         c = self._component
         self._current_field = field
@@ -756,18 +782,19 @@ class ComponentWidget(QWidget):
             color_edit.colorChanged.connect(_on_color_changed)
             self._add_field(field.label, color_edit, prop_name, field.toggle_field)
         elif field.field_type.value == "enum":
+            options, enum_cls, current = self._enum_spec(field, value)
             combo = QComboBox()
-            options = field.enum_options or []
             for opt in options:
                 combo.addItem(opt)
             try:
-                combo.setCurrentText(str(value))
+                combo.setCurrentText(current)
             except Exception:
                 pass
             comp_cls = type(c)
             def _on_enum_change(t):
-                setattr(c, prop_name, t)
-                get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, t))
+                nv = self._enum_value(enum_cls, t)
+                setattr(c, prop_name, nv)
+                get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, nv))
             combo.currentTextChanged.connect(_on_enum_change)
             self._add_field(field.label, combo, prop_name, field.toggle_field)
         elif field.field_type.value == "resource":
@@ -1226,17 +1253,18 @@ class ComponentWidget(QWidget):
                     setattr(self._component, pn, items)
             return make_gameobject_picker(eid, scene, on_entity)
         elif ef.field_type.value == "enum":
+            raw = val.get(ef.name, "") if isinstance(val, dict) else ""
+            options, enum_cls, current = self._enum_spec(ef, raw)
             combo = QComboBox()
-            options = ef.enum_options or []
             for opt in options:
                 combo.addItem(opt)
-            current = val.get(ef.name, "") if isinstance(val, dict) else ""
-            try: combo.setCurrentText(str(current))
+            try: combo.setCurrentText(current)
             except: pass
             def on_change(t, idx=index, pn=prop_name, fn=ef.name):
+                nv = self._enum_value(enum_cls, t)
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
-                    items[idx][fn] = t
+                    items[idx][fn] = nv
                     setattr(self._component, pn, items)
             combo.currentTextChanged.connect(on_change)
             return combo
@@ -1424,14 +1452,15 @@ class ComponentWidget(QWidget):
                 sb.valueChanged.connect(_on_vec3_changed)
             self._target_layout().addWidget(w)
         elif field.field_type.value == "enum":
+            options, enum_cls, current = self._enum_spec(field, value)
             combo = QComboBox()
-            options = field.enum_options or []
             for opt in options:
                 combo.addItem(opt)
-            try: combo.setCurrentText(str(value or ""))
+            try: combo.setCurrentText(current)
             except: pass
             def _on_enum_changed(v, n=prop_name):
-                comp.set_field_value(n, v)
+                nv = self._enum_value(enum_cls, v)
+                comp.set_field_value(n, nv)
             combo.currentTextChanged.connect(_on_enum_changed)
             self._add_field(field.label or prop_name, combo)
         elif field.field_type.value == "gameobject":
