@@ -394,17 +394,14 @@ def build_directional_cascade_fast(float ld_x, float ld_y, float ld_z,
     sx /= sl
     sy /= sl
     sz /= sl
-    cdef double ux = fy * sz - fz * sy
-    cdef double uy = fz * sx - fx * sz
-    cdef double uz = fx * sy - fy * sx
-    cdef double m00 = sx, m01 = sy, m02 = sz
-    cdef double m10 = ux, m11 = uy, m12 = uz
-    cdef double m20 = -fx, m21 = -fy, m22 = -fz
-    cdef double m03 = -(sx * eye_x + sy * eye_y + sz * eye_z)
-    cdef double m13 = -(ux * eye_x + uy * eye_y + uz * eye_z)
-    cdef double m23 = fx * eye_x + fy * eye_y + fz * eye_z
-    cdef double cl_x = cx * m00 + cy * m10 + cz * m20
-    cdef double cl_y = cx * m01 + cy * m11 + cz * m21
+    cdef double ux = sy * fz - sz * fy
+    cdef double uy = sz * fx - sx * fz
+    cdef double uz = sx * fy - sy * fx
+    cdef double v03 = -(sx * eye_x + sy * eye_y + sz * eye_z)
+    cdef double v13 = -(ux * eye_x + uy * eye_y + uz * eye_z)
+    cdef double v23 = fx * eye_x + fy * eye_y + fz * eye_z
+    cdef double cl_x = cx * sx + cy * sy + cz * sz + v03
+    cdef double cl_y = cx * ux + cy * uy + cz * uz + v13
     cdef double texel_size = (radius * 2.0) / max(1, shadow_res)
     cdef double cx_l = floor(cl_x / texel_size) * texel_size
     cdef double cy_l = floor(cl_y / texel_size) * texel_size
@@ -413,15 +410,9 @@ def build_directional_cascade_fast(float ld_x, float ld_y, float ld_z,
     cdef double bottom = cy_l - radius
     cdef double top = cy_l + radius
     cdef double min_z = 1e300, max_z = -1e300
-    cdef double px, py, pz, pw
+    cdef double pz
     for i in range(n):
-        px = corners[i, 0] * m00 + corners[i, 1] * m10 + corners[i, 2] * m20 + m03
-        py = corners[i, 0] * m01 + corners[i, 1] * m11 + corners[i, 2] * m21 + m13
-        pz = corners[i, 0] * m02 + corners[i, 1] * m12 + corners[i, 2] * m22 + m23
-        pw = corners[i, 0] * m03 + corners[i, 1] * m13 + corners[i, 2] * 0.0 + 1.0
-        if pw == 0.0:
-            pw = 1e-10
-        pz = pz / pw
+        pz = corners[i, 0] * (-fx) + corners[i, 1] * (-fy) + corners[i, 2] * (-fz) + v23
         if pz < min_z:
             min_z = pz
         if pz > max_z:
@@ -435,22 +426,28 @@ def build_directional_cascade_fast(float ld_x, float ld_y, float ld_z,
     cdef double sum_rl = right + left
     cdef double sum_tb = top + bottom
     cdef double sum_fn = f_val + n_val
-    out_vp[0, 0] = sx * 2.0 * inv_rl + ux * 0.0 + (-fx) * 0.0
-    out_vp[0, 1] = sy * 2.0 * inv_rl + uy * 0.0 + (-fy) * 0.0
-    out_vp[0, 2] = sz * 2.0 * inv_rl + uz * 0.0 + (-fz) * 0.0
-    out_vp[0, 3] = m03 * 2.0 * inv_rl + m13 * 0.0 + m23 * 0.0 - sum_rl * inv_rl
-    out_vp[1, 0] = sx * 0.0 + ux * 2.0 * inv_tb + (-fx) * 0.0
-    out_vp[1, 1] = sy * 0.0 + uy * 2.0 * inv_tb + (-fy) * 0.0
-    out_vp[1, 2] = sz * 0.0 + uz * 2.0 * inv_tb + (-fz) * 0.0
-    out_vp[1, 3] = m03 * 0.0 + m13 * 2.0 * inv_tb + m23 * 0.0 - sum_tb * inv_tb
-    out_vp[2, 0] = sx * 0.0 + ux * 0.0 + (-fx) * 2.0 * inv_fn
-    out_vp[2, 1] = sy * 0.0 + uy * 0.0 + (-fy) * 2.0 * inv_fn
-    out_vp[2, 2] = sz * 0.0 + uz * 0.0 + (-fz) * 2.0 * inv_fn
-    out_vp[2, 3] = m03 * 0.0 + m13 * 0.0 + m23 * 2.0 * inv_fn - sum_fn * inv_fn
-    out_vp[3, 0] = sx * 0.0 + ux * 0.0 + (-fx) * 0.0
-    out_vp[3, 1] = sy * 0.0 + uy * 0.0 + (-fy) * 0.0
-    out_vp[3, 2] = sz * 0.0 + uz * 0.0 + (-fz) * 0.0
-    out_vp[3, 3] = m03 * 0.0 + m13 * 0.0 + m23 * 0.0 + 1.0
+    cdef double p00 = 2.0 * inv_rl
+    cdef double p11 = 2.0 * inv_tb
+    cdef double p22 = -2.0 * inv_fn
+    cdef double p30 = -sum_rl * inv_rl
+    cdef double p31 = -sum_tb * inv_tb
+    cdef double p32 = -sum_fn * inv_fn
+    out_vp[0, 0] = sx * p00
+    out_vp[0, 1] = ux * p11
+    out_vp[0, 2] = -fx * p22
+    out_vp[0, 3] = 0.0
+    out_vp[1, 0] = sy * p00
+    out_vp[1, 1] = uy * p11
+    out_vp[1, 2] = -fy * p22
+    out_vp[1, 3] = 0.0
+    out_vp[2, 0] = sz * p00
+    out_vp[2, 1] = uz * p11
+    out_vp[2, 2] = -fz * p22
+    out_vp[2, 3] = 0.0
+    out_vp[3, 0] = v03 * p00 + p30
+    out_vp[3, 1] = v13 * p11 + p31
+    out_vp[3, 2] = v23 * p22 + p32
+    out_vp[3, 3] = 1.0
 
 
 def frustum_cull_shadow_groups(dict groups, np.ndarray[FLOAT32_t, ndim=2] vp_f32):
