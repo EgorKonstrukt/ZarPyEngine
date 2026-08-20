@@ -36,7 +36,6 @@ from core.components.rendering.effects.object_effect import ObjectEffect
 from core.components.rendering.effects.voxelize_effect import VoxelizeEffect
 from core.components.rendering.effects.voxel_cpu import compute_voxel_instances
 from core.maths.math3d import Mat4, Vec3
-
 from core.renderer.types import RenderMode
 from core.renderer.mesh_data import MeshData, read_shader
 from core.renderer.meshes import make_cube_mesh, make_sphere_mesh, make_plane_mesh, make_quad_mesh, make_water_plane, make_water_box

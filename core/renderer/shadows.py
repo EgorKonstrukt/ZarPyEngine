@@ -1,5 +1,9 @@
 from __future__ import annotations
+
+import json
 import math
+import os
+
 import numpy as np
 import moderngl
 from typing import Optional, Any
@@ -755,7 +759,18 @@ class ShadowRenderer:
         shadow_res = self._point_shadow_resolution
         supports_instancing = _shadow_supports_instancing(prog)
         base = slot * 6
-        any_rendered = False
+        self._ctx.viewport = (0, 0, shadow_res, shadow_res)
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        self._ctx.depth_mask = True
+        self._ctx.disable(moderngl.CULL_FACE)
+        if supports_instancing and "u_use_instancing" in prog:
+            prog["u_use_instancing"].value = 1
+        elif "u_use_instancing" in prog:
+            prog["u_use_instancing"].value = 0
+        for face_idx in range(6):
+            fbo = self._point_shadow_fbos[base + face_idx]
+            fbo.use()
+            fbo.clear(depth=1.0)
         for face_idx, (face_dir, face_up) in enumerate(face_configs):
             vp = (Mat4.look_at(light_pos, light_pos + face_dir, face_up)._d @ proj_np).astype(np.float32)
             self._point_light_vps[base + face_idx] = vp
@@ -766,25 +781,8 @@ class ShadowRenderer:
             if not culled:
                 continue
             fbo = self._point_shadow_fbos[base + face_idx]
-            if not any_rendered:
-                fbo.clear(depth=1.0)
-                fbo.use()
-                self._ctx.viewport = (0, 0, shadow_res, shadow_res)
-                self._ctx.enable(moderngl.DEPTH_TEST)
-                self._ctx.depth_mask = True
-                self._ctx.disable(moderngl.CULL_FACE)
-                prog["u_light_vp"].write(vp.tobytes())
-                if supports_instancing:
-                    if "u_use_instancing" in prog:
-                        prog["u_use_instancing"].value = 1
-                else:
-                    if "u_use_instancing" in prog:
-                        prog["u_use_instancing"].value = 0
-                any_rendered = True
-            else:
-                fbo.clear(depth=1.0)
-                fbo.use()
-                prog["u_light_vp"].write(vp.tobytes())
+            fbo.use()
+            prog["u_light_vp"].write(vp.tobytes())
             for mesh_id, group in culled.items():
                 mesh, _ = group[0]
                 n = len(group)
@@ -798,8 +796,7 @@ class ShadowRenderer:
                     for _, tr in group:
                         prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
                         mesh.render(prog)
-        if any_rendered:
-            self._ctx.enable(moderngl.CULL_FACE)
+        self._ctx.enable(moderngl.CULL_FACE)
 
     def _render_spot_shadow_for_slot(self, slot, spot_light, spot_transform, shadow_groups, lights):
         light_pos = spot_transform.position
@@ -812,6 +809,10 @@ class ShadowRenderer:
         lr2 = light_range * light_range
         filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
         if not filtered:
+            fbo = self._spot_shadow_fbos[slot]
+            fbo.use()
+            self._ctx.viewport = (0, 0, self._shadow_resolution, self._shadow_resolution)
+            fbo.clear(depth=1.0)
             return
         view = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())
         proj = Mat4.perspective(spot_fov, 1.0, near_plane, far_plane)
