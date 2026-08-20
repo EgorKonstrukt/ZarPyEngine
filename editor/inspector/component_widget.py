@@ -859,9 +859,15 @@ class ComponentWidget(QWidget):
                 def make_setter(idx):
                     def setter(v):
                         vec = getattr(c, prop_name)
-                        lst = [vec.x, vec.y]
+                        if isinstance(vec, (list, tuple)):
+                            lst = [float(vec[0]), float(vec[1])]
+                        else:
+                            lst = [vec.x, vec.y]
                         lst[idx] = v
-                        setattr(c, prop_name, type(vec)(*lst))
+                        if isinstance(vec, (list, tuple)):
+                            setattr(c, prop_name, list(lst))
+                        else:
+                            setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
             self._target_layout().addWidget(w)
@@ -872,9 +878,15 @@ class ComponentWidget(QWidget):
                 def make_setter(idx):
                     def setter(v):
                         vec = getattr(c, prop_name)
-                        lst = [vec.x, vec.y, vec.z]
+                        if isinstance(vec, (list, tuple)):
+                            lst = [float(vec[0]), float(vec[1]), float(vec[2])]
+                        else:
+                            lst = [vec.x, vec.y, vec.z]
                         lst[idx] = v
-                        setattr(c, prop_name, type(vec)(*lst))
+                        if isinstance(vec, (list, tuple)):
+                            setattr(c, prop_name, list(lst))
+                        else:
+                            setattr(c, prop_name, type(vec)(*lst))
                     return setter
                 sb.valueChanged.connect(make_setter(i))
             self._target_layout().addWidget(w)

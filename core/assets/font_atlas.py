@@ -164,8 +164,8 @@ class FontAtlas:
         atlas_w = 1
         while atlas_w < total_width:
             atlas_w <<= 1
-        if atlas_w > 8192:
-            atlas_w = 8192
+        if atlas_w > 4096:
+            atlas_w = 4096
 
         rows: list[list] = []
         current_row: list = []
@@ -190,13 +190,11 @@ class FontAtlas:
         regular_h = row_y + row_h + pad
 
         bold_rendered: list[tuple[str, Image.Image, int, int, int, int]] = []
-        bold_total_w = 0
         for ch in chars:
             if ch == " ":
                 sw = max(int(space_advance) + 2, 4)
                 img = Image.new("L", (sw, 2), 0)
                 bold_rendered.append((ch, img, sw, 2, 0, 0))
-                bold_total_w += sw + 4
                 continue
             bbox = font.getbbox(ch)
             if bbox is None:
@@ -218,13 +216,12 @@ class FontAtlas:
                     arr = np.maximum(arr, np.array(layer))
             img = Image.fromarray(arr)
             bold_rendered.append((ch, img, img_w, img_h, x0, y0))
-            bold_total_w += img_w + 4
 
         bold_atlas_w = 1
-        while bold_atlas_w < bold_total_w:
+        while bold_atlas_w < total_width:
             bold_atlas_w <<= 1
-        if bold_atlas_w > 8192:
-            bold_atlas_w = 8192
+        if bold_atlas_w > 4096:
+            bold_atlas_w = 4096
 
         bold_rows: list[list] = []
         current_row = []
@@ -254,7 +251,7 @@ class FontAtlas:
         if atlas_h > 8192:
             atlas_h = 8192
 
-        atlas = Image.new("L", (atlas_w + bold_atlas_w, atlas_h), 0)
+        atlas = Image.new("L", (final_w, atlas_h), 0)
         self.glyphs = {}
         for row_data, base_y, _ in rows:
             for ch, img, iw, ih, cx, cy, bbox_x0, bbox_y0 in row_data:
@@ -265,7 +262,7 @@ class FontAtlas:
                     "y": cy,
                     "w": iw,
                     "h": ih,
-                    "atlas_w": atlas_w + bold_atlas_w,
+                    "atlas_w": final_w,
                     "atlas_h": atlas_h,
                     "bearing_x": float(bbox_x0),
                     "bearing_y": float(bbox_y0),
@@ -284,7 +281,7 @@ class FontAtlas:
                     g["bold_w"] = iw
                     g["bold_h"] = ih
 
-        self.texture_width = atlas_w + bold_atlas_w
+        self.texture_width = final_w
         self.texture_height = atlas_h
         arr = np.array(atlas, dtype=np.uint8)
         self.texture = np.repeat(arr[:, :, np.newaxis], 4, axis=2)

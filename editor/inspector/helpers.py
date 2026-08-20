@@ -514,6 +514,7 @@ def _create_asset_dialog(parent, asset_type: str, callback: Callable[[str], None
     callback(path)
 
 def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubleSpinBox]]:
+    comps = [vec.x, vec.y] if hasattr(vec, "x") else [vec[0], vec[1]]
     w = QWidget()
     layout = QHBoxLayout(w)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -522,7 +523,7 @@ def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubl
     lbl.setWordWrap(True)
     layout.addWidget(lbl)
     spinboxes = []
-    for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
+    for val, comp_label in zip(comps, ["X", "Y"]):
         lbl_c = QLabel(comp_label)
         lbl_c.setFixedWidth(scale(14))
         color = _XYZ_COLORS.get(comp_label, "#aaa")
@@ -535,6 +536,7 @@ def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubl
     return w, spinboxes
 
 def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = None) -> tuple[QWidget, list[QDoubleSpinBox]]:
+    comps = [vec.x, vec.y, vec.z] if hasattr(vec, "x") else list(vec[:3])
     w = QWidget()
     layout = QHBoxLayout(w)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -543,7 +545,7 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
     lbl.setWordWrap(True)
     layout.addWidget(lbl)
     spinboxes = []
-    for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:
+    for val, comp_label in zip(comps, ["X", "Y", "Z"]):
         sb = make_spinbox(val)
         sb.valueChanged.connect(callback)
         lbl_c = _DragLabel(comp_label, _XYZ_COLORS.get(comp_label, "#aaa"), sb)
@@ -562,6 +564,7 @@ def make_vec3_row(label: str, vec: Vec3, callback, reset_to: Optional[list] = No
     return w, spinboxes
 
 def make_vec4_row(label: str, vec: Vec4, callback) -> tuple[QWidget, list[QDoubleSpinBox]]:
+    comps = [vec.x, vec.y, vec.z, vec.w] if hasattr(vec, "x") else list(vec[:4])
     w = QWidget()
     layout = QHBoxLayout(w)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -570,7 +573,7 @@ def make_vec4_row(label: str, vec: Vec4, callback) -> tuple[QWidget, list[QDoubl
     lbl.setWordWrap(True)
     layout.addWidget(lbl)
     spinboxes = []
-    for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z"), (vec.w, "W")]:
+    for val, comp_label in zip(comps, ["X", "Y", "Z", "W"]):
         sb = make_spinbox(val)
         sb.valueChanged.connect(callback)
         lbl_c = _DragLabel(comp_label, _XYZ_COLORS.get(comp_label, "#aaa"), sb)
@@ -589,7 +592,8 @@ def make_vec2_slider_row(label: str, vec: Vec2, callback, lo=0.0, hi=1.0) -> tup
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
     spinboxes = []
-    for val, comp_label in [(vec.x, "X"), (vec.y, "Y")]:
+    comps = [vec.x, vec.y] if hasattr(vec, "x") else [vec[0], vec[1]]
+    for val, comp_label in zip(comps, ["X", "Y"]):
         lbl_c = _DragLabel(comp_label, _XYZ_COLORS.get(comp_label, "#aaa"), None)
         layout.addWidget(lbl_c)
         sb = make_spinbox(val, lo, hi, (hi - lo) / 100.0)
@@ -610,7 +614,8 @@ def make_vec3_slider_row(label: str, vec: Vec3, callback, lo=0.0, hi=1.0) -> tup
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
     spinboxes = []
-    for val, comp_label in [(vec.x, "X"), (vec.y, "Y"), (vec.z, "Z")]:
+    comps = [vec.x, vec.y, vec.z] if hasattr(vec, "x") else list(vec[:3])
+    for val, comp_label in zip(comps, ["X", "Y", "Z"]):
         lbl_c = _DragLabel(comp_label, _XYZ_COLORS.get(comp_label, "#aaa"), None)
         layout.addWidget(lbl_c)
         sb = make_spinbox(val, lo, hi, (hi - lo) / 100.0)
