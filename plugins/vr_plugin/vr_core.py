@@ -1005,6 +1005,10 @@ def get_ipd() -> float:
     return _vr_state.ipd_override
 
 
+def set_ipd(ipd: float):
+    _vr_state.ipd_override = max(0.010, min(0.200, ipd))
+
+
 def get_renderer() -> VRRenderer | None:
     return _vr_toggle.renderer
 
@@ -1175,3 +1179,11 @@ def end_xr_frame():
         ))
     except Exception as e:
         print(f'[VR] end_xr_frame error: {e}')
+
+
+def session_running() -> bool:
+    return _vr_state._session_running
+
+
+def get_controllers():
+    return _vr_state.controllers
