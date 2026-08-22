@@ -50,8 +50,16 @@ class VRPlugin(PluginBase):
             return
         self._viewport = vp
         if not vr_core._XR_AVAILABLE:
+            from core.foundation.logger import Logger
+            Logger.warning("[VR] pyopenxr not available")
             return
+        try:
+            vp.makeCurrent()
+        except Exception:
+            pass
         if not vr_core.initialize(vp._ctx):
+            from core.foundation.logger import Logger
+            Logger.error("[VR] OpenXR initialize failed - HMD instance not created")
             return
         self._vr_active = True
         self._original_paintGL = vp.paintGL
@@ -213,13 +221,23 @@ class VRPlugin(PluginBase):
         for eye in eyes:
             efbo = rnd.eye_fbo(eye['eye_idx'])
             efbo.fbo.use()
-            efbo.fbo.clear(*vp._clear_color, 1.0)
             efbo.fbo.viewport = (0, 0, efbo.w, efbo.h)
-            proj_data = vr_core._make_proj_matrix(eye['fov_angles'], near=cam.near, far=cam.far)
-            view_data = vr_core._make_view_matrix(eye['pos'], eye['fwd'], eye['right'], eye['up'])
-            proj_mat = Mat4(np.array(proj_data, dtype=np.float64).reshape((4, 4), order='F'))
-            view_mat = Mat4(np.array(view_data, dtype=np.float64).reshape((4, 4), order='F'))
+            efbo.fbo.clear(*vp._clear_color, 1.0)
+            al, ar, au, ad = eye['fov_angles']
+            tl, tr, tu, td = math.tan(al), math.tan(ar), math.tan(au), math.tan(ad)
+            proj_mat = Mat4()
+            proj_mat._d[0,0] = 2.0 / (tr - tl)
+            proj_mat._d[1,1] = 2.0 / (tu - td)
+            proj_mat._d[0,2] = (tr + tl) / (tr - tl)
+            proj_mat._d[1,2] = (tu + td) / (tu - td)
+            proj_mat._d[2,2] = -(cam.far + cam.near) / (cam.far - cam.near)
+            proj_mat._d[2,3] = -1.0
+            proj_mat._d[3,2] = -(2.0 * cam.far * cam.near) / (cam.far - cam.near)
+            proj_mat._d[3,3] = 0.0
             eye_pos = Vec3(eye['pos'][0], eye['pos'][1], eye['pos'][2])
+            eye_target = Vec3(eye_pos.x + eye['fwd'][0], eye_pos.y + eye['fwd'][1], eye_pos.z + eye['fwd'][2])
+            eye_up = Vec3(eye['up'][0], eye['up'][1], eye['up'][2])
+            view_mat = Mat4.look_at(eye_pos, eye_target, eye_up)
             vp._renderer.render_scene(
                 scene, view_mat, proj_mat, eye_pos,
                 efbo.w, efbo.h, efbo.fbo,
