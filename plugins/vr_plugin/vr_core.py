@@ -106,7 +106,7 @@ class VREyeSwapchain:
     def __init__(self, session, w: int, h: int):
         self.w, self.h = w, h
         formats = xr.enumerate_swapchain_formats(session)
-        chosen = GL_SRGB8_ALPHA8 if GL_SRGB8_ALPHA8 in formats else (GL_RGBA8 if GL_RGBA8 in formats else formats[0])
+        chosen = GL_RGBA8 if GL_RGBA8 in formats else (GL_SRGB8_ALPHA8 if GL_SRGB8_ALPHA8 in formats else formats[0])
         sc_info = xr.SwapchainCreateInfo(
             usage_flags=xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT | xr.SwapchainUsageFlags.SAMPLED_BIT,
             format=chosen,
@@ -178,6 +178,8 @@ class VRState:
         self._eye_quats = [(0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0, 1.0)]
         self._session_running = False
         self._frame_state = None
+        self._frame_begun = False
+        self._frame_discard = False
         self._swapchains: list = []
         self._display_time = 0
         self._binding = None
@@ -195,6 +197,8 @@ class VRState:
         self._xr_origin = (0.0, 0.0, 0.0)
         self._xr_mid = (0.0, 0.0, 0.0)
         self._xr_scale = 1.0
+        self._frames_rendered = 0
+        self._ever_running = False
 
 
 _gl = None
@@ -216,6 +220,9 @@ def _load_gl_funcs():
         'BindFramebuffer':      _get('glBindFramebuffer',      None, ctypes.c_uint, ctypes.c_uint),
         'FramebufferTexture2D': _get('glFramebufferTexture2D', None, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_int),
         'BlitFramebuffer':      _get('glBlitFramebuffer',      None, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint),
+        'CheckFramebufferStatus': _get('glCheckFramebufferStatus', ctypes.c_uint, ctypes.c_uint),
+        'DrawBuffer':           ctypes.WINFUNCTYPE(None, ctypes.c_uint)(ctypes.cast(lib.glDrawBuffer, ctypes.c_void_p).value),
+        'ReadBuffer':           ctypes.WINFUNCTYPE(None, ctypes.c_uint)(ctypes.cast(lib.glReadBuffer, ctypes.c_void_p).value),
     })()
     return _gl
 
@@ -458,6 +465,12 @@ def shutdown():
     _vr_state.instance = None
     _vr_state.space = None
     _vr_state.system_id = None
+    _vr_state._session_running = False
+    _vr_state._frame_begun = False
+    _vr_state._frame_discard = False
+    _vr_state._frame_state = None
+    for p_i in range(2):
+        _vr_state._eye_poses[p_i] = None
     print('[VR] OpenXR resources destroyed.')
 
 
@@ -922,11 +935,21 @@ class VRRenderer:
         return self._fbos[eye_idx]
 
     def render_controllers_for_eye(self, eye: dict):
-        self._fbos[eye['eye_idx']].fbo.use()
+        fb = self._fbos[eye['eye_idx']].fbo
+        fb.use()
+        self._ctx.viewport = (0, 0, self._fbos[eye['eye_idx']].w, self._fbos[eye['eye_idx']].h)
         self._ctrl_renderer.render_for_eye(eye)
 
     def compose_to_screen(self, screen_fbo, wnd_w: int, wnd_h: int):
         screen_fbo.use()
+        self._ctx.viewport = (0, 0, wnd_w, wnd_h)
+        try:
+            self._ctx.scissor = None
+        except Exception:
+            pass
+        self._ctx.disable(moderngl.DEPTH_TEST)
+        self._ctx.disable(moderngl.CULL_FACE)
+        self._ctx.disable(moderngl.BLEND)
         self._ctx.clear(0.0, 0.0, 0.0)
         self._fbos[EYE_LEFT].tex.use(location=0)
         self._fbos[EYE_RIGHT].tex.use(location=1)
@@ -990,7 +1013,7 @@ def toggle_vr(ctx: moderngl.Context) -> bool:
 
 
 def vr_enabled() -> bool:
-    return _vr_toggle.enabled
+    return _vr_toggle.enabled or _vr_state.active
 
 
 def get_hmd_pos_offset() -> tuple[float, float, float]:
@@ -1017,13 +1040,17 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
     rnd = _vr_toggle.renderer
     if rnd is None:
         print('[VR] render_vr_frame: renderer is None, skipping')
+        end_xr_frame()
         return
     use_xr = _vr_state.active and _vr_state._session_running and len(_vr_state._swapchains) == 2
     eyes = get_eye_transforms(params)
     for eye in eyes:
         efbo = rnd.eye_fbo(eye['eye_idx'])
         efbo.fbo.use()
-        efbo.fbo.clear(0.0, 0.0, 0.0)
+        ctx.viewport = (0, 0, efbo.w, efbo.h)
+        ctx.disable(moderngl.BLEND)
+        ctx.enable(moderngl.DEPTH_TEST)
+        efbo.fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
         fractal_window_render_eye(efbo.fbo, efbo.w, efbo.h, eye)
 
     for eye in eyes:
@@ -1032,29 +1059,53 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
     if use_xr:
         try:
             gl = _load_gl_funcs()
-            GL_DRAW_FRAMEBUFFER  = 0x8CA9
-            GL_READ_FRAMEBUFFER  = 0x8CA8
-            GL_FRAMEBUFFER       = 0x8D40
+            GL_DRAW_FRAMEBUFFER = 0x8CA9
+            GL_READ_FRAMEBUFFER = 0x8CA8
+            GL_FRAMEBUFFER = 0x8D40
             GL_COLOR_ATTACHMENT0 = 0x8CE0
-            GL_TEXTURE_2D        = 0x0DE1
-            GL_COLOR_BUFFER_BIT  = 0x4000
-            GL_NEAREST           = 0x2600
+            GL_TEXTURE_2D = 0x0DE1
+            GL_COLOR_BUFFER_BIT = 0x4000
+            GL_NEAREST = 0x2600
+            GL_FRAMEBUFFER_COMPLETE = 0x8CD5
             for i, sc in enumerate(_vr_state._swapchains):
                 dst_tex = sc.acquire()
-                src_fbo_id = rnd.eye_fbo(i).fbo.glo
-                w, h = sc.w, sc.h
-                blit_fbo = (ctypes.c_uint * 1)(0)
-                gl.GenFramebuffers(1, blit_fbo)
-                gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_fbo[0])
-                gl.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0)
-                gl.BindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo_id)
-                gl.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST)
-                gl.BindFramebuffer(GL_FRAMEBUFFER, 0)
-                gl.DeleteFramebuffers(1, blit_fbo)
-                sc.release_image()
+                try:
+                    src_fb = rnd.eye_fbo(i)
+                    src_fbo_id = src_fb.fbo.glo
+                    w, h = sc.w, sc.h
+                    sw, sh = src_fb.w, src_fb.h
+                    blit_fbo = (ctypes.c_uint * 1)(0)
+                    gl.GenFramebuffers(1, blit_fbo)
+                    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_fbo[0])
+                    gl.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0)
+                    gl.DrawBuffer(GL_COLOR_ATTACHMENT0)
+                    if gl.CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+                        print(f'[VR] swapchain fbo {i} incomplete')
+                    else:
+                        gl.BindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo_id)
+                        gl.ReadBuffer(GL_COLOR_ATTACHMENT0)
+                        gl.BlitFramebuffer(0, 0, sw, sh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST)
+                except Exception as e:
+                    print(f'[VR] blit eye {i} error: {e}')
+                finally:
+                    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0)
+                    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
+                    try:
+                        gl.DeleteFramebuffers(1, blit_fbo)
+                    except Exception:
+                        pass
+                    try:
+                        sc.release_image()
+                    except Exception as e:
+                        print(f'[VR] release_image {i} error: {e}')
         except Exception as e:
             print(f'[VR] Swapchain blit error: {e}')
     rnd.compose_to_screen(screen_fbo, wnd_w, wnd_h)
+    if use_xr:
+        try:
+            end_xr_frame()
+        except Exception:
+            pass
 
 
 def poll_xr_events():
@@ -1087,31 +1138,70 @@ def poll_xr_events():
                             xr.SessionBeginInfo(primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO)
                         )
                         _vr_state._session_running = True
+                        _vr_state._ever_running = True
                         _create_swapchains()
-                        if _vr_toggle.renderer is not None:
-                            _vr_toggle.renderer.release()
-                        _vr_toggle.renderer = VRRenderer(_vr_toggle._ctx)
+                        ctx_for_renderer = _vr_toggle._ctx
+                        if ctx_for_renderer is None:
+                            try:
+                                import moderngl
+                                ctx_for_renderer = moderngl.create_context(standalone=False)
+                            except Exception:
+                                ctx_for_renderer = None
+                        if ctx_for_renderer is not None:
+                            if _vr_toggle.renderer is not None:
+                                try:
+                                    _vr_toggle.renderer.release()
+                                except Exception:
+                                    pass
+                                _vr_toggle.renderer = None
+                            try:
+                                _vr_toggle.renderer = VRRenderer(ctx_for_renderer)
+                                _vr_toggle._ctx = ctx_for_renderer
+                            except Exception as e:
+                                print(f'[VR] VRRenderer creation failed: {e}')
                         print('[VR] Session started, swapchains ready.')
                     except Exception as e:
                         print(f'[VR] begin_session failed: {e}')
                 elif ev.state in (xr.SessionState.STOPPING, xr.SessionState.EXITING) and _vr_state._session_running:
                     try:
+                        end_xr_frame()
+                    except Exception:
+                        pass
+                    try:
                         xr.end_session(_vr_state.session)
                     except Exception:
                         pass
                     _vr_state._session_running = False
+                    _vr_state._frame_begun = False
+                    _vr_state._frame_discard = False
+                    _vr_state._frame_state = None
+                    for p_i in range(2):
+                        _vr_state._eye_poses[p_i] = None
     except Exception as e:
         print(f'[VR] poll_xr_events error: {e}')
 
 
 def sync_hmd_pose():
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
-        return
+        return False
     try:
         frame_state = xr.wait_frame(_vr_state.session, xr.FrameWaitInfo())
-        _vr_state._frame_state = frame_state
-        _vr_state._display_time = frame_state.predicted_display_time
+    except Exception as e:
+        print(f'[VR] wait_frame error: {e}')
+        _vr_state._frame_state = None
+        _vr_state._frame_begun = False
+        _vr_state._frame_discard = False
+        return False
+    _vr_state._frame_state = frame_state
+    _vr_state._display_time = frame_state.predicted_display_time
+    try:
         xr.begin_frame(_vr_state.session, xr.FrameBeginInfo())
+        _vr_state._frame_discard = False
+    except Exception as e:
+        _vr_state._frame_discard = True
+        print(f'[VR] begin_frame discarded: {e}')
+    _vr_state._frame_begun = True
+    try:
         _, views = xr.locate_views(_vr_state.session, xr.ViewLocateInfo(
             view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
             display_time=frame_state.predicted_display_time,
@@ -1133,19 +1223,24 @@ def sync_hmd_pose():
         ox, oy, oz = _vr_state._hmd_pos_origin
         _vr_state._hmd_pos_offset = (mid_pos[0]-ox, mid_pos[1]-oy, mid_pos[2]-oz)
         _sync_controller_input()
+        return True
     except Exception as e:
-        print(f'[VR] sync_hmd_pose error: {e}')
+        print(f'[VR] locate_views error: {e}')
+        return False
 
 
 def end_xr_frame():
-    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._frame_begun):
         return
-    if _vr_state._frame_state is None:
-        return
+    fs = _vr_state._frame_state
     try:
         layers = []
-        if len(_vr_state._swapchains) == 2 and all(p is not None for p in _vr_state._eye_poses):
+        layer_holder = None
+        views_holder = None
+        if not _vr_state._frame_discard and fs is not None and len(_vr_state._swapchains) == 2 and all(p is not None for p in _vr_state._eye_poses):
             proj_views = []
+            sub_imgs = []
+            fovs = []
             for i in range(2):
                 sc = _vr_state._swapchains[i]
                 sub_img = xr.SwapchainSubImage(
@@ -1156,29 +1251,47 @@ def end_xr_frame():
                     ),
                     image_array_index=0
                 )
+                sub_imgs.append(sub_img)
                 fov = xr.Fovf(
                     angle_left=_vr_state._eye_fovs[i][0],
                     angle_right=_vr_state._eye_fovs[i][1],
                     angle_up=_vr_state._eye_fovs[i][2],
                     angle_down=_vr_state._eye_fovs[i][3]
                 )
+                fovs.append(fov)
                 proj_views.append(xr.CompositionLayerProjectionView(
                     pose=_vr_state._eye_poses[i],
-                    fov=fov,
-                    sub_image=sub_img
+                    fov=fovs[i],
+                    sub_image=sub_imgs[i]
                 ))
-            layer = xr.CompositionLayerProjection(
-                space=_vr_state.space,
-                views=proj_views
+            views_holder = (xr.CompositionLayerProjectionView * len(proj_views))(*proj_views)
+            proj_layer = xr.CompositionLayerProjection()
+            proj_layer.layer_flags = 0
+            proj_layer.space = _vr_state.space
+            proj_layer.view_count = len(views_holder)
+            proj_layer._views = ctypes.cast(views_holder, ctypes.POINTER(xr.CompositionLayerProjectionView))
+            layers_arr = (ctypes.POINTER(xr.CompositionLayerBaseHeader) * 1)(
+                ctypes.cast(ctypes.byref(proj_layer), ctypes.POINTER(xr.CompositionLayerBaseHeader))
             )
-            layers = [ctypes.byref(layer)]
+            layer_holder = (proj_layer, layers_arr)
+            layers = layers_arr
         xr.end_frame(_vr_state.session, xr.FrameEndInfo(
             display_time=_vr_state._display_time,
             environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-            layers=layers
+            layer_count=len(layers),
+            layers=layers if layers else None,
         ))
+        _vr_state._frames_rendered += 1
     except Exception as e:
         print(f'[VR] end_xr_frame error: {e}')
+    finally:
+        _vr_state._frame_begun = False
+        _vr_state._frame_discard = False
+        _vr_state._frame_state = None
+
+
+def had_frames() -> bool:
+    return _vr_state._frames_rendered > 0
 
 
 def session_running() -> bool:

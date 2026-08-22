@@ -61,6 +61,8 @@ class VRPlugin(PluginBase):
             from core.foundation.logger import Logger
             Logger.error("[VR] OpenXR initialize failed - HMD instance not created")
             return
+        vr_core._vr_toggle._ctx = vp._ctx
+        vr_core._vr_toggle.enabled = True
         self._vr_active = True
         self._original_paintGL = vp.paintGL
         plugin = self
@@ -209,9 +211,29 @@ class VRPlugin(PluginBase):
             return False
         rnd = vr_core.get_renderer()
         if rnd is None:
-            return False
+            if vr_core._vr_toggle._ctx is None:
+                vr_core._vr_toggle._ctx = vp._ctx
+            try:
+                rnd = vr_core.VRRenderer(vp._ctx)
+                vr_core._vr_toggle.renderer = rnd
+            except Exception:
+                return False
         if not vr_core.sync_hmd_pose():
-            return False
+            try:
+                vr_core.end_xr_frame()
+            except Exception:
+                pass
+            if not vr_core.had_frames():
+                return False
+            try:
+                vp._bind_screen_fbo()
+                vp._ctx.viewport = (0, 0, fw, fh)
+                rnd.compose_to_screen(vp._screen_fbo, fw, fh)
+                vp._bind_screen_fbo()
+                vp._ctx.viewport = (0, 0, fw, fh)
+                return True
+            except Exception:
+                return False
         cam = vp._cam
         class Params:
             cam_pos = (cam.position.x, cam.position.y, cam.position.z)
@@ -223,8 +245,8 @@ class VRPlugin(PluginBase):
             proj_mat = Mat4()
             proj_mat._d[0,0] = 2.0 / (tr - tl)
             proj_mat._d[1,1] = 2.0 / (tu - td)
-            proj_mat._d[0,2] = (tr + tl) / (tr - tl)
-            proj_mat._d[1,2] = (tu + td) / (tu - td)
+            proj_mat._d[2,0] = (tr + tl) / (tr - tl)
+            proj_mat._d[2,1] = (tu + td) / (tu - td)
             proj_mat._d[2,2] = -(cam.far + cam.near) / (cam.far - cam.near)
             proj_mat._d[2,3] = -1.0
             proj_mat._d[3,2] = -(2.0 * cam.far * cam.near) / (cam.far - cam.near)
@@ -246,25 +268,57 @@ class VRPlugin(PluginBase):
             Logger.error(f'[VR] render_vr_frame error: {e}')
             import traceback
             traceback.print_exc()
-            return False
-        vp._bind_screen_fbo()
+            try:
+                vr_core.end_xr_frame()
+            except Exception:
+                pass
+            if not vr_core.had_frames():
+                return False
+            try:
+                vp._bind_screen_fbo()
+                vp._ctx.viewport = (0, 0, fw, fh)
+                rnd.compose_to_screen(vp._screen_fbo, fw, fh)
+                vp._bind_screen_fbo()
+                vp._ctx.viewport = (0, 0, fw, fh)
+                return True
+            except Exception:
+                return False
+        try:
+            vp._bind_screen_fbo()
+        except Exception:
+            try:
+                vp._screen_fbo.use()
+            except Exception:
+                pass
         vp._ctx.viewport = (0, 0, fw, fh)
-        vp._ctx.enable(moderngl.DEPTH_TEST)
+        vp._ctx.disable(moderngl.DEPTH_TEST)
+        vp._ctx.disable(moderngl.CULL_FACE)
         return True
 
     def _disable_vr(self):
         from plugins.vr_plugin import vr_core
         if self._original_paintGL and self._viewport:
-            self._viewport.paintGL = self._original_paintGL
-            self._viewport.update()
+            try:
+                self._viewport.paintGL = self._original_paintGL
+            except Exception:
+                pass
+            try:
+                self._viewport.update()
+            except Exception:
+                pass
         r = vr_core.get_renderer()
         if r is not None:
             try:
                 r.release()
             except Exception:
                 pass
+            vr_core._vr_toggle.renderer = None
+        vr_core._vr_toggle.enabled = False
+        vr_core._vr_toggle._ctx = None
         vr_core.shutdown()
         self._vr_active = False
+        self._original_paintGL = None
+        self._viewport = None
         from core.foundation.logger import Logger
         Logger.info("[VR] VR disabled, original viewport restored.")
 

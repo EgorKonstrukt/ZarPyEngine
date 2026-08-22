@@ -93,11 +93,11 @@ class VRControlWidget(QWidget):
 
     def _refresh(self):
         from plugins.vr_plugin.vr_core import (
-            is_available, vr_enabled, session_running,
+            is_available, vr_enabled, session_running, is_active,
             get_ipd, get_hmd_pos_offset, get_controllers,
         )
         avail = is_available()
-        enabled = vr_enabled()
+        enabled = vr_enabled() or is_active()
         running = session_running()
 
         self._toggle_btn.setEnabled(avail)
