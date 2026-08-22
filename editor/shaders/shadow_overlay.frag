@@ -5,7 +5,7 @@
 // Copyright (c) 2026 Zarrakun
 
 #version 460 core
-#define CASCADE_COUNT 3
+#define CASCADE_COUNT 4
 #define MAX_POINT_SHADOWS 4
 #define MAX_SPOT_SHADOWS 4
 uniform sampler2D u_scene_color;
@@ -14,6 +14,7 @@ uniform mat4 u_inv_vp;
 uniform sampler2D u_shadow_map_0;
 uniform sampler2D u_shadow_map_1;
 uniform sampler2D u_shadow_map_2;
+uniform sampler2D u_shadow_map_3;
 uniform mat4 u_light_space_matrices[CASCADE_COUNT];
 uniform float u_cascade_splits[CASCADE_COUNT];
 uniform int u_cascade_count;
@@ -68,7 +69,8 @@ float compute_directional_shadow(vec3 world_pos) {
     if (proj_coords.x < 0.0 || proj_coords.x > 1.0 || proj_coords.y < 0.0 || proj_coords.y > 1.0 || proj_coords.z < 0.0 || proj_coords.z > 1.0) return 1.0;
     if (cascade_idx == 0) return sample_shadow(u_shadow_map_0, proj_coords);
     else if (cascade_idx == 1) return sample_shadow(u_shadow_map_1, proj_coords);
-    return sample_shadow(u_shadow_map_2, proj_coords);
+    else if (cascade_idx == 2) return sample_shadow(u_shadow_map_2, proj_coords);
+    return sample_shadow(u_shadow_map_3, proj_coords);
 }
 float compute_point_shadow_pass(vec3 world_pos) {
     if (u_point_shadow_count <= 0) return 1.0;

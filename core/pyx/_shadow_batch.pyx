@@ -159,17 +159,26 @@ def compute_cascade_distances(float cam_near, float cam_far, float shadow_distan
     cdef float near_z = max(cam_near, 0.01)
     cdef float far_z = max(near_z + 0.1, min(cam_far, shadow_distance))
     cdef float span = far_z - near_z
-    cdef float first = near_z + span * 0.14
-    cdef float second = near_z + span * 0.38
-    cdef float s1 = max(first + 0.1, second)
-    return [first, s1, far_z]
+    if span <= 0.1:
+        return [far_z, far_z, far_z, far_z]
+    cdef float l0 = near_z * pow(far_z / near_z if near_z>0 else 1, 0.25) if near_z>0 else near_z + span*0.25
+    cdef float l1 = near_z * pow(far_z / near_z if near_z>0 else 1, 0.5) if near_z>0 else near_z + span*0.5
+    cdef float l2 = near_z * pow(far_z / near_z if near_z>0 else 1, 0.75) if near_z>0 else near_z + span*0.75
+    cdef float u0 = near_z + span*0.25
+    cdef float u1 = near_z + span*0.5
+    cdef float u2 = near_z + span*0.75
+    cdef float lam = 0.85
+    cdef float s0 = lam*l0 + (1-lam)*u0
+    cdef float s1 = lam*l1 + (1-lam)*u1
+    cdef float s2 = lam*l2 + (1-lam)*u2
+    return [s0, s1, s2, far_z]
 
 
 def pack_cascade_matrices_f32(list light_space_matrices, np.ndarray[FLOAT32_t, ndim=3] out_buf):
     cdef int ci, r, c
     cdef object vp
     cdef object d
-    for ci in range(3):
+    for ci in range(4):
         vp = light_space_matrices[ci]
         d = vp._d if hasattr(vp, '_d') else vp
         for r in range(4):
@@ -181,6 +190,7 @@ def pack_cascade_splits_f32(list splits, np.ndarray[FLOAT32_t, ndim=1] out_buf):
     out_buf[0] = <FLOAT32_t>splits[0]
     out_buf[1] = <FLOAT32_t>splits[1]
     out_buf[2] = <FLOAT32_t>splits[2]
+    out_buf[3] = <FLOAT32_t>splits[3]
 
 
 def pack_point_vps_f32(list point_light_vps, np.ndarray[FLOAT32_t, ndim=3] out_buf):
@@ -535,7 +545,7 @@ def frustum_cull_shadow_groups(dict groups, np.ndarray[FLOAT32_t, ndim=2] vp_f32
 def pack_cascade_vps_transposed(np.ndarray[DTYPE_t, ndim=3] source,
                                 np.ndarray[FLOAT32_t, ndim=3] out_col_major):
     cdef int ci, r, c
-    for ci in range(3):
+    for ci in range(4):
         for r in range(4):
             for c in range(4):
                 out_col_major[ci, c, r] = <FLOAT32_t>source[ci, r, c]
@@ -544,7 +554,7 @@ def pack_cascade_vps_transposed(np.ndarray[DTYPE_t, ndim=3] source,
 def pack_cascade_vps_for_gpu(list matrices, np.ndarray[FLOAT32_t, ndim=3] out_col_major):
     cdef int ci, r, c
     cdef object d
-    for ci in range(3):
+    for ci in range(4):
         d = matrices[ci]._d if hasattr(matrices[ci], '_d') else matrices[ci]
         for r in range(4):
             for c in range(4):

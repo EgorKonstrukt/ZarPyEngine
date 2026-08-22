@@ -48,7 +48,7 @@ Shader "Zarin/Clouds"
             // @FRAGMENT
 
             #version 460 core
-            #define CASCADE_COUNT 3
+            #define CASCADE_COUNT 4
             in vec2 v_uv;
             out vec4 frag_color;
             uniform float u_time;
@@ -85,6 +85,7 @@ Shader "Zarin/Clouds"
             uniform sampler2D u_shadow_map_0;
             uniform sampler2D u_shadow_map_1;
             uniform sampler2D u_shadow_map_2;
+uniform sampler2D u_shadow_map_3;
             uniform mat4 u_light_space_matrices[CASCADE_COUNT];
             uniform float u_cascade_splits[CASCADE_COUNT];
             uniform float u_shadow_bias;
@@ -235,7 +236,11 @@ Shader "Zarin/Clouds"
                 {
                     return sample_shadow(u_shadow_map_1, proj_coords);
                 }
-                return sample_shadow(u_shadow_map_2, proj_coords);
+                if (cascade_idx == 2)
+                {
+                    return sample_shadow(u_shadow_map_2, proj_coords);
+                }
+                return sample_shadow(u_shadow_map_3, proj_coords);
             }
             vec3 cloud_color(float density, float phase, float shadow, float top_light)
             {

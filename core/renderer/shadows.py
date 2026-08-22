@@ -85,11 +85,11 @@ class ShadowRenderer:
         self._shadow_resolution = shadow_resolution
         self._area_shadow_resolution = area_shadow_resolution
         self._shadow_distance = shadow_distance
-        self._cascade_count = max(1, min(cascade_count, 3))
+        self._cascade_count = max(1, min(cascade_count, 4))
         self._shadow_maps: list[Any] = []
         self._shadow_fbos: list[Any] = []
-        self._cascade_splits: list[float] = [1000000.0] * 3
-        self._light_space_matrices: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(3)]
+        self._cascade_splits: list[float] = [1000000.0] * 4
+        self._light_space_matrices: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(4)]
         self._point_shadow_resolution: int = self._shadow_resolution
         self._point_shadow_maps: list[Any] = []
         self._point_shadow_fbos: list[Any] = []
@@ -131,8 +131,8 @@ class ShadowRenderer:
         self._pending_scene: Any = None
         self._skinning_cache: dict = None
         self._shadow_groups_cache: Optional[dict] = None
-        self._cascade_matrices_buf = np.zeros((3, 4, 4), dtype=np.float32)
-        self._cascade_splits_buf = np.zeros(3, dtype=np.float32)
+        self._cascade_matrices_buf = np.zeros((4, 4, 4), dtype=np.float32)
+        self._cascade_splits_buf = np.zeros(4, dtype=np.float32)
         self._point_vps_buf = np.zeros((MAX_POINT_SHADOWS * 6, 4, 4), dtype=np.float32)
         self._point_pos_buf = np.zeros((MAX_POINT_SHADOWS, 3), dtype=np.float32)
         self._point_range_buf = np.zeros(MAX_POINT_SHADOWS, dtype=np.float32)
@@ -145,7 +145,7 @@ class ShadowRenderer:
         self._shadow_groups_ref: Any = None
         self._inv_view_buf = np.zeros((4, 4), dtype=np.float64)
         self._frustum_corners_buf = np.zeros((8, 3), dtype=np.float64)
-        self._cascade_vps_raw = np.zeros((3, 4, 4), dtype=np.float64)
+        self._cascade_vps_raw = np.zeros((4, 4, 4), dtype=np.float64)
         self._model_pack_buf: Optional[np.ndarray] = None
         self._model_pack_buf_cap: int = 0
         self._temporal_frame: int = 0
@@ -161,7 +161,7 @@ class ShadowRenderer:
         if shadow_distance is not None and shadow_distance != self._shadow_distance:
             self._shadow_distance = shadow_distance
         if cascade_count is not None:
-            cc = max(1, min(cascade_count, 3))
+            cc = max(1, min(cascade_count, 4))
             if cc != self._cascade_count:
                 self._cascade_count = cc
                 changed = True
@@ -502,7 +502,7 @@ class ShadowRenderer:
         self._pending_scene = scene
         self._skinning_cache = skinning_cache
         if not renderable_shadow:
-            self._cascade_splits = [0.0] * 3
+            self._cascade_splits = [0.0] * 4
             self._has_point_shadow = False
             self._point_shadow_count = 0
             self._has_spot_shadow = False
@@ -516,7 +516,7 @@ class ShadowRenderer:
                                                 cam_near, cam_far, cam_fov, aspect, view_mat)
                 break
         else:
-            self._cascade_splits = [0.0] * 3
+            self._cascade_splits = [0.0] * 4
 
         inv = view_mat.inverted()
         cam_pos = Vec3(float(inv._d[3, 0]), float(inv._d[3, 1]), float(inv._d[3, 2]))
@@ -570,14 +570,26 @@ class ShadowRenderer:
     def _cascade_distances(self, cam_near: float, cam_far: float) -> list[float]:
         near_z = max(cam_near, 0.01)
         far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
-        span = far_z - near_z
         if self._cascade_count <= 1:
-            return [far_z, far_z, far_z]
-        first = near_z + span * 0.14
-        second = near_z + span * 0.38
+            return [far_z, far_z, far_z, far_z]
         if self._cascade_count == 2:
-            return [first, far_z, far_z]
-        return [first, max(first + 0.1, second), far_z]
+            s0 = near_z + (far_z - near_z) * 0.2
+            return [s0, far_z, far_z, far_z]
+        if self._cascade_count == 3:
+            s0 = near_z + (far_z - near_z) * 0.1
+            s1 = near_z + (far_z - near_z) * 0.3
+            return [s0, s1, far_z, far_z]
+        span = far_z - near_z
+        lam = 0.9
+        splits = []
+        for i in range(1, 5):
+            p = i / 4.0
+            log = near_z * (far_z / near_z) ** p if near_z > 0 else near_z + span * p
+            uni = near_z + span * p
+            s = lam * log + (1.0 - lam) * uni
+            splits.append(s)
+        splits[-1] = far_z
+        return splits
 
     def _render_directional_shadow(self, sun_transform, shadow_groups,
                                    cam_near, cam_far, cam_fov, aspect, view_mat):
@@ -910,6 +922,7 @@ class ShadowRenderer:
                 cs[0] = self._cascade_splits[0]
                 cs[1] = self._cascade_splits[1]
                 cs[2] = self._cascade_splits[2]
+                cs[3] = self._cascade_splits[3]
                 prog["u_cascade_splits"].write(cs.tobytes())
             for ci in range(self._cascade_count):
                 tex_unit = 3 + ci
@@ -935,7 +948,7 @@ class ShadowRenderer:
             for slot in range(self._point_shadow_count):
                 base = slot * 6
                 for fi in range(6):
-                    tex_unit = 6 + base + fi
+                    tex_unit = 7 + base + fi
                     self._point_shadow_maps[base + fi].use(tex_unit)
                     point_units[base + fi] = tex_unit
                 if "u_point_shadow_light_positions" in prog:
@@ -967,7 +980,7 @@ class ShadowRenderer:
                 prog["u_spot_shadow_vps"].write(sv.tobytes())
             spot_units = [0] * MAX_SPOT_SHADOWS
             for slot in range(self._spot_shadow_count):
-                tex_unit = 6 + MAX_POINT_SHADOWS * 6 + slot
+                tex_unit = 7 + MAX_POINT_SHADOWS * 6 + slot
                 self._spot_shadow_maps[slot].use(tex_unit)
                 spot_units[slot] = tex_unit
                 if "u_spot_shadow_light_indices" in prog:
@@ -980,7 +993,7 @@ class ShadowRenderer:
             if "u_spot_shadow_count" in prog:
                 prog["u_spot_shadow_count"].value = 0
         if self._has_area_shadow and "u_area_shadow_light_index" in prog:
-            tex_unit = 34
+            tex_unit = 35
             self._area_shadow_map.use(tex_unit)
             if "u_area_shadow_map" in prog:
                 prog["u_area_shadow_map"].value = tex_unit
@@ -1005,7 +1018,7 @@ class ShadowRenderer:
         for i in range(2):
             suf = f"u_pj_{i}_shadow_map"
             if self._has_projector_shadow[i] and suf in prog:
-                tex_unit = 35 + i
+                tex_unit = 36 + i
                 if i < len(self._projector_shadow_maps):
                     self._projector_shadow_maps[i].use(tex_unit)
                     prog[suf].value = tex_unit

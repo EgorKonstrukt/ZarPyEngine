@@ -6,7 +6,7 @@
 
 #version 460 core
 #define MAX_LIGHTS 8
-#define CASCADE_COUNT 3
+#define CASCADE_COUNT 4
 #define MAX_POINT_SHADOWS 4
 #define MAX_SPOT_SHADOWS 4
 #define PI 3.14159265359
@@ -51,6 +51,7 @@ uniform int u_use_roughness_tex;
 uniform sampler2D u_shadow_map_0;
 uniform sampler2D u_shadow_map_1;
 uniform sampler2D u_shadow_map_2;
+uniform sampler2D u_shadow_map_3;
 uniform mat4 u_light_space_matrices[CASCADE_COUNT];
 uniform float u_cascade_splits[CASCADE_COUNT];
 uniform float u_shadow_bias;
@@ -125,7 +126,8 @@ float compute_shadow() {
     float shadow;
     if (cascade_idx == 0) shadow = sample_shadow(u_shadow_map_0, proj_coords);
     else if (cascade_idx == 1) shadow = sample_shadow(u_shadow_map_1, proj_coords);
-    else shadow = sample_shadow(u_shadow_map_2, proj_coords);
+    else if (cascade_idx == 2) shadow = sample_shadow(u_shadow_map_2, proj_coords);
+    else shadow = sample_shadow(u_shadow_map_3, proj_coords);
     return mix(1.0, shadow, fade);
 }
 float compute_point_shadow_for_light(int li) {

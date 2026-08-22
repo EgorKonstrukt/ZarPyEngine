@@ -262,9 +262,9 @@ class Renderer:
         self._culled_visible: int = 0
         self._rt_rays_per_frame: int = 0
         self._render_callback: Optional[Callable] = None
-        self._shadow_resolution: int = 512
+        self._shadow_resolution: int = 2048
         self._shadow_distance: float = 50.0
-        self._cascade_count: int = 2
+        self._cascade_count: int = 4
         self._render_scale: float = 1.0
         self._line_width: float = 0.6667
         self._clear_color: list = [0.18, 0.18, 0.18]

@@ -172,7 +172,7 @@ Shader "Zarin/Tree"
             #define MAX_LIGHTS 8
             #define MAX_POINT_SHADOWS 4
             #define MAX_SPOT_SHADOWS 4
-            #define CASCADE_COUNT 3
+            #define CASCADE_COUNT 4
             #define PI 3.14159265359
             #define EPS 0.0001
             in vec3 v_world_pos;
@@ -222,6 +222,7 @@ Shader "Zarin/Tree"
             uniform sampler2D u_shadow_map_0;
             uniform sampler2D u_shadow_map_1;
             uniform sampler2D u_shadow_map_2;
+uniform sampler2D u_shadow_map_3;
             uniform mat4 u_light_space_matrices[CASCADE_COUNT];
             uniform float u_cascade_splits[CASCADE_COUNT];
             uniform float u_shadow_bias;
@@ -406,7 +407,8 @@ Shader "Zarin/Tree"
                         float pcf_depth = 0.0;
                         if (cascade_idx == 0) pcf_depth = texture(u_shadow_map_0, proj_coords.xy + offset).r;
                         else if (cascade_idx == 1) pcf_depth = texture(u_shadow_map_1, proj_coords.xy + offset).r;
-                        else pcf_depth = texture(u_shadow_map_2, proj_coords.xy + offset).r;
+                        else if (cascade_idx == 2) pcf_depth = texture(u_shadow_map_2, proj_coords.xy + offset).r;
+                        else pcf_depth = texture(u_shadow_map_3, proj_coords.xy + offset).r;
                         result += (current_depth > pcf_depth + u_shadow_bias) ? 1.0 : 0.0;
                     }
                 }
