@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 import os
+import sys
 import shutil
 import datetime
 import subprocess
@@ -49,6 +50,13 @@ def _qta_icon(name: str, color: str | None = None) -> QIcon:
 if TYPE_CHECKING:
     from core.engine.engine import Engine
 from editor.resource_picker import _get_thumbnail, _format_size, _thumb_resolution
+
+try:
+    from editor.shell_context_menu import show_shell_context_menu
+    _HAS_SHELL_MENU = (sys.platform == "win32")
+except Exception:
+    show_shell_context_menu = None
+    _HAS_SHELL_MENU = False
 
 from editor.constants import MIN_THUMB, MAX_THUMB, VIEW_ICON, VIEW_LIST, VIEW_DETAILS
 from editor.inspector.helpers import _flash_overlay
@@ -1815,6 +1823,25 @@ class ProjectPanel(QDockWidget):
     def _show_file_context_menu(self, pos):
         widget = self.sender()
         item = widget.itemAt(pos) if isinstance(widget, (QTreeWidget, QListWidget)) else None
+        if _HAS_SHELL_MENU and show_shell_context_menu is not None:
+            if item:
+                path = (item.data(0, Qt.ItemDataRole.UserRole) if isinstance(item, QTreeWidgetItem)
+                        else item.data(Qt.ItemDataRole.UserRole))
+            else:
+                path = None
+            if path:
+                paths = self._get_selected_paths() or [path]
+            else:
+                paths = [self._active_pane()._current_dir]
+            if paths:
+                try:
+                    if show_shell_context_menu(
+                            paths, int(self.winId()),
+                            int(widget.mapToGlobal(pos).x()), int(widget.mapToGlobal(pos).y()),
+                            self._build_shell_extra_actions(path)):
+                        return
+                except Exception:
+                    pass
         menu = QMenu(self)
         if item:
             path = (item.data(0, Qt.ItemDataRole.UserRole) if isinstance(item, QTreeWidgetItem)
@@ -1914,6 +1941,35 @@ class ProjectPanel(QDockWidget):
             copy_path_act.triggered.connect(lambda: self._copy_path(self._active_pane()._current_dir))
         menu.addAction(copy_path_act)
         menu.exec(widget.mapToGlobal(pos))
+
+    def _build_shell_extra_actions(self, path):
+        actions = []
+        if not path:
+            actions.append(("Copy Path", lambda: self._copy_path(self._active_pane()._current_dir)))
+            return actions
+        if not os.path.isdir(path):
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".zpes":
+                actions.append(("Open Scene", lambda: self._engine.load_scene(path)))
+            elif ext == ".zpep":
+                actions.append(("Instantiate Prefab", lambda: self._instantiate_prefab(path)))
+            elif ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
+                actions.append(("Add to Scene", lambda p=path: self.import_model_requested.emit(p)))
+            elif ext == ".py":
+                actions.append(("Run Script", lambda: self.file_double_clicked.emit(path)))
+            elif ext in (".wav", ".mp3", ".ogg"):
+                actions.append(("Play", lambda: self.file_double_clicked.emit(path)))
+            elif ext in (".png", ".jpg", ".jpeg"):
+                actions.append(("View Image", lambda: self.file_double_clicked.emit(path)))
+            elif ext in (".animclip", ".animcontroller"):
+                actions.append(("Open", lambda: self.file_double_clicked.emit(path)))
+            elif ext == ".zterr":
+                actions.append(("Open in Terrain Editor", lambda: self.file_double_clicked.emit(path)))
+            actions.append(("Show in File Manager", lambda p=path: self._reveal_file(p)))
+            actions.append(("Copy Path", lambda p=path: self._copy_path(p)))
+        else:
+            actions.append(("Copy Path", lambda p=path: self._copy_path(p)))
+        return actions
 
     def _rename_item(self, widget, item):
         if isinstance(item, QTreeWidgetItem):
