@@ -213,16 +213,11 @@ class VRPlugin(PluginBase):
         if not vr_core.sync_hmd_pose():
             return False
         cam = vp._cam
-        eyes = vr_core.get_eye_transforms(
-            (cam.position.x, cam.position.y, cam.position.z),
-            math.radians(cam.yaw),
-            math.radians(cam.pitch),
-        )
-        for eye in eyes:
-            efbo = rnd.eye_fbo(eye['eye_idx'])
-            efbo.fbo.use()
-            efbo.fbo.viewport = (0, 0, efbo.w, efbo.h)
-            efbo.fbo.clear(*vp._clear_color, 1.0)
+        class Params:
+            cam_pos = (cam.position.x, cam.position.y, cam.position.z)
+            cam_yaw = math.radians(cam.yaw)
+            cam_pitch = math.radians(cam.pitch)
+        def render_eye(fbo, w, h, eye):
             al, ar, au, ad = eye['fov_angles']
             tl, tr, tu, td = math.tan(al), math.tan(ar), math.tan(au), math.tan(ad)
             proj_mat = Mat4()
@@ -240,35 +235,18 @@ class VRPlugin(PluginBase):
             view_mat = Mat4.look_at(eye_pos, eye_target, eye_up)
             vp._renderer.render_scene(
                 scene, view_mat, proj_mat, eye_pos,
-                efbo.w, efbo.h, efbo.fbo,
+                w, h, fbo,
                 set(vp._selected_entities),
                 cam.near, cam.far, cam.fov,
             )
-        for eye in eyes:
-            rnd.render_controllers_for_eye(eye)
-        if vr_core.session_running() and len(vr_core._vr_state._swapchains) == 2:
-            try:
-                gl = vr_core._load_gl_funcs()
-                for i, sc in enumerate(vr_core._vr_state._swapchains):
-                    dst_tex = sc.acquire()
-                    src_fbo_id = rnd.eye_fbo(i).fbo.glo
-                    w, h = sc.w, sc.h
-                    blit_fbo = (ctypes.c_uint * 1)(0)
-                    gl.GenFramebuffers(1, blit_fbo)
-                    gl.BindFramebuffer(0x8CA9, blit_fbo[0])
-                    gl.FramebufferTexture2D(0x8CA9, 0x8CE0, 0x0DE1, dst_tex, 0)
-                    gl.BindFramebuffer(0x8CA8, src_fbo_id)
-                    gl.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, 0x4000, 0x2600)
-                    gl.BindFramebuffer(0x8D40, 0)
-                    gl.DeleteFramebuffers(1, blit_fbo)
-                    sc.release_image()
-            except Exception as _blit_err:
-                from core.foundation.logger import Logger
-                Logger.error(f'[VR] Swapchain blit error: {_blit_err}')
-        vp._bind_screen_fbo()
-        vp._ctx.viewport = (0, 0, fw, fh)
-        rnd.compose_to_screen(vp._screen_fbo, fw, fh)
-        vr_core.end_xr_frame()
+        try:
+            vr_core.render_vr_frame(render_eye, vp._ctx, vp._screen_fbo, Params(), fw, fh)
+        except Exception as e:
+            from core.foundation.logger import Logger
+            Logger.error(f'[VR] render_vr_frame error: {e}')
+            import traceback
+            traceback.print_exc()
+            return False
         vp._bind_screen_fbo()
         vp._ctx.viewport = (0, 0, fw, fh)
         vp._ctx.enable(moderngl.DEPTH_TEST)
