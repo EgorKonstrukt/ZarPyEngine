@@ -12,6 +12,13 @@ from typing import Any, Type, TypeVar, Optional
 import numpy as np
 from core.spatial import Octree, AABB
 
+try:
+    from core._scene_query import fast_get_entities_with_component as _fast_get
+    _HAS_FAST_QUERY = True
+except ImportError:
+    _fast_get = None
+    _HAS_FAST_QUERY = False
+
 T = TypeVar("T", bound="Component")
 
 _UNSET = object()
@@ -19,6 +26,7 @@ _UNSET = object()
 _GIZMO_PASSES: dict[str, list[type[Component]]] = {}
 _GIZMO_PASS_ORDER: list[str] = ["collider", "particle", "force_field", "camera", "audio", "light", "script", "nav", "armature"]
 
+_TRANSFORM_NAME = "Transform"
 
 def _get_engine():
     try:
@@ -73,10 +81,12 @@ class Component:
         if ent is None:
             self._transform = None
             return None
-        t_type = ent._get_transform_type()
+        t_type = ent._transform_type
         if t_type is None:
-            self._transform = None
-            return None
+            t_type = ent._get_transform_type()
+            if t_type is None:
+                self._transform = None
+                return None
         t_list = ent._type_map.get(t_type)
         result = t_list[0] if t_list else None
         self._transform = result
@@ -254,8 +264,9 @@ class Entity:
         tt = self._transform_type
         if tt is not None:
             return tt
-        for t in self._type_map:
-            if t.__name__ == "Transform":
+        tm = self._type_map
+        for t in tm:
+            if t.__name__ == _TRANSFORM_NAME:
                 self._transform_type = t
                 return t
         from core.components.transform import Transform
@@ -269,6 +280,12 @@ class Entity:
             clist = self._type_map.get(tt)
             if clist:
                 return clist[0]
+        tm = self._type_map
+        for t in tm:
+            if t.__name__ == _TRANSFORM_NAME:
+                self._transform_type = t
+                clist = tm.get(t)
+                return clist[0] if clist else None
         return None
 
     @property
@@ -359,29 +376,37 @@ class Entity:
             sc._roots_cache_valid = False
 
     def _invalidate_transform_cache(self):
-        for c in self._components.values():
+        comps = self._components
+        for c in comps.values():
             c._transform = _UNSET
 
     def _make_component_key(self, comp: Component) -> str:
-        base = type(comp).__name__
-        if type(comp)._allow_multiple:
+        t = type(comp)
+        base = t.__name__
+        if t._allow_multiple:
             return base + "." + str(uuid.uuid4())[:8]
         return base
 
     def add_component(self, comp: Component, key: Optional[str] = None) -> Component:
         if key is None:
-            key = self._make_component_key(comp)
+            t = type(comp)
+            base = t.__name__
+            if t._allow_multiple:
+                key = base + "." + str(uuid.uuid4())[:8]
+            else:
+                key = base
         comp._entity = self
         comp._key = key
         comp_type = type(comp)
-        self._components[key] = comp
-
+        comps = self._components
+        comps[key] = comp
         type_map = self._type_map
-        if comp_type not in type_map:
-            type_map[comp_type] = []
+        lst = type_map.get(comp_type)
+        if lst is None:
+            type_map[comp_type] = [comp]
             self._type_name_map[comp_type.__name__] = comp_type
-        type_map[comp_type].append(comp)
-
+        else:
+            lst.append(comp)
         sc = self._scene
         is_active = self._active
         if comp._updates:
@@ -392,17 +417,21 @@ class Entity:
             self._fixed_update_list.append(comp)
             if sc and is_active and comp.enabled:
                 sc._active_fixed_components.add(comp)
-
-        if sc:
+        if sc is not None:
             comp_name = comp_type.__name__
             idx = sc._component_indices
-            if comp_name not in idx:
-                idx[comp_name] = set()
-            idx[comp_name].add(self._id)
+            s = idx.get(comp_name)
+            if s is None:
+                idx[comp_name] = {self._id}
+            else:
+                s.add(self._id)
             sc._render_version += 1
-        if comp_type.__name__ == "Transform":
+        if comp_type.__name__ == _TRANSFORM_NAME:
             self._transform_type = comp_type
-            self._invalidate_transform_cache()
+            for c in comps.values():
+                c._transform = _UNSET
+            if sc is not None and getattr(comp, "_dirty", False):
+                sc._dirty_roots.add(comp)
         comp.on_awake()
         return comp
 
@@ -743,43 +772,70 @@ class Scene:
     def mark_clean(self): self._dirty = False
 
     def _get_entity_depth(self, e: Entity) -> int:
-        cached = self._depth_cache.get(e.id)
+        eid = e._id
+        cached = self._depth_cache.get(eid)
         if cached is not None:
             return cached
         depth = 0
-        p = e.parent
-        while p:
+        p = e._parent
+        while p is not None:
             depth += 1
-            p = p.parent
-        self._depth_cache[e.id] = depth
+            p = p._parent
+        self._depth_cache[eid] = depth
         return depth
 
     def flush_transforms(self):
-        if not self._dirty_roots:
+        dr = self._dirty_roots
+        if not dr:
             return 0
         collected = []
         visited = set()
         q = deque()
-        for root in list(self._dirty_roots):
-            if root._dirty and root._entity and id(root) not in visited:
+        add_q = q.append
+        popleft = q.popleft
+        for root in list(dr):
+            if root._dirty and root._entity is not None and id(root) not in visited:
                 visited.add(id(root))
-                q.append(root)
+                add_q(root)
+        append_c = collected.append
         while q:
-            t = q.popleft()
-            collected.append(t)
-            for child in t._entity.children:
-                ct = child.transform
-                if ct and ct._dirty and id(ct) not in visited:
-                    visited.add(id(ct))
-                    q.append(ct)
+            t = popleft()
+            append_c(t)
+            ent = t._entity
+            if ent is None:
+                continue
+            for child in ent._children:
+                ct = child._transform_type
+                if ct is not None:
+                    lst = child._type_map.get(ct)
+                    c = lst[0] if lst else None
+                else:
+                    c = child.transform
+                if c is not None and c._dirty and id(c) not in visited:
+                    visited.add(id(c))
+                    add_q(c)
         if not collected:
-            self._dirty_roots.clear()
+            dr.clear()
             return 0
-        collected.sort(key=lambda t: self._get_entity_depth(t._entity))
+        dc = self._depth_cache
+        def _depth_key(t):
+            e = t._entity
+            eid = e._id
+            d = dc.get(eid)
+            if d is not None:
+                return d
+            depth = 0
+            p = e._parent
+            while p is not None:
+                depth += 1
+                p = p._parent
+            dc[eid] = depth
+            return depth
+        collected.sort(key=_depth_key)
         from core.components.transform import Transform
         Transform.batch_update_world_matrices(collected)
-        self._dirty_roots.clear()
-        self._depth_cache.clear()
+        dr.clear()
+        dc.clear()
         return len(collected)
 
     def create_entity(self, name: str = "Entity",
@@ -867,17 +923,24 @@ class Scene:
         return self._roots_cache
 
     def get_entities_with_component(self, cls: Type[T]) -> list[Entity]:
+        if _HAS_FAST_QUERY:
+            return _fast_get(self._component_indices, self._entities, cls.__name__, self._render_version, self._component_entity_frame_cache)
         key = cls.__name__
         s = self._component_indices.get(key)
         if not s:
             return []
-        cache_tag = (key, self._render_version)
-        cached = self._component_entity_frame_cache.get(cache_tag)
+        rv = self._render_version
+        cache_tag = (key, rv)
+        cc = self._component_entity_frame_cache
+        cached = cc.get(cache_tag)
         if cached is not None:
             return cached
         ents = self._entities
         result = [ents[eid] for eid in s if eid in ents]
-        self._component_entity_frame_cache[cache_tag] = result
+        cc[cache_tag] = result
+        if len(cc) > 256:
+            cc.clear()
+            cc[cache_tag] = result
         return result
 
     def rebuild_spatial(self):
@@ -979,15 +1042,22 @@ class Scene:
         prof.start("scene_update")
         log_error = None
         update_list = self._get_update_list()
+        n = len(update_list)
+        if n == 0:
+            prof.stop("scene_update")
+            return
+        CT = self._CONSTRAINT_TYPES
         try:
             from core._constraint_update import batch_update_constraints
             constraints = []
             others = []
+            append_c = constraints.append
+            append_o = others.append
             for c in update_list:
-                if type(c).__name__ in self._CONSTRAINT_TYPES:
-                    constraints.append(c)
+                if type(c).__name__ in CT:
+                    append_c(c)
                 else:
-                    others.append(c)
+                    append_o(c)
             if constraints:
                 try:
                     batch_update_constraints(constraints, dt)

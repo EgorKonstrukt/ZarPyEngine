@@ -1,7 +1,10 @@
-# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False
+# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False, initializedcheck=False, overflowcheck=False
+# distutils: extra_compile_args = -O3 -ffast-math -march=native -fopenmp
+# distutils: extra_link_args = -fopenmp
 import numpy as np
 cimport numpy as np
 from libc.math cimport sqrt, sin, cos, tan, acos, fabs, atan2, asin
+from cython.parallel import prange
 
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t
@@ -550,8 +553,17 @@ def mat4_normal_matrix(np.ndarray[DTYPE_t, ndim=2] model):
 
 def batch_matrices_to_f32(np.ndarray[DTYPE_t, ndim=3] matrices):
     cdef int n = matrices.shape[0]
+    if n == 0:
+        return np.empty((0, 16), dtype=np.float32)
     cdef np.ndarray[np.float32_t, ndim=2] out = np.empty((n, 16), dtype=np.float32)
     cdef int i, r, c
+    if n > 512:
+        with nogil:
+            for i in prange(n, schedule='static'):
+                for r in range(4):
+                    for c in range(4):
+                        out[i, r*4 + c] = <np.float32_t>matrices[i, r, c]
+        return out
     for i in range(n):
         for r in range(4):
             for c in range(4):

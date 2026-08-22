@@ -305,9 +305,9 @@ class Engine:
         self.tick_update(dt)
 
     def tick_begin(self) -> float:
-        """Stage 1: flush transforms, calc dt. Returns frame dt."""
-        if self._scene:
-            self._scene.flush_transforms()
+        sc = self._scene
+        if sc is not None:
+            sc.flush_transforms()
         now = time.perf_counter()
         raw_dt = now - self._last_time
         self._last_time = now
@@ -317,49 +317,54 @@ class Engine:
         return dt
 
     def tick_fixed_step(self) -> bool:
-        """Stage 2: one fixed step. Returns True if step was consumed."""
-        if self._fixed_accum < self._fixed_dt:
+        fd = self._fixed_dt
+        if self._fixed_accum < fd:
             return False
-        self._profiler.start("fixed_update")
+        prof = self._profiler
+        prof.start("fixed_update")
         sys_plugins = self._plugin_manager.get_system_plugins()
         for p in sys_plugins:
-            self._profiler.start(p.NAME)
+            prof.start(p.NAME)
             try:
-                p.pre_step(self._fixed_dt)
+                p.pre_step(fd)
             except Exception as e:
                 Logger.error(f"Plugin {p.NAME} pre_step exception: {e}")
-            self._profiler.stop(p.NAME)
-        if self._scene:
+            prof.stop(p.NAME)
+        sc = self._scene
+        if sc is not None:
             try:
-                self._scene.fixed_update(self._fixed_dt)
+                sc.fixed_update(fd)
             except Exception as e:
                 Logger.error(f"FixedUpdate exception: {e}", e)
         for p in sys_plugins:
-            self._profiler.start(p.NAME)
+            prof.start(p.NAME)
             try:
-                p.step(self._fixed_dt)
+                p.step(fd)
             except Exception as e:
                 Logger.error(f"Plugin {p.NAME} exception: {e}")
-            self._profiler.stop(p.NAME)
-        self._fixed_accum -= self._fixed_dt
+            prof.stop(p.NAME)
+        self._fixed_accum -= fd
         if self._fixed_accum < 0:
             self._fixed_accum = 0.0
-        self._profiler.stop("fixed_update")
+        prof.stop("fixed_update")
         return True
 
     def tick_update(self, dt: float):
-        """Stage 3: script update + frame bookkeeping."""
-        self._profiler.start("update")
-        if self._scene:
+        prof = self._profiler
+        prof.start("update")
+        sc = self._scene
+        if sc is not None:
             try:
-                self._scene.update(dt)
+                sc.update(dt)
             except Exception as e:
                 Logger.error(f"Update exception: {e}", e)
-        self._profiler.stop("update")
+        prof.stop("update")
         self._frame_count += 1
-        self._fps_accum += dt / max(self._time_scale, 0.001)
+        ts = self._time_scale if self._time_scale > 0.001 else 0.001
+        inv = dt / ts
+        self._fps_accum += inv
         self._fps_frames += 1
-        self._tps_accum += dt / max(self._time_scale, 0.001)
+        self._tps_accum += inv
         self._tps_frames += 1
         if self._fps_accum >= 0.5:
             self._fps = self._fps_frames / self._fps_accum
@@ -368,9 +373,10 @@ class Engine:
             self._tps = self._tps_frames / self._tps_accum
             self._tps_accum = 0.0
             self._tps_frames = 0
-        self._profiler.stop("tick")
-        if self._time_travel_recorder and self._time_travel_recorder.is_recording:
-            self._time_travel_recorder.capture(self._scene)
+        prof.stop("tick")
+        rec = self._time_travel_recorder
+        if rec is not None and rec.is_recording:
+            rec.capture(sc)
     def set_profiler_data(self, key: str, value_ms: float):
         self._profiler.set_value(key, value_ms)
     def capture_profiler_frame(self):

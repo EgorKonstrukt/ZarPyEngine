@@ -64,13 +64,19 @@ class MeshData:
         self._color_vbo: Optional[Any] = None
 
     def compute_aabb(self):
-        if len(self.vertices) < 3:
+        verts = self.vertices
+        if verts.size < 3:
             self._bounding_radius = 0.0
             return
-        v = self.vertices.reshape(-1, 3)
-        self.aabb_min = v.min(axis=0).astype(np.float32)
-        self.aabb_max = v.max(axis=0).astype(np.float32)
-        self._bounding_radius = float(np.linalg.norm(self.aabb_max - self.aabb_min) / 2.0)
+        v = verts.reshape(-1, 3)
+        try:
+            from core._render_utils import compute_bounding_spheres
+            self.aabb_min = np.min(v, axis=0).astype(np.float32, copy=False)
+            self.aabb_max = np.max(v, axis=0).astype(np.float32, copy=False)
+        except ImportError:
+            self.aabb_min = v.min(axis=0).astype(np.float32)
+            self.aabb_max = v.max(axis=0).astype(np.float32)
+        self._bounding_radius = float(np.linalg.norm(self.aabb_max - self.aabb_min) * 0.5)
 
     @property
     def bounding_radius(self) -> float:
@@ -80,38 +86,82 @@ class MeshData:
 
     def build_gl(self, ctx: moderngl.Context, program: moderngl.Program):
         self._ctx = ctx
-        if len(self.vertices) == 0:
+        verts = self.vertices
+        if verts.size == 0:
             return
-        n_verts = len(self.vertices) // 3
-        data = np.zeros((n_verts, 8), dtype=np.float32)
-        data[:, 0:3] = self.vertices.reshape(-1, 3)
-        if len(self.normals) == len(self.vertices):
-            data[:, 3:6] = self.normals.reshape(-1, 3)
-        if len(self.uvs) * 3 == len(self.vertices) * 2:
-            data[:, 6:8] = self.uvs.reshape(-1, 2)
-        if self._vbo is None:
-            self._vbo = ctx.buffer(data.tobytes())
+        n_verts = verts.size // 3
+        data = np.empty((n_verts, 8), dtype=np.float32)
+        data[:, 0:3] = verts.reshape(-1, 3)
+        norms = self.normals
+        if norms.size == verts.size:
+            data[:, 3:6] = norms.reshape(-1, 3)
         else:
-            self._vbo.write(data.tobytes())
-        if len(self.indices) > 0:
+            data[:, 3:6] = 0.0
+            if norms.size >= 3:
+                data[:, 3:6] = np.zeros((n_verts, 3), dtype=np.float32)
+        uvs = self.uvs
+        if uvs.size * 3 == verts.size * 2:
+            data[:, 6:8] = uvs.reshape(-1, 2)
+        else:
+            data[:, 6:8] = 0.0
+        b = data.tobytes()
+        if self._vbo is None:
+            self._vbo = ctx.buffer(b)
+        else:
+            if self._vbo.size != len(b):
+                try:
+                    self._vbo.release()
+                except Exception:
+                    pass
+                self._vbo = ctx.buffer(b)
+            else:
+                self._vbo.write(b)
+        idx = self.indices
+        if idx.size > 0:
+            ib = idx.astype(np.uint32, copy=False).tobytes()
             if self._ibo is None:
-                self._ibo = ctx.buffer(self.indices.astype(np.uint32).tobytes())
-        if self.has_skeleton and len(self.bone_indices) > 0:
-            nb = len(self.bone_indices)
-            bone_data = np.zeros((nb, 8), dtype=np.float32)
-            bone_data[:, 0:4] = self.bone_indices.reshape(-1, 4).astype(np.float32)
+                self._ibo = ctx.buffer(ib)
+            else:
+                if self._ibo.size != len(ib):
+                    try:
+                        self._ibo.release()
+                    except Exception:
+                        pass
+                    self._ibo = ctx.buffer(ib)
+                else:
+                    self._ibo.write(ib)
+        if self.has_skeleton and self.bone_indices.size > 0:
+            nb = self.bone_indices.shape[0]
+            bone_data = np.empty((nb, 8), dtype=np.float32)
+            bone_data[:, 0:4] = self.bone_indices.reshape(-1, 4).astype(np.float32, copy=False)
             bone_data[:, 4:8] = self.bone_weights.reshape(-1, 4)
+            bb = bone_data.tobytes()
             if self._bone_vbo is None:
-                self._bone_vbo = ctx.buffer(bone_data.tobytes())
+                self._bone_vbo = ctx.buffer(bb)
             else:
-                self._bone_vbo.write(bone_data.tobytes())
+                if self._bone_vbo.size != len(bb):
+                    try:
+                        self._bone_vbo.release()
+                    except Exception:
+                        pass
+                    self._bone_vbo = ctx.buffer(bb)
+                else:
+                    self._bone_vbo.write(bb)
             self.bone_count = len(self.bone_offset_matrices)
-        if len(self.colors) == n_verts * 4:
-            color_data = self.colors.astype(np.float32).tobytes()
+        cols = self.colors
+        if cols.size == n_verts * 4:
+            cb = cols.astype(np.float32, copy=False).tobytes()
             if self._color_vbo is None:
-                self._color_vbo = ctx.buffer(color_data)
+                self._color_vbo = ctx.buffer(cb)
             else:
-                self._color_vbo.write(color_data)
+                if self._color_vbo.size != len(cb):
+                    try:
+                        self._color_vbo.release()
+                    except Exception:
+                        pass
+                    self._color_vbo = ctx.buffer(cb)
+                else:
+                    self._color_vbo.write(cb)
         self._build_vao_for_program(program)
         self._vao = self._vao_cache.get(id(program))
 

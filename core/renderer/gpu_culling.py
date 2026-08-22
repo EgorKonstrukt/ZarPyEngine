@@ -1,3 +1,8 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2026 Zarrakun
 from __future__ import annotations
 import numpy as np
 import moderngl
@@ -23,13 +28,6 @@ def _supports_compute(ctx: moderngl.Context) -> bool:
 
 
 class GpuStorage:
-    """Manages persistent GPU storage for SSBO-based instancing.
-
-    - World matrix SSBO (binding 4): ALL world matrices, updated when dirty
-    - Optional compute culling resources
-    - GPU-driven rendering flag (opt-in via ``set_gpu_driven``)
-    """
-
     __slots__ = (
         '_ctx', '_world_mat_ssbo', '_culling',
         '_capacity', '_last_upload_version',
@@ -63,18 +61,18 @@ class GpuStorage:
         self._world_mat_ssbo = self._ctx.buffer(reserve=mat_size)
 
     def upload_world_matrices(self, matrices: list[Mat4],
-                              bounding_radii: np.ndarray, version: int):
+                               bounding_radii: np.ndarray, version: int):
         if len(matrices) == 0:
             return
         self._last_upload_version = version
         self.ensure_capacity(len(matrices))
         try:
             from core._render_utils import batch_mat4_to_f32_flat
-            data = batch_mat4_to_f32_flat(matrices).tobytes()
+            flat = batch_mat4_to_f32_flat(matrices)
+            self._world_mat_ssbo.write(flat.tobytes())
         except ImportError:
-            data = Mat4.batch_to_f32(matrices).tobytes()
-        self._world_mat_ssbo.write(data)
-        if self._culling and len(bounding_radii) == len(matrices):
+            self._world_mat_ssbo.write(Mat4.batch_to_f32(matrices).tobytes())
+        if self._culling is not None and bounding_radii.shape[0] == len(matrices):
             self._culling.upload_bounding(matrices, bounding_radii)
 
     def get_world_matrix_ssbo(self) -> Optional[moderngl.Buffer]:
@@ -92,12 +90,6 @@ class GpuStorage:
     def cull_and_get_indices(self, view_f32, proj_f32,
                              world_mat_ssbo: moderngl.Buffer,
                              version: int) -> Optional[moderngl.Buffer]:
-        """Run the compute culler and return the compacted index SSBO.
-
-        Returns None only when culling is unavailable. When nothing is
-        visible the (empty) index SSBO is still returned so the caller can
-        detect a fully-culled group via ``last_visible_count``.
-        """
         culling = self.get_or_create_culling()
         if culling is None or not culling.is_ready():
             return None
@@ -128,15 +120,6 @@ class GpuStorage:
 
 
 class GpuCulling:
-    """Compute-shader-based frustum culling + index compaction.
-
-    Uses 4 SSBOs:
-      0: WorldMatrices (readonly) - mat4[]
-      1: BoundingData   (readonly) - vec4[] (xyz=center, w=radius)
-      2: OutIndices     (writeonly) - uint[] compacted instance indices
-      3: CounterBuf     - uint count
-    """
-
     __slots__ = (
         '_ctx', '_compute_shader', '_bounding_ssbo',
         '_instance_output_ssbo', '_counter_ssbo',
@@ -191,7 +174,7 @@ class GpuCulling:
         self._bounding_ssbo.write(spheres.tobytes())
 
     def upload_world_matrices(self, matrices: list[Mat4],
-                              bounding_radii: np.ndarray):
+                               bounding_radii: np.ndarray):
         n = len(matrices)
         self._count = n
         self.ensure_resources(n)

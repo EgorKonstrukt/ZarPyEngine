@@ -23,6 +23,8 @@ class Transform(Component):
             InspectorField("local_scale", "Scale", FieldType.VEC3),
         ]
 
+    __slots__ = ("_local_pos", "_local_rot", "_local_scale", "_world_matrix", "_world_target", "_dirty")
+
     def __init__(self):
         super().__init__()
         self._local_pos: Vec3 = Vec3.zero()
@@ -31,17 +33,25 @@ class Transform(Component):
         self._world_matrix: Mat4 = Mat4.identity()
         self._world_target: Mat4 | None = None
         self._dirty: bool = True
+
     def _mark_dirty(self):
         if self._dirty:
             return
         self._dirty = True
-        if self._entity:
-            scene = self._entity._scene
-            if scene:
+        ent = self._entity
+        if ent is not None:
+            scene = ent._scene
+            if scene is not None:
                 scene._dirty_roots.add(self)
-            for child in self._entity.children:
-                ct = child.transform
-                if ct:
+            children = ent._children
+            for child in children:
+                tt = child._transform_type
+                if tt is not None:
+                    lst = child._type_map.get(tt)
+                    ct = lst[0] if lst else None
+                else:
+                    ct = child.transform
+                if ct is not None and not ct._dirty:
                     ct._mark_dirty()
     def _update_world_matrix(self):
         if not self._dirty and self._world_matrix is not None:
@@ -83,23 +93,30 @@ class Transform(Component):
         self._world_target = None
         self._dirty = False
     def _build_local_matrix(self) -> Mat4:
-        r = mat4_from_quaternion(self._local_rot.x, self._local_rot.y, self._local_rot.z, self._local_rot.w)
-        sx, sy, sz = self._local_scale.x, self._local_scale.y, self._local_scale.z
-        m = np.array(r, dtype=FLOAT_TYPE)
+        lr = self._local_rot
+        r = mat4_from_quaternion(lr._x, lr._y, lr._z, lr._w)
+        ls = self._local_scale
+        sx = ls._x; sy = ls._y; sz = ls._z
+        lp = self._local_pos
+        m = np.array(r, dtype=FLOAT_TYPE, copy=False)
+        if m.base is not None:
+            m = m.copy()
         m[0, 0] *= sx; m[0, 1] *= sx; m[0, 2] *= sx
         m[1, 0] *= sy; m[1, 1] *= sy; m[1, 2] *= sy
         m[2, 0] *= sz; m[2, 1] *= sz; m[2, 2] *= sz
-        m[3, 0] = self._local_pos.x
-        m[3, 1] = self._local_pos.y
-        m[3, 2] = self._local_pos.z
+        m[3, 0] = lp._x
+        m[3, 1] = lp._y
+        m[3, 2] = lp._z
         m[3, 3] = 1.0
         return Mat4(m)
     @property
     def local_position(self) -> Vec3: return self._local_pos
     @local_position.setter
     def local_position(self, v: Vec3):
-        if isinstance(v, (tuple, list)):
-            self._local_pos = Vec3(*v)
+        if isinstance(v, Vec3):
+            self._local_pos = v
+        elif isinstance(v, (tuple, list, np.ndarray)):
+            self._local_pos = Vec3(float(v[0]), float(v[1]), float(v[2]))
         else:
             self._local_pos = v
         self._mark_dirty()
@@ -107,14 +124,16 @@ class Transform(Component):
     def local_rotation(self) -> Quat: return self._local_rot
     @local_rotation.setter
     def local_rotation(self, v: Quat):
-        self._local_rot = v.normalized()
+        self._local_rot = v.normalized() if isinstance(v, Quat) else v
         self._mark_dirty()
     @property
     def local_scale(self) -> Vec3: return self._local_scale
     @local_scale.setter
     def local_scale(self, v: Vec3):
-        if isinstance(v, (tuple, list)):
-            self._local_scale = Vec3(*v)
+        if isinstance(v, Vec3):
+            self._local_scale = v
+        elif isinstance(v, (tuple, list, np.ndarray)):
+            self._local_scale = Vec3(float(v[0]), float(v[1]), float(v[2]))
         else:
             self._local_scale = v
         self._mark_dirty()
@@ -122,23 +141,32 @@ class Transform(Component):
     def local_euler_angles(self) -> Vec3: return self._local_rot.to_euler()
     @local_euler_angles.setter
     def local_euler_angles(self, v: Vec3):
-        self._local_rot = Quat.from_euler(v.x, v.y, v.z)
+        if isinstance(v, Vec3):
+            self._local_rot = Quat.from_euler(v._x, v._y, v._z)
+        else:
+            self._local_rot = Quat.from_euler(float(v[0]), float(v[1]), float(v[2]))
         self._mark_dirty()
     @property
     def position(self) -> Vec3:
-        self._update_world_matrix()
-        return self._world_matrix.get_translation()
+        wm = self._world_matrix
+        if self._dirty:
+            self._update_world_matrix()
+            wm = self._world_matrix
+        d = wm._d
+        return Vec3(float(d[3, 0]), float(d[3, 1]), float(d[3, 2]))
     @position.setter
     def position(self, world_pos: Vec3):
-        if isinstance(world_pos, (tuple, list)):
-            world_pos = Vec3(*world_pos)
-        parent_entity = self._entity.parent if self._entity else None
-        if parent_entity:
+        if isinstance(world_pos, (tuple, list, np.ndarray)):
+            world_pos = Vec3(float(world_pos[0]), float(world_pos[1]), float(world_pos[2]))
+        ent = self._entity
+        parent_entity = ent._parent if ent is not None else None
+        if parent_entity is not None:
             pt = parent_entity.transform
-            if pt:
+            if pt is not None:
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
-                world_arr = np.array([world_pos.x, world_pos.y, world_pos.z, 1.0], dtype=FLOAT_TYPE)
+                wp = world_pos
+                world_arr = np.array([wp._x, wp._y, wp._z, 1.0], dtype=FLOAT_TYPE)
                 local_arr = world_arr @ inv
                 self._local_pos = Vec3(float(local_arr[0]), float(local_arr[1]), float(local_arr[2]))
                 self._mark_dirty()

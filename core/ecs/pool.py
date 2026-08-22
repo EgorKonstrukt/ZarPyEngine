@@ -21,24 +21,34 @@ _mesh_import_pool: ProcessPoolExecutor | None = None
 
 def _get_or_create(name: str, max_workers: int | None = None) -> ThreadPoolExecutor:
     global _general_pool, _plugin_pool, _audio_pool, _asset_pool, _bvh_parallel_pool
-    pools = {
-        "general": lambda: _general_pool,
-        "plugin": lambda: _plugin_pool,
-        "audio": lambda: _audio_pool,
-        "asset": lambda: _asset_pool,
-        "bvh_parallel": lambda: _bvh_parallel_pool,
-    }
-    setters = {
-        "general": lambda v: set_global("_general_pool", v),
-        "plugin": lambda v: set_global("_plugin_pool", v),
-        "audio": lambda v: set_global("_audio_pool", v),
-        "asset": lambda v: set_global("_asset_pool", v),
-        "bvh_parallel": lambda v: set_global("_bvh_parallel_pool", v),
-    }
-    p = pools[name]()
-    if p is None or p._shutdown:
-        p = ThreadPoolExecutor(max_workers=max_workers or _NUM_WORKERS, thread_name_prefix=name)
-        setters[name](p)
+    if name == "general":
+        p = _general_pool
+        if p is None or getattr(p, "_shutdown", False):
+            p = ThreadPoolExecutor(max_workers=max_workers or _NUM_WORKERS, thread_name_prefix=name)
+            globals()["_general_pool"] = p
+        return p
+    if name == "plugin":
+        p = _plugin_pool
+        if p is None or getattr(p, "_shutdown", False):
+            p = ThreadPoolExecutor(max_workers=max_workers or _NUM_WORKERS, thread_name_prefix=name)
+            globals()["_plugin_pool"] = p
+        return p
+    if name == "audio":
+        p = _audio_pool
+        if p is None or getattr(p, "_shutdown", False):
+            p = ThreadPoolExecutor(max_workers=max_workers or 2, thread_name_prefix=name)
+            globals()["_audio_pool"] = p
+        return p
+    if name == "asset":
+        p = _asset_pool
+        if p is None or getattr(p, "_shutdown", False):
+            p = ThreadPoolExecutor(max_workers=max_workers or _NUM_WORKERS, thread_name_prefix=name)
+            globals()["_asset_pool"] = p
+        return p
+    p = _bvh_parallel_pool
+    if p is None or getattr(p, "_shutdown", False):
+        p = ThreadPoolExecutor(max_workers=max_workers or min(8, max(4, (os.cpu_count() or 4))), thread_name_prefix=name)
+        globals()["_bvh_parallel_pool"] = p
     return p
 
 

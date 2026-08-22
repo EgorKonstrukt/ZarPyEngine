@@ -1914,42 +1914,66 @@ out vec4 frag_color;
                     if pj and pj.enabled and pj.cast_shadows:
                         needs_shadow = True
                         break
+        get_mesh = self.get_or_create_mesh
+        sync_meta = self._sync_import_meta
+        find_fx = self._find_object_effect
+        renderable = snap.renderable
+        cull_entries = snap.cull_entries
+        cull_offsets = snap.cull_offsets
+        cull_counts = snap.cull_counts
+        shadow_list = snap.shadow_renderables
+        splitext = os.path.splitext
+        basename = os.path.basename
         for ent in scene.get_entities_with_component(MeshFilter):
-            if not ent.active:
+            if not ent._active:
                 continue
-            mr = ent.get_component(MeshRenderer)
-            tr = ent.transform
-            if not tr or not mr or not mr.enabled:
+            mr_list = ent._type_map.get(MeshRenderer)
+            if not mr_list:
                 continue
-            mf = ent.get_component(MeshFilter)
+            mr = mr_list[0]
+            if not mr.enabled:
+                continue
+            tt = ent._transform_type
+            if tt is not None:
+                tl = ent._type_map.get(tt)
+                tr = tl[0] if tl else None
+            else:
+                tr = ent.transform
+            if tr is None:
+                continue
+            mf_list = ent._type_map.get(MeshFilter)
+            mf = mf_list[0] if mf_list else ent.get_component(MeshFilter)
+            if mf is None:
+                continue
             mesh_name = mf.mesh_name
-            scale, cp, fuvs = 1.0, False, False
             mesh_path = mf.mesh_path or ""
             if mesh_path:
-                _meta = self._sync_import_meta(mesh_path)
+                _meta = sync_meta(mesh_path)
                 scale, cp, fuvs = _meta[0], _meta[1], _meta[2]
+            else:
+                scale, cp, fuvs = 1.0, False, False
             if not mesh_name and not mesh_path:
                 mesh_name = "cube"
-            elif not mesh_name and mesh_path:
-                mesh_name = os.path.splitext(os.path.basename(mesh_path))[0]
-            mesh = self.get_or_create_mesh(mesh_name, mesh_path, scale, cp, fuvs)
-            if mesh:
+            elif not mesh_name:
+                mesh_name = splitext(basename(mesh_path))[0]
+            mesh = get_mesh(mesh_name, mesh_path, scale, cp, fuvs)
+            if mesh is not None:
                 wm = tr.world_matrix
                 sub_ranges = mesh.sub_mesh_ranges
-                fx_list = self._find_object_effect(ent)
-                block_start = len(snap.renderable)
+                fx_list = find_fx(ent)
+                block_start = len(renderable)
                 if sub_ranges:
                     for sub_idx in range(len(sub_ranges)):
-                        snap.renderable.append([ent, tr, mesh, mr, wm, sub_idx, fx_list])
+                        renderable.append([ent, tr, mesh, mr, wm, sub_idx, fx_list])
                     n_sub = len(sub_ranges)
                 else:
-                    snap.renderable.append([ent, tr, mesh, mr, wm, -1, fx_list])
+                    renderable.append([ent, tr, mesh, mr, wm, -1, fx_list])
                     n_sub = 1
-                snap.cull_entries.append(snap.renderable[block_start])
-                snap.cull_offsets.append(block_start)
-                snap.cull_counts.append(n_sub)
+                cull_entries.append(renderable[block_start])
+                cull_offsets.append(block_start)
+                cull_counts.append(n_sub)
                 if needs_shadow and mr.cast_shadows:
-                    snap.shadow_renderables.append([mesh, tr])
+                    shadow_list.append([mesh, tr])
         for ent in scene.get_entities_with_component(SkinnedMeshRenderer):
             if not ent.active:
                 continue

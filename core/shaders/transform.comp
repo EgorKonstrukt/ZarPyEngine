@@ -1,0 +1,39 @@
+#version 460 core
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer InPos { vec4 in_pos[]; };
+layout(std430, binding = 1) readonly buffer InRot { vec4 in_rot[]; };
+layout(std430, binding = 2) readonly buffer InScale { vec4 in_scale[]; };
+layout(std430, binding = 3) readonly buffer ParentIdx { int parent_idx[]; };
+layout(std430, binding = 4) writeonly buffer OutWorld { mat4 out_world[]; };
+
+mat4 quat_to_mat(vec4 q) {
+    float x = q.x, y = q.y, z = q.z, w = q.w;
+    float x2 = x + x, y2 = y + y, z2 = z + z;
+    float xx = x * x2, xy = x * y2, xz = x * z2;
+    float yy = y * y2, yz = y * z2, zz = z * z2;
+    float wx = w * x2, wy = w * y2, wz = w * z2;
+    mat4 m = mat4(1.0);
+    m[0][0] = 1.0 - (yy + zz); m[0][1] = xy + wz; m[0][2] = xz - wy;
+    m[1][0] = xy - wz; m[1][1] = 1.0 - (xx + zz); m[1][2] = yz + wx;
+    m[2][0] = xz + wy; m[2][1] = yz - wx; m[2][2] = 1.0 - (xx + yy);
+    return m;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    vec4 pos = in_pos[i];
+    vec4 rot = in_rot[i];
+    vec4 scl = in_scale[i];
+    mat4 rm = quat_to_mat(rot);
+    rm[0].xyz *= scl.x;
+    rm[1].xyz *= scl.y;
+    rm[2].xyz *= scl.z;
+    rm[3] = vec4(pos.xyz, 1.0);
+    int p = parent_idx[i];
+    if (p >= 0) {
+        out_world[i] = rm * out_world[p];
+    } else {
+        out_world[i] = rm;
+    }
+}

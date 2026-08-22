@@ -1,6 +1,9 @@
-# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False
+# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False, initializedcheck=False, overflowcheck=False
+# distutils: extra_compile_args = -O3 -ffast-math -march=native -fopenmp
+# distutils: extra_link_args = -fopenmp
 import numpy as np
 cimport numpy as np
+from cython.parallel import prange
 from core._math_vec cimport Vec3, Quat
 
 DTYPE = np.float64

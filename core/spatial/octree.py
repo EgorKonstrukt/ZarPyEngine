@@ -163,14 +163,21 @@ class OctreeNode:
         return False
 
     def query(self, aabb: AABB, results: list[str]):
-        if not self.aabb().intersects(aabb):
-            return
-        for eid in self.objects:
-            if aabb.intersects(self.objects[eid]):
-                results.append(eid)
-        if not self._is_leaf:
-            for child in self.children:
-                child.query(aabb, results)
+        stack = [self]
+        pop = stack.pop
+        append_stack = stack.append
+        aabb_int = aabb.intersects
+        while stack:
+            node = pop()
+            if not node.aabb().intersects(aabb):
+                continue
+            objs = node.objects
+            for eid, ea in objs.items():
+                if aabb_int(ea):
+                    results.append(eid)
+            if not node._is_leaf:
+                for child in node.children:
+                    append_stack(child)
 
     def query_point(self, point: Vec3, results: list[str]):
         if not self.aabb().contains_point(point):
@@ -184,22 +191,25 @@ class OctreeNode:
 
     def raycast(self, origin: Vec3, direction: Vec3, max_dist: float,
                 results: list[tuple[str, float]]) -> float:
-        t = self.aabb().intersects_ray(origin, direction, max_dist)
-        if t < 0:
-            return -1.0
         closest = max_dist
-        for eid, eaabb in self.objects.items():
-            t2 = eaabb.intersects_ray(origin, direction, closest)
-            if t2 >= 0:
-                results.append((eid, t2))
-                if t2 < closest:
-                    closest = t2
-        if not self._is_leaf:
-            for child in self.children:
-                ct = child.raycast(origin, direction, closest, results)
-                if ct >= 0 and ct < closest:
-                    closest = ct
-        return closest
+        stack = [self]
+        pop = stack.pop
+        append_s = stack.append
+        while stack:
+            node = pop()
+            t = node.aabb().intersects_ray(origin, direction, closest)
+            if t < 0:
+                continue
+            for eid, eaabb in node.objects.items():
+                t2 = eaabb.intersects_ray(origin, direction, closest)
+                if t2 >= 0:
+                    results.append((eid, t2))
+                    if t2 < closest:
+                        closest = t2
+            if not node._is_leaf:
+                for child in node.children:
+                    append_s(child)
+        return closest if results else -1.0
 
     def clear(self):
         self.objects.clear()

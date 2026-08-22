@@ -229,13 +229,14 @@ class MaterialManager:
     }
 
     def apply_material(self, mat: Optional[Material], prog: moderngl.Program):
-        names = self._prog_uniform_names.get(id(prog))
+        pid = id(prog)
+        names = self._prog_uniform_names.get(pid)
         if names is None:
             try:
                 names = frozenset(prog)
             except Exception:
                 names = frozenset()
-            self._prog_uniform_names[id(prog)] = names
+            self._prog_uniform_names[pid] = names
         self._default_white.use(0)
         white4 = self._WHITE4
         zero3 = self._ZERO3
@@ -253,9 +254,12 @@ class MaterialManager:
             prog["u_normal_tex"].value = 0
         if "u_roughness_tex" in names:
             prog["u_roughness_tex"].value = 0
-        for _old_active in ("u_use_albedo_tex", "u_use_normal_tex", "u_use_roughness_tex"):
-            if _old_active in names:
-                prog[_old_active].value = 0
+        if "u_use_albedo_tex" in names:
+            prog["u_use_albedo_tex"].value = 0
+        if "u_use_normal_tex" in names:
+            prog["u_use_normal_tex"].value = 0
+        if "u_use_roughness_tex" in names:
+            prog["u_use_roughness_tex"].value = 0
         if "_BaseMap" in names:
             prog["_BaseMap"].value = 0
         if "_BaseColor" in names:
@@ -276,43 +280,83 @@ class MaterialManager:
             prog["_NormalMap"].value = 0
         if "_OcclusionMap" in names:
             prog["_OcclusionMap"].value = 0
-        for _active in ("_BaseMap_Active", "_NormalMap_Active", "_OcclusionMap_Active",
-                        "_HeightMap_Active", "_EmissionMap_Active", "_DetailAlbedoMap_Active",
-                        "_DetailNormalMap_Active"):
-            if _active in names:
-                prog[_active].value = 0
+        if "_BaseMap_Active" in names:
+            prog["_BaseMap_Active"].value = 0
+        if "_NormalMap_Active" in names:
+            prog["_NormalMap_Active"].value = 0
+        if "_OcclusionMap_Active" in names:
+            prog["_OcclusionMap_Active"].value = 0
+        if "_HeightMap_Active" in names:
+            prog["_HeightMap_Active"].value = 0
+        if "_EmissionMap_Active" in names:
+            prog["_EmissionMap_Active"].value = 0
+        if "_DetailAlbedoMap_Active" in names:
+            prog["_DetailAlbedoMap_Active"].value = 0
+        if "_DetailNormalMap_Active" in names:
+            prog["_DetailNormalMap_Active"].value = 0
         if mat is None:
             return
         props = mat.properties
-        tex_unit = 0
+        tex_unit = 1
         tex_uniform_map = self._TEX_UNIFORM_MAP
-        active_names = self._prog_tex_active_names.setdefault(id(prog), {})
+        active_names = self._prog_tex_active_names.setdefault(pid, {})
         for key, value in props.items():
             if isinstance(value, str):
+                if not value:
+                    tex_name = tex_uniform_map.get(key, key)
+                    tex_active = 0
+                    candidates = active_names.get(tex_name)
+                    if candidates is None:
+                        cand = []
+                        a1 = f"{tex_name}_Active"
+                        if a1 in names:
+                            cand.append(a1)
+                        if tex_name.startswith("u_"):
+                            a2 = f"u_use_{tex_name[2:]}"
+                            if a2 in names:
+                                cand.append(a2)
+                        active_names[tex_name] = cand
+                        candidates = cand
+                    for aname in candidates:
+                        prog[aname].value = 0
+                    continue
                 tex_name = tex_uniform_map.get(key, key)
-                tex = None
-                if value and tex_name in names:
-                    tex = self.load_texture(value)
-                    if tex:
-                        tex.use(tex_unit)
-                        prog[tex_name].value = tex_unit
-                        tex_unit += 1
-                tex_active = 1 if tex else 0
+                if tex_name not in names:
+                    continue
+                tex = self.load_texture(value)
+                if tex is not None:
+                    tex.use(tex_unit)
+                    prog[tex_name].value = tex_unit
+                    tex_unit += 1
+                    tex_active = 1
+                else:
+                    prog[tex_name].value = 0
+                    tex_active = 0
                 candidates = active_names.get(tex_name)
                 if candidates is None:
-                    candidates = [n for n in (f"{tex_name}_Active", f"u_use_{tex_name[2:]}" if tex_name.startswith("u_") else None) if n and n in names]
-                    active_names[tex_name] = candidates
+                    cand = []
+                    a1 = f"{tex_name}_Active"
+                    if a1 in names:
+                        cand.append(a1)
+                    if tex_name.startswith("u_"):
+                        a2 = f"u_use_{tex_name[2:]}"
+                        if a2 in names:
+                            cand.append(a2)
+                    active_names[tex_name] = cand
+                    candidates = cand
                 for aname in candidates:
                     prog[aname].value = tex_active
                 continue
             if key in names:
                 self._set_uniform_value(prog, key, value)
-            elif f"u_{key}" in names:
-                self._set_uniform_value(prog, f"u_{key}", value)
             else:
-                alias = self._UNIFORM_ALIASES.get(key)
-                if alias and alias in names:
-                    self._set_uniform_value(prog, alias, value)
+                ukey = f"u_{key}"
+                if ukey in names:
+                    self._set_uniform_value(prog, ukey, value)
+                else:
+                    alias = self._UNIFORM_ALIASES.get(key)
+                    if alias is not None and alias in names:
+                        self._set_uniform_value(prog, alias, value)
 
     def _has_uniform(self, prog, name: str) -> bool:
         names = self._prog_uniform_names.get(id(prog))

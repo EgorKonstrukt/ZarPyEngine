@@ -10,8 +10,10 @@ from core.renderer.gpu_culling import WORLD_MATRIX_BINDING, INDEX_BINDING
 
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 
-_INITIAL_INST_VBO_CAPACITY = 4096
-_MAX_VAO_CACHE = 512
+_INITIAL_INST_VBO_CAPACITY = 8192
+_MAX_VAO_CACHE = 1024
+
+_INSTANCING_CACHE: dict[int, bool] = {}
 
 
 def resolve_normal_matrix(cache: dict, ent_id: int, model_d) -> np.ndarray:
@@ -35,13 +37,20 @@ def resolve_normal_matrix(cache: dict, ent_id: int, model_d) -> np.ndarray:
 
 
 def _supports_instancing(prog: moderngl.Program) -> bool:
+    pid = id(prog)
+    cached = _INSTANCING_CACHE.get(pid)
+    if cached is not None:
+        return cached
     try:
         locs = prog._attribute_locations
         for a in _INSTANCE_ATTRS:
             if locs.get(a, -1) < 0:
+                _INSTANCING_CACHE[pid] = False
                 return False
+        _INSTANCING_CACHE[pid] = True
         return True
     except Exception:
+        _INSTANCING_CACHE[pid] = False
         return False
 
 
@@ -181,17 +190,28 @@ class RenderBatcher:
         return names
 
     def collect_groups(self, renderables, materials, shaders):
-        groups = defaultdict(list)
+        groups: dict = {}
+        get_mat = materials.load_material
+        get_prog = shaders.get_or_compile
+        default_prog = self._default_prog
+        none_id = id(self._MAT_NONE)
         for entry in renderables:
-            ent, tr, mesh, mr = entry[:4]
+            ent, tr, mesh, mr = entry[0], entry[1], entry[2], entry[3]
             wm = entry[4] if len(entry) > 4 else tr.world_matrix
             sub_idx = entry[5] if len(entry) > 5 else -1
-            mat = materials.load_material(mr.get_material_path(sub_idx))
-            shader_path = mat.shader_path if mat else ""
-            prog = shaders.get_or_compile(shader_path) or self._default_prog
-            mat_key = id(mat) if mat else id(self._MAT_NONE)
+            mpath = mr.get_material_path(sub_idx)
+            mat = get_mat(mpath)
+            shader_path = mat.shader_path if mat is not None else ""
+            prog = get_prog(shader_path) if shader_path else None
+            if prog is None:
+                prog = default_prog
+            mat_key = id(mat) if mat is not None else none_id
             key = (id(prog), mat_key, id(mesh), mr.receive_shadows, sub_idx, getattr(mr, 'dynamic_reflections', False))
-            groups[key].append((ent, tr, mesh, mr, mat, prog, wm, sub_idx))
+            lst = groups.get(key)
+            if lst is None:
+                groups[key] = [(ent, tr, mesh, mr, mat, prog, wm, sub_idx)]
+            else:
+                lst.append((ent, tr, mesh, mr, mat, prog, wm, sub_idx))
         return groups
 
     def _ensure_index_buffer(self, n: int) -> moderngl.Buffer:
@@ -209,11 +229,13 @@ class RenderBatcher:
 
     def _write_shared_vbo(self, matrices: list[Mat4]):
         n = len(matrices)
+        if n == 0:
+            return self._shared_inst_vbo
         needed_cap = n
         if needed_cap > self._inst_vbo_capacity:
             new_cap = self._inst_vbo_capacity
             while new_cap < needed_cap:
-                new_cap *= 2
+                new_cap <<= 1
             try:
                 self._shared_inst_vbo.release()
             except Exception:
@@ -228,10 +250,10 @@ class RenderBatcher:
             self._vao_cache.clear()
         try:
             from core._render_utils import batch_mat4_to_f32_flat
-            data = batch_mat4_to_f32_flat(matrices).tobytes()
+            flat = batch_mat4_to_f32_flat(matrices)
+            self._shared_inst_vbo.write(flat.tobytes())
         except ImportError:
-            data = Mat4.batch_to_f32(matrices).tobytes()
-        self._shared_inst_vbo.write(data)
+            self._shared_inst_vbo.write(Mat4.batch_to_f32(matrices).tobytes())
         return self._shared_inst_vbo
 
     def _get_vao(self, prog: moderngl.Program, mesh) -> moderngl.VertexArray:

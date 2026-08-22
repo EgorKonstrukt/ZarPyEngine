@@ -547,8 +547,10 @@ class SceneViewport(QOpenGLWidget):
         self._screen_fbo.use()
 
     def _get_physical_dims(self):
-        if self._physical_w > 0 and self._physical_h > 0:
-            return self._physical_w, self._physical_h
+        pw = self._physical_w
+        ph = self._physical_h
+        if pw > 0 and ph > 0:
+            return pw, ph
         dpr = self.devicePixelRatio()
         return int(self.width() * dpr), int(self.height() * dpr)
 
@@ -871,12 +873,14 @@ class SceneViewport(QOpenGLWidget):
                 pass
 
     def _get_selected_set(self):
+        if self._engine.play_mode:
+            return None
         lst = self._selected_entities
-        v = id(lst), len(lst), self._selected_set_version
+        v = (id(lst), len(lst), self._selected_set_version)
         if v != self._selected_set_key:
             self._selected_set_key = v
-            self._selected_set = frozenset(lst)
-        return self._selected_set if not self._engine.play_mode else None
+            self._selected_set = frozenset(lst) if lst else frozenset()
+        return self._selected_set
 
     def _update_status_labels(self):
         if self._no_qt_overlay:

@@ -1,7 +1,10 @@
-# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False
+# cython: boundscheck=False, wraparound=False, cdivision=True, nonecheck=False, initializedcheck=False, overflowcheck=False
+# distutils: extra_compile_args = -O3 -ffast-math -march=native -fopenmp
+# distutils: extra_link_args = -fopenmp
 import numpy as np
 cimport numpy as np
 from libc.math cimport sqrt, fabs
+from cython.parallel import prange
 
 DTYPE = np.float64
 ctypedef np.float64_t DTYPE_t

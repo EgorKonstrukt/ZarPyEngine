@@ -1,0 +1,30 @@
+#version 460 core
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer WorldMats { mat4 world_mats[]; };
+layout(std430, binding = 1) readonly buffer InAABB { vec4 aabb_min[]; vec4 aabb_max[]; };
+layout(std430, binding = 2) writeonly buffer OutAABB { vec4 out_min[]; vec4 out_max[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    mat4 wm = world_mats[i];
+    vec3 mn = aabb_min[i].xyz;
+    vec3 mx = aabb_max[i].xyz;
+    vec3 corners[8];
+    corners[0] = vec3(mn.x, mn.y, mn.z);
+    corners[1] = vec3(mx.x, mn.y, mn.z);
+    corners[2] = vec3(mx.x, mx.y, mn.z);
+    corners[3] = vec3(mn.x, mx.y, mn.z);
+    corners[4] = vec3(mn.x, mn.y, mx.z);
+    corners[5] = vec3(mx.x, mn.y, mx.z);
+    corners[6] = vec3(mx.x, mx.y, mx.z);
+    corners[7] = vec3(mn.x, mx.y, mx.z);
+    vec3 bmin = (wm * vec4(corners[0], 1.0)).xyz;
+    vec3 bmax = bmin;
+    for (int k = 1; k < 8; k++) {
+        vec3 p = (wm * vec4(corners[k], 1.0)).xyz;
+        bmin = min(bmin, p);
+        bmax = max(bmax, p);
+    }
+    out_min[i] = vec4(bmin, 1.0);
+    out_max[i] = vec4(bmax, 1.0);
+}

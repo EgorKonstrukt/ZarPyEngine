@@ -1,0 +1,27 @@
+#version 460 core
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer InVerts { vec4 in_pos[]; vec4 in_nrm[]; };
+layout(std430, binding = 1) readonly buffer BoneMats { mat4 bone_mats[]; };
+layout(std430, binding = 2) readonly buffer BoneIdx { ivec4 bone_idx[]; };
+layout(std430, binding = 3) readonly buffer BoneWgt { vec4 bone_wgt[]; };
+layout(std430, binding = 4) writeonly buffer OutVerts { vec4 out_pos[]; vec4 out_nrm[]; };
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    vec4 p = in_pos[i];
+    vec4 n = vec4(in_nrm[i].xyz, 0.0);
+    ivec4 idx = bone_idx[i];
+    vec4 w = bone_wgt[i];
+    vec4 skinned_p = vec4(0.0);
+    vec4 skinned_n = vec4(0.0);
+    skinned_p += (bone_mats[idx.x] * p) * w.x;
+    skinned_p += (bone_mats[idx.y] * p) * w.y;
+    skinned_p += (bone_mats[idx.z] * p) * w.z;
+    skinned_p += (bone_mats[idx.w] * p) * w.w;
+    skinned_n += (bone_mats[idx.x] * n) * w.x;
+    skinned_n += (bone_mats[idx.y] * n) * w.y;
+    skinned_n += (bone_mats[idx.z] * n) * w.z;
+    skinned_n += (bone_mats[idx.w] * n) * w.w;
+    out_pos[i] = skinned_p;
+    out_nrm[i] = normalize(skinned_n);
+}
