@@ -150,6 +150,12 @@ class ShadowRenderer:
         self._model_pack_buf_cap: int = 0
         self._temporal_frame: int = 0
         self._temporal_skip_idx: int = -1
+        self._cascade_resolutions: list[int] = [2048, 1024, 1024, 512]
+        self._last_light_dir: Optional[Vec3] = None
+        self._last_cam_view_hash: int = 0
+        self._import_cache: dict[str, tuple] = {}
+        self._import_cache_mtime: dict[str, float] = {}
+        self._shadow_cache_valid: bool = False
         self._create_csm_resources()
 
     def update_settings(self, shadow_resolution: int = None, shadow_distance: float = None,
@@ -157,6 +163,8 @@ class ShadowRenderer:
         changed = False
         if shadow_resolution is not None and shadow_resolution != self._shadow_resolution:
             self._shadow_resolution = shadow_resolution
+            base = shadow_resolution
+            self._cascade_resolutions = [base, max(512, base//2), max(512, base//2), max(256, base//4)]
             changed = True
         if shadow_distance is not None and shadow_distance != self._shadow_distance:
             self._shadow_distance = shadow_distance
@@ -186,8 +194,10 @@ class ShadowRenderer:
                 pass
         self._shadow_maps = []
         self._shadow_fbos = []
-        res = self._shadow_resolution
-        for _ in range(self._cascade_count):
+        base = self._shadow_resolution
+        for i in range(self._cascade_count):
+            res = self._cascade_resolutions[i] if i < len(self._cascade_resolutions) else base
+            res = min(res, base)
             tex = self._ctx.depth_texture((res, res))
             tex.repeat_x = False
             tex.repeat_y = False
@@ -258,31 +268,70 @@ class ShadowRenderer:
 
     def _build_renderable_shadow(self, scene) -> list[tuple[MeshData, Mat4]]:
         result = []
-        for ent in scene.get_entities_with_component(MeshFilter):
-            if not ent.active:
+        get_entities = scene.get_entities_with_component
+        for ent in get_entities(MeshFilter):
+            if not ent._active:
                 continue
-            mf = ent.get_component(MeshFilter)
-            mr = ent.get_component(MeshRenderer)
-            tr = ent.transform
-            if not tr or not mr or not mr.enabled:
+            tm = ent._type_map
+            mf_list = tm.get(MeshFilter)
+            if not mf_list:
                 continue
-            if not mr.cast_shadows:
+            mf = mf_list[0]
+            mr_list = tm.get(MeshRenderer)
+            if not mr_list:
                 continue
-            mp = mf.mesh_path or mf.mesh_name
+            mr = mr_list[0]
+            if not mr.enabled or not mr.cast_shadows:
+                continue
+            tt = ent._transform_type
+            tr = tm.get(tt, [None])[0] if tt is not None and tt in tm else ent.transform
+            if tr is None:
+                continue
+            mp = mf.mesh_path or mf.mesh_name or ""
+            if not mp:
+                continue
             _imp = mp + ".import"
-            try:
-                with open(_imp) as _f:
-                    _s = json.load(_f)
-                _sk, _scp, _sfu = _s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False)
-            except Exception:
-                _sk, _scp, _sfu = 1.0, False, False
+            cached = self._import_cache.get(_imp)
+            if cached is not None:
+                mtime = self._import_cache_mtime.get(_imp, 0)
+                try:
+                    cur = os.path.getmtime(_imp)
+                    if abs(cur - mtime) < 0.001:
+                        _sk, _scp, _sfu = cached
+                    else:
+                        raise KeyError
+                except Exception:
+                    try:
+                        with open(_imp) as _f:
+                            _s = json.load(_f)
+                        _sk, _scp, _sfu = _s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False)
+                    except Exception:
+                        _sk, _scp, _sfu = 1.0, False, False
+                    self._import_cache[_imp] = (_sk, _scp, _sfu)
+                    try:
+                        self._import_cache_mtime[_imp] = os.path.getmtime(_imp)
+                    except Exception:
+                        self._import_cache_mtime[_imp] = 0
+            else:
+                try:
+                    with open(_imp) as _f:
+                        _s = json.load(_f)
+                    _sk, _scp, _sfu = _s.get("scale", 1.0), _s.get("center_pivot", False), _s.get("flip_uvs", False)
+                except Exception:
+                    _sk, _scp, _sfu = 1.0, False, False
+                self._import_cache[_imp] = (_sk, _scp, _sfu)
+                try:
+                    self._import_cache_mtime[_imp] = os.path.getmtime(_imp)
+                except Exception:
+                    self._import_cache_mtime[_imp] = 0
             cache_key = f"{mp}|s={_sk}|cp={_scp}|fu={_sfu}"
             mesh = None
-            if hasattr(self, '_get_mesh'):
-                mesh = self._get_mesh(cache_key)
+            gm = getattr(self, '_get_mesh', None)
+            if gm is not None:
+                mesh = gm(cache_key)
                 if mesh is None and not mf.mesh_path:
-                    mesh = self._get_mesh(mf.mesh_name)
-            if mesh:
+                    mesh = gm(mf.mesh_name)
+            if mesh is not None:
                 result.append((mesh, tr))
         return result
 
@@ -599,12 +648,27 @@ class ShadowRenderer:
         splits = self._cascade_distances(cam_near, cam_far)
         self._cascade_splits = splits
         near_z = max(cam_near, 0.01)
-        shadow_res = self._shadow_resolution
         prog = self._prog
         prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
         first_cascade = True
+        self._temporal_frame += 1
+        view_hash = hash(view_mat._d.tobytes())
+        light_hash = hash((round(ld_x,3), round(ld_y,3), round(ld_z,3)))
+        cam_moved = view_hash != self._last_cam_view_hash or light_hash != getattr(self, '_last_light_hash', None)
+        if cam_moved:
+            self._shadow_cache_valid = False
+        self._last_cam_view_hash = view_hash
+        self._last_light_hash = light_hash
 
         for ci in range(self._cascade_count):
+            res = self._cascade_resolutions[ci] if ci < len(self._cascade_resolutions) else shadow_res
+            if not cam_moved:
+                if ci == 3 and (self._temporal_frame % 3) != 0:
+                    near_z = splits[ci]
+                    continue
+                if ci == 2 and (self._temporal_frame % 2) != 0:
+                    near_z = splits[ci]
+                    continue
             if _HAS_CYTHON:
                 compute_frustum_corners_out(
                     near_z, splits[ci], cam_fov, aspect,
@@ -612,13 +676,13 @@ class ShadowRenderer:
                 )
                 build_directional_cascade_fast(
                     ld_x, ld_y, ld_z,
-                    self._frustum_corners_buf, splits[ci] - near_z, shadow_res,
+                    self._frustum_corners_buf, splits[ci] - near_z, res,
                     self._cascade_vps_raw[ci]
                 )
                 np.copyto(self._vp_f32_buf, self._cascade_vps_raw[ci])
             else:
                 corners = self._get_frustum_corners(near_z, splits[ci], cam_fov, aspect, inv_view)
-                vp = self._build_directional_cascade(light_dir, corners, splits[ci] - near_z)
+                vp = self._build_directional_cascade(light_dir, corners, splits[ci] - near_z, res)
                 np.copyto(self._vp_f32_buf, vp)
             self._light_space_matrices[ci] = self._vp_f32_buf.copy()
 
@@ -626,12 +690,30 @@ class ShadowRenderer:
                 culled = frustum_cull_shadow_groups(shadow_groups, self._vp_f32_buf)
             else:
                 culled = shadow_groups
+            if ci >= 2 and culled:
+                filtered = {}
+                thr = 0.4 if ci == 2 else 0.8
+                for mid, grp in culled.items():
+                    keep = []
+                    for mesh, tr in grp:
+                        br = getattr(mesh, 'bounding_radius', 1.0)
+                        sx = (tr.world_matrix._d[0,0]**2 + tr.world_matrix._d[1,0]**2 + tr.world_matrix._d[2,0]**2) ** 0.5
+                        sy = (tr.world_matrix._d[0,1]**2 + tr.world_matrix._d[1,1]**2 + tr.world_matrix._d[2,1]**2) ** 0.5
+                        sz = (tr.world_matrix._d[0,2]**2 + tr.world_matrix._d[1,2]**2 + tr.world_matrix._d[2,2]**2) ** 0.5
+                        s = sx if sx > sy else sy
+                        if sz > s:
+                            s = sz
+                        if br * s >= thr:
+                            keep.append((mesh, tr))
+                    if keep:
+                        filtered[mid] = keep
+                culled = filtered
 
             if culled:
                 if first_cascade:
                     self._shadow_fbos[ci].clear(depth=1.0)
                     self._shadow_fbos[ci].use()
-                    self._ctx.viewport = (0, 0, shadow_res, shadow_res)
+                    self._ctx.viewport = (0, 0, res, res)
                     self._ctx.enable(moderngl.DEPTH_TEST)
                     self._ctx.depth_mask = True
                     self._ctx.disable(moderngl.CULL_FACE)
@@ -640,6 +722,7 @@ class ShadowRenderer:
                 else:
                     self._shadow_fbos[ci].clear(depth=1.0)
                     self._shadow_fbos[ci].use()
+                    self._ctx.viewport = (0, 0, res, res)
                     prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
 
                 supports_instancing = _shadow_supports_instancing(prog)
@@ -660,7 +743,7 @@ class ShadowRenderer:
                         for _, tr in group:
                             prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
                             mesh.render(prog)
-                self._maybe_render_skinned(self._vp_f32_buf, self._shadow_fbos[ci], shadow_res)
+                self._maybe_render_skinned(self._vp_f32_buf, self._shadow_fbos[ci], res)
 
             near_z = splits[ci]
 
@@ -685,7 +768,7 @@ class ShadowRenderer:
         return corners
 
     def _build_directional_cascade(self, light_dir: Vec3, corners: list[np.ndarray],
-                                   depth_span: float) -> np.ndarray:
+                                   depth_span: float, shadow_res: int = None) -> np.ndarray:
         n = len(corners)
         cx = cy = cz = 0.0
         for c in corners:
@@ -718,7 +801,8 @@ class ShadowRenderer:
             cx * m[0][2] + cy * m[1][2] + cz * m[2][2] + m[3][2],
             cx * m[0][3] + cy * m[1][3] + cz * m[2][3] + m[3][3],
         )
-        texel_size = (radius * 2.0) / max(1, self._shadow_resolution)
+        res = shadow_res if shadow_res is not None else self._shadow_resolution
+        texel_size = (radius * 2.0) / max(1, res)
         cx_l = math.floor(center_light[0] / texel_size) * texel_size
         cy_l = math.floor(center_light[1] / texel_size) * texel_size
         left = cx_l - radius
