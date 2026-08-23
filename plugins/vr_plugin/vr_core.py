@@ -221,6 +221,7 @@ class VRState:
         self.eye_view_enabled = True
         self._prev_trigger = [False, False]
         self.rig_yaw = 0.0
+        self.rig_vel = (0.0, 0.0, 0.0)
 
 _gl = None
 
@@ -559,6 +560,7 @@ def shutdown():
     _vr_state.system_id = None
     _vr_state._session_running = False
     _vr_state.rig_yaw = 0.0
+    _vr_state.rig_vel = (0.0, 0.0, 0.0)
     _free_blit_fbos()
     _vr_state._xr_layer = None
     _vr_state._frame_begun = False
@@ -875,6 +877,100 @@ def get_controller_ray(i: int):
     fwd = _quat_to_fwd(*q)
     return (origin, fwd)
 
+def sync_vr_entities():
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if not eng or not eng.scene:
+            return
+        sc = eng.scene
+        from plugins.vr_plugin import vr_core as _vc_sync_check
+        is_active = _vc_sync_check.is_active() and _vc_sync_check.session_running()
+        for e in sc.get_all_entities():
+            from plugins.vr_plugin.components.vr_components import VRHead, VRLeftController, VRRightController, VRController
+            vh = e.get_component(VRHead)
+            if vh:
+                tr = e.transform
+                if tr:
+                    if is_active:
+                        pos = get_hmd_world_pos()
+                        quat = get_hmd_world_quat()
+                        tr.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(pos[0], pos[1], pos[2])
+                        tr.local_rotation = __import__('core.maths.math3d', fromlist=['Quat']).Quat(quat[0], quat[1], quat[2], quat[3])
+                    else:
+                        try:
+                            parent = e.parent
+                            if parent:
+                                tr.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
+                            else:
+                                tr.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
+                        except Exception:
+                            pass
+                        except Exception:
+                            pass
+            vc = e.get_component(VRController)
+            if not vc:
+                vc = e.get_component(VRLeftController)
+            if not vc:
+                vc = e.get_component(VRRightController)
+            if vc:
+                idx = 0 if getattr(vc, 'hand', 'Left') == 'Left' else 1
+                try:
+                    if e.get_component(VRLeftController):
+                        idx = 0
+                    elif e.get_component(VRRightController):
+                        idx = 1
+                except Exception:
+                    pass
+                tr2 = e.transform
+                if tr2:
+                    if is_active:
+                        pos2 = get_controller_world_pos(idx)
+                        quat2 = get_controller_world_quat(idx)
+                        if pos2 is not None:
+                            tr2.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(pos2[0], pos2[1], pos2[2])
+                        if quat2 is not None:
+                            tr2.local_rotation = __import__('core.maths.math3d', fromlist=['Quat']).Quat(quat2[0], quat2[1], quat2[2], quat2[3])
+                    else:
+                        off = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(-0.25, 1.2, -0.2) if idx == 0 else __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.25, 1.2, -0.2)
+                        try:
+                            parent = e.parent
+                            if parent:
+                                tr2.local_position = off
+                            else:
+                                tr2.position = off
+                        except Exception:
+                            pass
+        try:
+            for re in sc.get_all_entities():
+                vrc = re.get_component(__import__('plugins.vr_plugin.components.vr_components', fromlist=['VR']).VR)
+                if vrc:
+                    trr = re.transform
+                    if trr:
+                        try:
+                            ipd_s = get_ipd() / 0.063
+                            trr.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(ipd_s, ipd_s, ipd_s)
+                        except Exception:
+                            pass
+                    break
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def has_vr_rig():
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if eng and eng.scene:
+            for e in eng.scene.get_all_entities():
+                from plugins.vr_plugin.components.vr_components import VR
+                if e.get_component(VR):
+                    return True
+    except Exception:
+        pass
+    return False
+
 def get_hmd_world_pos():
     return _xr_hmd_to_world()
 
@@ -901,6 +997,12 @@ def raycast_scene(origin, direction, max_dist=RAY_MAX_DIST):
         for ent in scene.get_all_entities():
             if not ent.active or not ent.transform:
                 continue
+            try:
+                from plugins.vr_plugin.components.vr_components import VR, VRHead, VRController, VRLeftController, VRRightController, VRRay, VRSelection
+                if ent.get_component(VR) or ent.get_component(VRHead) or ent.get_component(VRController) or ent.get_component(VRLeftController) or ent.get_component(VRRightController):
+                    continue
+            except Exception:
+                pass
             d = _test_entity_pick(ent, ro, rd, ray_origin, ray_dir)
             if d > 0 and d < best_d and d < max_dist:
                 best_d = d
@@ -966,45 +1068,54 @@ def update_vr_locomotion(cam, dt: float):
         desired_z = (right_v[2]*lx + fwd_h[2]*ly) * speed
     if abs(ry) > 1e-6:
         desired_y = ry * speed
-    try:
-        vx = float(cam._vel.x)
-        vy = float(cam._vel.y)
-        vz = float(cam._vel.z)
-    except Exception:
-        vx = 0.0
-        vy = 0.0
-        vz = 0.0
-        try:
-            cam._vel = cam._vel
-        except Exception:
-            from core.maths.math3d import Vec3 as _Vec3
-            cam._vel = _Vec3(0,0,0)
+    rvx, rvy, rvz = _vr_state.rig_vel
     lerp = min(1.0, dt * accel_factor)
-    vx += (desired_x - vx) * lerp
-    vz += (desired_z - vz) * lerp
-    vy += (desired_y - vy) * lerp
+    rvx += (desired_x - rvx) * lerp
+    rvz += (desired_z - rvz) * lerp
+    rvy += (desired_y - rvy) * lerp
     if abs(desired_x) < 1e-6 and abs(desired_z) < 1e-6 and abs(desired_y) < 1e-6:
-        damp = 0.85
+        damp = math.exp(-8.0 * dt)
         try:
-            damp = float(getattr(cam, '_damping', 8.0))
-            damp = max(0.0, min(0.99, 1.0 - math.exp(-damp * dt)))
-            # Use simple decay for now
-            vx *= 0.85
-            vy *= 0.85
-            vz *= 0.85
+            dval = float(getattr(cam, '_damping', 8.0))
+            damp = math.exp(-dval * dt)
         except Exception:
-            vx *= 0.85
-            vy *= 0.85
-            vz *= 0.85
+            pass
+        rvx *= damp
+        rvy *= damp
+        rvz *= damp
+        if abs(rvx) < 0.001 and abs(rvy) < 0.001 and abs(rvz) < 0.001:
+            rvx = 0.0
+            rvy = 0.0
+            rvz = 0.0
+    _vr_state.rig_vel = (rvx, rvy, rvz)
+    rig_moved = False
     try:
-        cam._vel.x = vx
-        cam._vel.y = vy
-        cam._vel.z = vz
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if eng and eng.scene:
+            for e in eng.scene.get_all_entities():
+                from plugins.vr_plugin.components.vr_components import VR
+                vr_comp = e.get_component(VR)
+                if vr_comp is not None:
+                    tr = e.transform
+                    if tr:
+                        tr.position = tr.position + __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx * dt, rvy * dt, rvz * dt)
+                        vr_comp.rig_yaw = _vr_state.rig_yaw
+                        vr_comp.velocity = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx, rvy, rvz)
+                        rig_moved = True
+                    break
     except Exception:
         pass
-    cam._position.x += vx * dt
-    cam._position.y += vy * dt
-    cam._position.z += vz * dt
+    if not rig_moved:
+        cam._position.x += rvx * dt
+        cam._position.y += rvy * dt
+        cam._position.z += rvz * dt
+    try:
+        cam._vel.x = rvx
+        cam._vel.y = rvy
+        cam._vel.z = rvz
+    except Exception:
+        pass
     if abs(rx) > 1e-6:
         delta = rx * math.degrees(VR_TURN_SPEED) * dt
         cam._yaw -= delta
@@ -1017,6 +1128,24 @@ def update_vr_locomotion(cam, dt: float):
             _vr_state.rig_yaw -= 2*math.pi
         if _vr_state.rig_yaw < -math.pi:
             _vr_state.rig_yaw += 2*math.pi
+        try:
+            from core.engine.engine import Engine
+            eng2 = Engine.instance()
+            if eng2 and eng2.scene:
+                for e2 in eng2.scene.get_all_entities():
+                    from plugins.vr_plugin.components.vr_components import VR
+                    vr2 = e2.get_component(VR)
+                    if vr2 is not None:
+                        tr2 = e2.transform
+                        if tr2:
+                            try:
+                                tr2.local_euler_angles = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0, math.degrees(_vr_state.rig_yaw), 0)
+                            except Exception:
+                                tr2.local_rotation = __import__('core.maths.math3d', fromlist=['Quat']).Quat.from_euler(0, _vr_state.rig_yaw, 0)
+                            vr2.rig_yaw = _vr_state.rig_yaw
+                        break
+        except Exception:
+            pass
 
 def handle_trigger_selection(viewport):
     for i in range(2):
@@ -1349,6 +1478,11 @@ class ControllerRenderer:
         except Exception:
             pass
     def render_for_eye(self, eye: dict):
+        try:
+            if has_vr_rig():
+                return
+        except Exception:
+            pass
         self._gl_clear(0x00000100)
         self._ctx.enable(moderngl.DEPTH_TEST)
         proj = _make_proj_matrix(_vr_state._eye_fovs[eye['eye_idx']], near=0.001, far=50.0)
@@ -1362,6 +1496,11 @@ class ControllerRenderer:
             pass
         self._ctx.disable(moderngl.DEPTH_TEST)
     def render_for_desktop(self, view, proj):
+        try:
+            if has_vr_rig():
+                return
+        except Exception:
+            pass
         self._ctx.enable(moderngl.DEPTH_TEST)
         colors = [(0.3, 0.6, 1.0), (1.0, 0.4, 0.3)]
         for i, ctrl in enumerate(_vr_state.controllers):
