@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math
 import ctypes
+import os
 import numpy as np
 import moderngl
 from pathlib import Path
@@ -25,7 +26,12 @@ GL_SRGB8_ALPHA8 = 0x8C43
 
 GRIP_THRESHOLD = 0.5
 IPD_SCALE = 0.5
-
+VR_MOVE_SPEED = 3.0
+VR_TURN_SPEED = math.radians(90.0)
+VR_VERT_SPEED = 2.5
+VR_DEADZONE = 0.20
+TRIGGER_THRESHOLD = 0.6
+RAY_MAX_DIST = 50.0
 
 def _quat_to_mat3(qx, qy, qz, qw):
     x2, y2, z2 = qx * 2, qy * 2, qz * 2
@@ -34,10 +40,12 @@ def _quat_to_mat3(qx, qy, qz, qw):
     wx, wy, wz = qw * x2, qw * y2, qw * z2
     return (1-(yy+zz), xy-wz, xz+wy, xy+wz, 1-(xx+zz), yz-wx, xz-wy, yz+wx, 1-(xx+yy))
 
+def _quat_to_fwd(qx, qy, qz, qw):
+    m = _quat_to_mat3(qx, qy, qz, qw)
+    return _normalize3((-m[2], -m[5], -m[8]))
 
 def _fov_to_tangents(al, ar, au, ad):
     return (math.tan(al), math.tan(ar), math.tan(au), math.tan(ad))
-
 
 def _mat3_mul(a, b):
     result = []
@@ -47,16 +55,13 @@ def _mat3_mul(a, b):
             result.append(val)
     return tuple(result)
 
-
 def _rot_y_mat3(a):
     c, s = math.cos(a), math.sin(a)
     return (c, 0, s, 0, 1, 0, -s, 0, c)
 
-
 def _rot_x_mat3(a):
     c, s = math.cos(a), math.sin(a)
     return (1, 0, 0, 0, c, -s, 0, s, c)
-
 
 def _normalize3(v):
     l = math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
@@ -64,6 +69,26 @@ def _normalize3(v):
         return (0.0, 0.0, 1.0)
     return (v[0]/l, v[1]/l, v[2]/l)
 
+def _quat_mul(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (aw*bx + ax*bw + ay*bz - az*by, aw*by - ax*bz + ay*bw + az*bx, aw*bz + ax*by - ay*bx + az*bw, aw*bw - ax*bx - ay*by - az*bz)
+
+def _quat_from_yaw(yaw):
+    h = yaw * 0.5
+    return (0.0, math.sin(h), 0.0, math.cos(h))
+
+def _rotate_y(v, yaw):
+    c = math.cos(yaw)
+    s = math.sin(yaw)
+    x, y, z = v
+    return (x*c + z*s, y, -x*s + z*c)
+
+def _deadzone(v, dz=VR_DEADZONE):
+    if abs(v) < dz:
+        return 0.0
+    s = (abs(v)-dz)/(1.0-dz)
+    return math.copysign(s, v)
 
 def _get_wgl_handles():
     try:
@@ -79,7 +104,6 @@ def _get_wgl_handles():
         print(f'[VR] Failed to get WGL handles: {e}')
         return None, None
 
-
 def _call_get_graphics_requirements(instance, system_id):
     pfn = ctypes.cast(
         xr.get_instance_proc_addr(instance, 'xrGetOpenGLGraphicsRequirementsKHR'),
@@ -88,7 +112,6 @@ def _call_get_graphics_requirements(instance, system_id):
     gl_reqs = xr.GraphicsRequirementsOpenGLKHR()
     result = pfn(instance, system_id, ctypes.byref(gl_reqs))
     xr.check_result(xr.Result(result))
-
 
 def _make_binding(hdc, hglrc):
     binding = xr.GraphicsBindingOpenGLWin32KHR()
@@ -100,7 +123,6 @@ def _make_binding(hdc, hglrc):
     setattr(binding, dc_field, hdc)
     setattr(binding, gl_field, hglrc)
     return binding
-
 
 class VREyeSwapchain:
     def __init__(self, session, w: int, h: int):
@@ -120,18 +142,14 @@ class VREyeSwapchain:
         self.swapchain = xr.create_swapchain(session, sc_info)
         self.images = xr.enumerate_swapchain_images(self.swapchain, xr.SwapchainImageOpenGLKHR)
         self.format = chosen
-
     def acquire(self):
         idx = xr.acquire_swapchain_image(self.swapchain, xr.SwapchainImageAcquireInfo())
         xr.wait_swapchain_image(self.swapchain, xr.SwapchainImageWaitInfo(timeout=xr.INFINITE_DURATION))
         return int(self.images[idx].image)
-
     def release_image(self):
         xr.release_swapchain_image(self.swapchain, xr.SwapchainImageReleaseInfo())
-
     def destroy(self):
         xr.destroy_swapchain(self.swapchain)
-
 
 class VREyeFramebuffer:
     def __init__(self, ctx: moderngl.Context, w: int, h: int):
@@ -140,26 +158,25 @@ class VREyeFramebuffer:
         self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         self.depth = ctx.depth_renderbuffer((w, h))
         self.fbo = ctx.framebuffer(color_attachments=[self.tex], depth_attachment=self.depth)
-
     def release(self):
         self.fbo.release()
         self.tex.release()
         self.depth.release()
-
 
 class ControllerState:
     def __init__(self):
         self.pos = (0.0, 0.0, 0.0)
         self.quat = (0.0, 0.0, 0.0, 1.0)
         self.grip = 0.0
+        self.trigger = 0.0
+        self.thumbstick = (0.0, 0.0)
         self.valid = False
-
+        self._prev_trigger = False
 
 class VRState:
     IPD = IPD_DEFAULT
     EYE_TEX_W = EYE_TEX_W
     EYE_TEX_H = EYE_TEX_H
-
     def __init__(self):
         self.active = False
         self.session = None
@@ -190,6 +207,8 @@ class VRState:
         self._grip_actions = [None, None]
         self._pose_actions = [None, None]
         self._pose_spaces = [None, None]
+        self._thumbstick_actions = [None, None]
+        self._trigger_actions = [None, None]
         self._ipd_pinch_active = False
         self._ipd_pinch_dist0 = 0.0
         self._ipd_pinch_ipd0 = IPD_DEFAULT
@@ -199,10 +218,11 @@ class VRState:
         self._xr_scale = 1.0
         self._frames_rendered = 0
         self._ever_running = False
-
+        self.eye_view_enabled = True
+        self._prev_trigger = [False, False]
+        self.rig_yaw = 0.0
 
 _gl = None
-
 
 def _load_gl_funcs():
     global _gl
@@ -226,7 +246,6 @@ def _load_gl_funcs():
     })()
     return _gl
 
-
 GL_DRAW_FRAMEBUFFER = 0x8CA9
 GL_READ_FRAMEBUFFER = 0x8CA8
 GL_FRAMEBUFFER = 0x8D40
@@ -238,7 +257,6 @@ GL_FRAMEBUFFER_COMPLETE = 0x8CD5
 
 _BLIT_FBO_IDS = None
 
-
 def _get_blit_fbo_id(gl, idx):
     global _BLIT_FBO_IDS
     if _BLIT_FBO_IDS is None:
@@ -246,7 +264,6 @@ def _get_blit_fbo_id(gl, idx):
         gl.GenFramebuffers(2, arr)
         _BLIT_FBO_IDS = arr
     return int(_BLIT_FBO_IDS[idx])
-
 
 def _free_blit_fbos():
     global _BLIT_FBO_IDS
@@ -258,17 +275,23 @@ def _free_blit_fbos():
             pass
         _BLIT_FBO_IDS = None
 
-
 _vr_state = VRState()
-
 
 def is_available() -> bool:
     return _XR_AVAILABLE
 
-
 def is_active() -> bool:
     return _vr_state.active
 
+def is_eye_view() -> bool:
+    return _vr_state.eye_view_enabled
+
+def set_eye_view(v: bool):
+    _vr_state.eye_view_enabled = bool(v)
+
+def toggle_eye_view() -> bool:
+    _vr_state.eye_view_enabled = not _vr_state.eye_view_enabled
+    return _vr_state.eye_view_enabled
 
 def _setup_input(instance, session):
     try:
@@ -279,13 +302,11 @@ def _setup_input(instance, session):
         )
         action_set = xr.create_action_set(instance, action_set_info)
         _vr_state._action_set = action_set
-
         hand_paths = [
             xr.string_to_path(instance, '/user/hand/left'),
             xr.string_to_path(instance, '/user/hand/right'),
         ]
         _vr_state._hand_paths = hand_paths
-
         for i, side in enumerate(['left', 'right']):
             grip_info = xr.ActionCreateInfo(
                 action_type=xr.ActionType.FLOAT_INPUT,
@@ -297,7 +318,6 @@ def _setup_input(instance, session):
                 ),
             )
             _vr_state._grip_actions[i] = xr.create_action(action_set, grip_info)
-
             pose_info = xr.ActionCreateInfo(
                 action_type=xr.ActionType.POSE_INPUT,
                 action_name=f'hand_pose_{side}',
@@ -308,12 +328,36 @@ def _setup_input(instance, session):
                 ),
             )
             _vr_state._pose_actions[i] = xr.create_action(action_set, pose_info)
-
+            thumb_info = xr.ActionCreateInfo(
+                action_type=xr.ActionType.VECTOR2F_INPUT,
+                action_name=f'thumb_{side}',
+                localized_action_name=f'Thumbstick {side.capitalize()}',
+                count_subaction_paths=1,
+                subaction_paths=ctypes.cast(
+                    (xr.Path * 1)(hand_paths[i]), ctypes.POINTER(xr.Path)
+                ),
+            )
+            _vr_state._thumbstick_actions[i] = xr.create_action(action_set, thumb_info)
+            trig_info = xr.ActionCreateInfo(
+                action_type=xr.ActionType.FLOAT_INPUT,
+                action_name=f'trig_{side}',
+                localized_action_name=f'Trigger {side.capitalize()}',
+                count_subaction_paths=1,
+                subaction_paths=ctypes.cast(
+                    (xr.Path * 1)(hand_paths[i]), ctypes.POINTER(xr.Path)
+                ),
+            )
+            _vr_state._trigger_actions[i] = xr.create_action(action_set, trig_info)
         grip_path_l = xr.string_to_path(instance, '/user/hand/left/input/squeeze/value')
         grip_path_r = xr.string_to_path(instance, '/user/hand/right/input/squeeze/value')
         pose_path_l = xr.string_to_path(instance, '/user/hand/left/input/grip/pose')
         pose_path_r = xr.string_to_path(instance, '/user/hand/right/input/grip/pose')
-
+        thumb_l = xr.string_to_path(instance, '/user/hand/left/input/thumbstick')
+        thumb_r = xr.string_to_path(instance, '/user/hand/right/input/thumbstick')
+        trig_l = xr.string_to_path(instance, '/user/hand/left/input/trigger/value')
+        trig_r = xr.string_to_path(instance, '/user/hand/right/input/trigger/value')
+        trig_l2 = xr.string_to_path(instance, '/user/hand/left/input/select/click')
+        trig_r2 = xr.string_to_path(instance, '/user/hand/right/input/select/click')
         profile_path = xr.string_to_path(instance, '/interaction_profiles/khr/simple_controller')
         bindings_simple = [
             xr.ActionSuggestedBinding(action=_vr_state._pose_actions[0], binding=pose_path_l),
@@ -327,47 +371,64 @@ def _setup_input(instance, session):
             ))
         except Exception:
             pass
-
-        for profile_str, grip_l, grip_r in [
-            ('/interaction_profiles/oculus/touch_controller',
-             '/user/hand/left/input/squeeze/value',
-             '/user/hand/right/input/squeeze/value'),
-            ('/interaction_profiles/valve/index_controller',
-             '/user/hand/left/input/squeeze/value',
-             '/user/hand/right/input/squeeze/value'),
-            ('/interaction_profiles/htc/vive_controller',
-             '/user/hand/left/input/squeeze/click',
-             '/user/hand/right/input/squeeze/click'),
-            ('/interaction_profiles/microsoft/motion_controller',
-             '/user/hand/left/input/squeeze/click',
-             '/user/hand/right/input/squeeze/click'),
+        for profile_str, bindings in [
+            ('/interaction_profiles/oculus/touch_controller', [
+                ('grip', grip_path_l, grip_path_r),
+                ('pose', pose_path_l, pose_path_r),
+                ('thumb', thumb_l, thumb_r),
+                ('trig', trig_l, trig_r),
+            ]),
+            ('/interaction_profiles/valve/index_controller', [
+                ('grip', grip_path_l, grip_path_r),
+                ('pose', pose_path_l, pose_path_r),
+                ('thumb', thumb_l, thumb_r),
+                ('trig', trig_l, trig_r),
+            ]),
+            ('/interaction_profiles/htc/vive_controller', [
+                ('grip', xr.string_to_path(instance, '/user/hand/left/input/squeeze/click'), xr.string_to_path(instance, '/user/hand/right/input/squeeze/click')),
+                ('pose', pose_path_l, pose_path_r),
+                ('thumb', xr.string_to_path(instance, '/user/hand/left/input/trackpad'), xr.string_to_path(instance, '/user/hand/right/input/trackpad')),
+                ('trig', trig_l, trig_r),
+            ]),
+            ('/interaction_profiles/microsoft/motion_controller', [
+                ('grip', xr.string_to_path(instance, '/user/hand/left/input/squeeze/click'), xr.string_to_path(instance, '/user/hand/right/input/squeeze/click')),
+                ('pose', pose_path_l, pose_path_r),
+                ('thumb', thumb_l, thumb_r),
+                ('trig', trig_l, trig_r),
+            ]),
+            ('/interaction_profiles/khr/simple_controller', [
+                ('trig', trig_l2, trig_r2),
+            ]),
         ]:
             try:
                 prof_path = xr.string_to_path(instance, profile_str)
-                gl = xr.string_to_path(instance, grip_l)
-                gr = xr.string_to_path(instance, grip_r)
-                pl = xr.string_to_path(instance, '/user/hand/left/input/grip/pose')
-                pr = xr.string_to_path(instance, '/user/hand/right/input/grip/pose')
-                bindings = [
-                    xr.ActionSuggestedBinding(action=_vr_state._grip_actions[0], binding=gl),
-                    xr.ActionSuggestedBinding(action=_vr_state._grip_actions[1], binding=gr),
-                    xr.ActionSuggestedBinding(action=_vr_state._pose_actions[0], binding=pl),
-                    xr.ActionSuggestedBinding(action=_vr_state._pose_actions[1], binding=pr),
-                ]
-                xr.suggest_interaction_profile_bindings(instance, xr.InteractionProfileSuggestedBinding(
-                    interaction_profile=prof_path,
-                    count_suggested_bindings=len(bindings),
-                    suggested_bindings=bindings,
-                ))
+                b = []
+                for kind, pl, pr in bindings:
+                    if kind == 'grip':
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._grip_actions[0], binding=pl))
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._grip_actions[1], binding=pr))
+                    elif kind == 'pose':
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._pose_actions[0], binding=pl))
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._pose_actions[1], binding=pr))
+                    elif kind == 'thumb':
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._thumbstick_actions[0], binding=pl))
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._thumbstick_actions[1], binding=pr))
+                    elif kind == 'trig':
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._trigger_actions[0], binding=pl))
+                        b.append(xr.ActionSuggestedBinding(action=_vr_state._trigger_actions[1], binding=pr))
+                if b:
+                    xr.suggest_interaction_profile_bindings(instance, xr.InteractionProfileSuggestedBinding(
+                        interaction_profile=prof_path,
+                        count_suggested_bindings=len(b),
+                        suggested_bindings=b,
+                    ))
             except Exception:
                 pass
-
         attach_info = xr.SessionActionSetsAttachInfo(
             count_action_sets=1,
             action_sets=ctypes.cast((xr.ActionSet * 1)(action_set), ctypes.POINTER(xr.ActionSet)),
         )
         xr.attach_session_action_sets(session, attach_info)
-
         for i, side in enumerate(['left', 'right']):
             hand_path = xr.string_to_path(instance, f'/user/hand/{side}')
             space_info = xr.ActionSpaceCreateInfo(
@@ -376,11 +437,9 @@ def _setup_input(instance, session):
                 pose_in_action_space=xr.Posef(),
             )
             _vr_state._pose_spaces[i] = xr.create_action_space(session, space_info)
-
         print('[VR] Input actions set up.')
     except Exception as e:
         print(f'[VR] Input setup failed: {e}')
-
 
 def initialize(ctx: moderngl.Context) -> bool:
     global _vr_state
@@ -437,7 +496,6 @@ def initialize(ctx: moderngl.Context) -> bool:
         _vr_state.active = False
         return False
 
-
 def _create_swapchains():
     if _vr_state._swapchains:
         return
@@ -458,7 +516,6 @@ def _create_swapchains():
     except Exception as e:
         print(f'[VR] Swapchain creation failed: {e}')
 
-
 def shutdown():
     global _vr_state
     try:
@@ -475,6 +532,8 @@ def shutdown():
             except Exception:
                 pass
             _vr_state._action_set = None
+            _vr_state._thumbstick_actions = [None, None]
+            _vr_state._trigger_actions = [None, None]
         for sc in _vr_state._swapchains:
             try:
                 sc.destroy()
@@ -499,6 +558,7 @@ def shutdown():
     _vr_state.space = None
     _vr_state.system_id = None
     _vr_state._session_running = False
+    _vr_state.rig_yaw = 0.0
     _free_blit_fbos()
     _vr_state._xr_layer = None
     _vr_state._frame_begun = False
@@ -507,7 +567,6 @@ def shutdown():
     for p_i in range(2):
         _vr_state._eye_poses[p_i] = None
     print('[VR] OpenXR resources destroyed.')
-
 
 def _sync_controller_input():
     if not (_vr_state.active and _vr_state._session_running and _vr_state._action_set is not None):
@@ -550,6 +609,33 @@ def _sync_controller_input():
                 ctrl.grip = float(state.current_state) if state.is_active else 0.0
             except Exception:
                 ctrl.grip = 0.0
+        if _vr_state._thumbstick_actions[i] is not None:
+            try:
+                st = xr.get_action_state_vector2f(
+                    _vr_state.session,
+                    xr.ActionStateGetInfo(
+                        action=_vr_state._thumbstick_actions[i],
+                        subaction_path=hand_paths[i],
+                    ),
+                )
+                if st.is_active:
+                    ctrl.thumbstick = (float(st.current_state.x), float(st.current_state.y))
+                else:
+                    ctrl.thumbstick = (0.0, 0.0)
+            except Exception:
+                ctrl.thumbstick = (0.0, 0.0)
+        if _vr_state._trigger_actions[i] is not None:
+            try:
+                ts = xr.get_action_state_float(
+                    _vr_state.session,
+                    xr.ActionStateGetInfo(
+                        action=_vr_state._trigger_actions[i],
+                        subaction_path=hand_paths[i],
+                    ),
+                )
+                ctrl.trigger = float(ts.current_state) if ts.is_active else 0.0
+            except Exception:
+                ctrl.trigger = 0.0
         if _vr_state._pose_spaces[i] is not None:
             try:
                 loc = xr.locate_space(
@@ -576,12 +662,10 @@ def _sync_controller_input():
                     print(f'[VR] Controller {i} locate_space exception: {e}')
     _update_ipd_pinch()
 
-
 def _update_ipd_pinch():
     c0, c1 = _vr_state.controllers[0], _vr_state.controllers[1]
     both_gripped = c0.grip > GRIP_THRESHOLD and c1.grip > GRIP_THRESHOLD
     both_valid = c0.valid and c1.valid
-
     if both_gripped and both_valid:
         p0, p1 = c0.pos, c1.pos
         dist = math.sqrt(sum((p0[k]-p1[k])**2 for k in range(3)))
@@ -595,7 +679,6 @@ def _update_ipd_pinch():
             _vr_state.ipd_override = max(0.010, min(0.200, new_ipd))
     else:
         _vr_state._ipd_pinch_active = False
-
 
 def get_eye_transforms(*args, **kwargs) -> list[dict]:
     if len(args) == 1 and hasattr(args[0], 'cam_pos'):
@@ -629,8 +712,10 @@ def get_eye_transforms(*args, **kwargs) -> list[dict]:
     use_xr_positions = 0.01 < xr_ipd < 0.12
     if use_xr_positions:
         mid = tuple((p0[k] + p1[k]) * 0.5 for k in range(3))
-
     hx, hy, hz = _vr_state._hmd_pos_offset
+    rig_yaw = getattr(_vr_state, 'rig_yaw', 0.0)
+    if _vr_state.active:
+        hx, hy, hz = _rotate_y((hx, hy, hz), rig_yaw)
     base_pos = (
         cam_pos[0] + hx,
         cam_pos[1] + hy,
@@ -644,10 +729,11 @@ def get_eye_transforms(*args, **kwargs) -> list[dict]:
     else:
         _vr_state._xr_mid = (0.0, 0.0, 0.0)
         _vr_state._xr_scale = 1.0
-
     for i in range(2):
         if _vr_state.active:
             qx, qy, qz, qw = _vr_state._eye_quats[i]
+            rig_q = _quat_from_yaw(rig_yaw)
+            qx, qy, qz, qw = _quat_mul(rig_q, (qx, qy, qz, qw))
             rot = _quat_to_mat3(qx, qy, qz, qw)
             r = ( rot[0],  rot[3],  rot[6])
             u = ( rot[1],  rot[4],  rot[7])
@@ -657,6 +743,8 @@ def get_eye_transforms(*args, **kwargs) -> list[dict]:
                 dx = exi - mid[0]
                 dy = eyi - mid[1]
                 dz = ezi - mid[2]
+                if rig_yaw != 0.0:
+                    dx, dy, dz = _rotate_y((dx, dy, dz), rig_yaw)
                 ipd_scale = _vr_state.ipd_override / max(xr_ipd, 1e-4)
                 ep = (
                     base_pos[0] + dx * ipd_scale,
@@ -701,17 +789,265 @@ def get_eye_transforms(*args, **kwargs) -> list[dict]:
         })
     return eyes
 
-
 def _xr_to_world(xr_pos: tuple) -> tuple:
     ox, oy, oz = _vr_state._xr_origin
     mx, my, mz = _vr_state._xr_mid
     s = _vr_state._xr_scale
+    dx = (xr_pos[0] - mx) * s
+    dy = (xr_pos[1] - my) * s
+    dz = (xr_pos[2] - mz) * s
+    rig_yaw = getattr(_vr_state, 'rig_yaw', 0.0)
+    if rig_yaw != 0.0 and _vr_state.active:
+        dx, dy, dz = _rotate_y((dx, dy, dz), rig_yaw)
+        # Actually _xr_to_world already includes base_pos which has rotated offset, so don't double-rotate? Keep as is for eye
+        # For eye, s scaling already applied, offset already rotated via base_pos
+        pass
     return (
-        ox + (xr_pos[0] - mx) * s,
-        oy + (xr_pos[1] - my) * s,
-        oz + (xr_pos[2] - mz) * s,
+        ox + dx,
+        oy + dy,
+        oz + dz,
     )
 
+def _xr_controller_to_world(xr_pos: tuple) -> tuple:
+    rig_yaw = getattr(_vr_state, 'rig_yaw', 0.0)
+    if _vr_state._hmd_pos_origin is not None and _vr_state.active:
+        ox0, oy0, oz0 = _vr_state._hmd_pos_origin
+        dx = xr_pos[0] - ox0
+        dy = xr_pos[1] - oy0
+        dz = xr_pos[2] - oz0
+        if rig_yaw != 0.0:
+            dx, dy, dz = _rotate_y((dx, dy, dz), rig_yaw)
+        cam_pos = _vr_state._xr_origin
+        hx, hy, hz = _vr_state._hmd_pos_offset
+        if _vr_state.active:
+            hx, hy, hz = _rotate_y((hx, hy, hz), rig_yaw)
+        base_x = cam_pos[0] - hx
+        base_y = cam_pos[1] - hy
+        base_z = cam_pos[2] - hz
+        return (
+            base_x + dx,
+            base_y + dy,
+            base_z + dz,
+        )
+    ox, oy, oz = _vr_state._xr_origin
+    mx, my, mz = _vr_state._xr_mid
+    dx = xr_pos[0] - mx
+    dy = xr_pos[1] - my
+    dz = xr_pos[2] - mz
+    if rig_yaw != 0.0 and _vr_state.active:
+        dx, dy, dz = _rotate_y((dx, dy, dz), rig_yaw)
+    return (
+        ox + dx,
+        oy + dy,
+        oz + dz,
+    )
+
+def _xr_hmd_to_world() -> tuple:
+    return _vr_state._xr_origin
+
+def _controller_world_quat(q):
+    rig_yaw = getattr(_vr_state, 'rig_yaw', 0.0)
+    if rig_yaw != 0.0 and _vr_state.active:
+        rig_q = _quat_from_yaw(rig_yaw)
+        return _quat_mul(rig_q, q)
+    return q
+
+def get_controller_world_pos(i: int):
+    if 0 <= i < 2:
+        c = _vr_state.controllers[i]
+        if c.valid:
+            return _xr_controller_to_world(c.pos)
+    return None
+
+def get_controller_world_quat(i: int):
+    if 0 <= i < 2:
+        c = _vr_state.controllers[i]
+        if c.valid:
+            return _controller_world_quat(c.quat)
+    return (0.0, 0.0, 0.0, 1.0)
+
+def get_controller_ray(i: int):
+    c = _vr_state.controllers[i]
+    if not c.valid:
+        return None
+    origin = _xr_controller_to_world(c.pos)
+    q = _controller_world_quat(c.quat)
+    fwd = _quat_to_fwd(*q)
+    return (origin, fwd)
+
+def get_hmd_world_pos():
+    return _xr_hmd_to_world()
+
+def get_hmd_world_quat():
+    return _controller_world_quat(_vr_state._hmd_quat)
+
+def raycast_scene(origin, direction, max_dist=RAY_MAX_DIST):
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if not eng or not eng.scene:
+            return None, None, float('inf')
+        scene = eng.scene
+        import numpy as np
+        ro = np.array([origin[0], origin[1], origin[2], 1.0], dtype=np.float64)
+        rd = np.array([direction[0], direction[1], direction[2], 0.0], dtype=np.float64)
+        from editor.viewport.picking import _test_entity_pick
+        from core.maths.math3d import Vec3
+        ray_origin = Vec3(*origin)
+        ray_dir = Vec3(*direction)
+        best = None
+        best_d = float('inf')
+        best_hit = None
+        for ent in scene.get_all_entities():
+            if not ent.active or not ent.transform:
+                continue
+            d = _test_entity_pick(ent, ro, rd, ray_origin, ray_dir)
+            if d > 0 and d < best_d and d < max_dist:
+                best_d = d
+                best = ent
+                best_hit = (origin[0]+direction[0]*d, origin[1]+direction[1]*d, origin[2]+direction[2]*d)
+        if best is not None:
+            return best, best_hit, best_d
+        return None, None, float('inf')
+    except Exception:
+        return None, None, float('inf')
+
+def get_controller_hits():
+    hits = []
+    for i in range(2):
+        ray = get_controller_ray(i)
+        if ray is None:
+            hits.append((None, None, float('inf'), None))
+            continue
+        origin, fwd = ray
+        ent, hit, dist = raycast_scene(origin, fwd)
+        hits.append((ent, hit, dist, ray))
+    return hits
+
+def update_vr_locomotion(cam, dt: float):
+    if not (_vr_state.active and _vr_state._session_running):
+        return
+    left = _vr_state.controllers[0]
+    right = _vr_state.controllers[1]
+    lx, ly = left.thumbstick
+    rx, ry = right.thumbstick
+    lx = _deadzone(lx)
+    ly = _deadzone(ly)
+    rx = _deadzone(rx)
+    ry = _deadzone(ry)
+    hmd_q = _controller_world_quat(_vr_state._hmd_quat)
+    hmd_fwd = _quat_to_fwd(*hmd_q)
+    fwd_h = (hmd_fwd[0], 0.0, hmd_fwd[2])
+    flen = math.sqrt(fwd_h[0]*fwd_h[0] + fwd_h[2]*fwd_h[2])
+    if flen > 1e-6:
+        fwd_h = (fwd_h[0]/flen, 0.0, fwd_h[2]/flen)
+    else:
+        yr = math.radians(getattr(cam, '_yaw', 0.0))
+        fwd_h = (math.sin(yr), 0.0, -math.cos(yr))
+        flen = math.sqrt(fwd_h[0]*fwd_h[0] + fwd_h[2]*fwd_h[2])
+        if flen > 1e-6:
+            fwd_h = (fwd_h[0]/flen, 0.0, fwd_h[2]/flen)
+        else:
+            fwd_h = (0.0, 0.0, -1.0)
+    right_v = (-fwd_h[2], 0.0, fwd_h[0])
+    rlen = math.sqrt(right_v[0]*right_v[0] + right_v[2]*right_v[2])
+    if rlen > 1e-6:
+        right_v = (right_v[0]/rlen, 0.0, right_v[2]/rlen)
+    speed = float(getattr(cam, '_move_speed', VR_MOVE_SPEED))
+    try:
+        accel_factor = float(getattr(cam, '_acceleration', 12.0))
+    except Exception:
+        accel_factor = 12.0
+    desired_x = 0.0
+    desired_z = 0.0
+    desired_y = 0.0
+    if abs(lx) > 1e-6 or abs(ly) > 1e-6:
+        desired_x = (right_v[0]*lx + fwd_h[0]*ly) * speed
+        desired_z = (right_v[2]*lx + fwd_h[2]*ly) * speed
+    if abs(ry) > 1e-6:
+        desired_y = ry * speed
+    try:
+        vx = float(cam._vel.x)
+        vy = float(cam._vel.y)
+        vz = float(cam._vel.z)
+    except Exception:
+        vx = 0.0
+        vy = 0.0
+        vz = 0.0
+        try:
+            cam._vel = cam._vel
+        except Exception:
+            from core.maths.math3d import Vec3 as _Vec3
+            cam._vel = _Vec3(0,0,0)
+    lerp = min(1.0, dt * accel_factor)
+    vx += (desired_x - vx) * lerp
+    vz += (desired_z - vz) * lerp
+    vy += (desired_y - vy) * lerp
+    if abs(desired_x) < 1e-6 and abs(desired_z) < 1e-6 and abs(desired_y) < 1e-6:
+        damp = 0.85
+        try:
+            damp = float(getattr(cam, '_damping', 8.0))
+            damp = max(0.0, min(0.99, 1.0 - math.exp(-damp * dt)))
+            # Use simple decay for now
+            vx *= 0.85
+            vy *= 0.85
+            vz *= 0.85
+        except Exception:
+            vx *= 0.85
+            vy *= 0.85
+            vz *= 0.85
+    try:
+        cam._vel.x = vx
+        cam._vel.y = vy
+        cam._vel.z = vz
+    except Exception:
+        pass
+    cam._position.x += vx * dt
+    cam._position.y += vy * dt
+    cam._position.z += vz * dt
+    if abs(rx) > 1e-6:
+        delta = rx * math.degrees(VR_TURN_SPEED) * dt
+        cam._yaw -= delta
+        _vr_state.rig_yaw -= math.radians(delta)
+        if cam._yaw > 180.0:
+            cam._yaw -= 360.0
+        if cam._yaw < -180.0:
+            cam._yaw += 360.0
+        if _vr_state.rig_yaw > math.pi:
+            _vr_state.rig_yaw -= 2*math.pi
+        if _vr_state.rig_yaw < -math.pi:
+            _vr_state.rig_yaw += 2*math.pi
+
+def handle_trigger_selection(viewport):
+    for i in range(2):
+        c = _vr_state.controllers[i]
+        pressed = c.trigger > TRIGGER_THRESHOLD
+        prev = _vr_state._prev_trigger[i]
+        _vr_state._prev_trigger[i] = pressed
+        if pressed and not prev:
+            ray = get_controller_ray(i)
+            if ray is None:
+                continue
+            origin, fwd = ray
+            ent, hit, dist = raycast_scene(origin, fwd)
+            if viewport is not None:
+                try:
+                    if ent is not None:
+                        viewport.set_selected_entity(ent)
+                        if hasattr(viewport, 'entity_selected'):
+                            viewport.entity_selected.emit(ent)
+                    else:
+                        viewport.set_selected_entity(None)
+                        if hasattr(viewport, 'entity_selected'):
+                            viewport.entity_selected.emit(None)
+                        try:
+                            viewport._selected_entities = []
+                            viewport._selected_set_version = getattr(viewport, '_selected_set_version', 0) + 1
+                        except Exception:
+                            pass
+                    viewport.update()
+                except Exception:
+                    pass
 
 def set_uniforms_for_eye(set_fn, eye: dict, rw: int, rh: int):
     al, ar, au, ad = eye['fov_angles']
@@ -741,11 +1077,8 @@ def set_uniforms_for_eye(set_fn, eye: dict, rw: int, rh: int):
     set_fn('u_resolution', (float(rw), float(rh)))
     set_fn('u_fov', 1.0)
 
-
 _CTRL_VERT = open(_SHADER_DIR / "shaders/vr/vr_controller_vert.glsl", "r", encoding="utf-8").read()
-
 _CTRL_FRAG = open(_SHADER_DIR / "shaders/vr/vr_controller_frag.glsl", "r", encoding="utf-8").read()
-
 
 def _make_proj_matrix(fov_angles, near=0.01, far=100.0):
     al, ar, au, ad = fov_angles
@@ -764,7 +1097,6 @@ def _make_proj_matrix(fov_angles, near=0.01, far=100.0):
     m[14] = -(2.0 * far * near) / (far - near)
     return m
 
-
 def _make_view_matrix(eye_pos, fwd, right, up):
     rx, ry, rz = right
     ux, uy, uz = up
@@ -780,7 +1112,6 @@ def _make_view_matrix(eye_pos, fwd, right, up):
         tx,  ty,  tz, 1.0,
     ]
 
-
 def _mat4_mul(a, b):
     result = [0.0]*16
     for row in range(4):
@@ -790,7 +1121,6 @@ def _mat4_mul(a, b):
                 s += a[row + k*4] * b[k + col*4]
             result[row + col*4] = s
     return result
-
 
 def _make_model_matrix(pos, quat, scale=1.0):
     rot = _quat_to_mat3(*quat)
@@ -802,11 +1132,9 @@ def _make_model_matrix(pos, quat, scale=1.0):
         pos[0],   pos[1],   pos[2],   1.0,
     ]
 
-
 def _build_controller_mesh():
     verts = []
     indices = []
-
     def _add_box(cx, cy, cz, sx, sy, sz, nx_faces=True):
         hx, hy, hz = sx*0.5, sy*0.5, sz*0.5
         corners = [
@@ -833,7 +1161,6 @@ def _build_controller_mesh():
                 verts.extend(corners[vi])
                 verts.extend(n)
             indices.extend([base, base+1, base+2, base, base+2, base+3])
-
     def _add_capsule(cx, cy, cz, radius, length, segments=8):
         half = length * 0.5
         for seg in range(segments):
@@ -852,7 +1179,6 @@ def _build_controller_mesh():
             ]:
                 verts.extend([px, py, pz, nx, ny, nz])
             indices.extend([base, base+1, base+2, base, base+2, base+3])
-
         for cap_y, cap_sign in [(-half, -1.0), (half, 1.0)]:
             rings = 4
             for ring in range(rings):
@@ -880,15 +1206,62 @@ def _build_controller_mesh():
                         nx, ny, nz = _normalize3((px-cx, (py-cy-cap_y)*cap_sign, pz-cz))
                         verts.extend([px, py, pz, nx, ny, nz])
                     indices.extend([base, base+1, base+2, base, base+2, base+3])
-
     _add_capsule(0.0, 0.0, 0.0, 0.018, 0.12)
     _add_box(0.0, -0.04, 0.022, 0.030, 0.020, 0.012)
     _add_box(0.0,  0.035, 0.010, 0.022, 0.015, 0.010)
     _add_box(-0.014, -0.015, 0.016, 0.008, 0.010, 0.008)
     _add_box( 0.014, -0.015, 0.016, 0.008, 0.010, 0.008)
-
     return np.array(verts, dtype='f4'), np.array(indices, dtype='i4')
 
+def _resolve_vr_model_path(*parts):
+    base = Path(__file__).resolve().parents[2]
+    p = base.joinpath(*parts)
+    if p.exists():
+        return str(p)
+    alt = Path.cwd().joinpath(*parts)
+    if alt.exists():
+        return str(alt)
+    return str(p)
+
+def _load_mesh_to_vao(path, ctx, prog):
+    if not os.path.exists(path):
+        return None
+    try:
+        from core.assets.asset_importer import load_mesh, load_obj
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".obj":
+            data = load_obj(path)
+        else:
+            data = load_mesh(path)
+        if data is None or len(data.vertices) == 0:
+            return None
+        verts = np.array(data.vertices, dtype=np.float32).reshape(-1, 3)
+        norms = np.array(data.normals, dtype=np.float32).reshape(-1, 3) if len(data.normals) >= len(data.vertices) else np.zeros_like(verts)
+        if norms.shape[0] != verts.shape[0]:
+            norms = np.zeros_like(verts)
+        try:
+            mn = verts.min(axis=0)
+            mx = verts.max(axis=0)
+            extent = mx - mn
+            max_ext = float(max(extent))
+            if max_ext > 0.5:
+                sc = 0.12 / max_ext
+                verts = verts * sc
+        except Exception:
+            pass
+        n = verts.shape[0]
+        vdata = np.empty((n, 6), dtype=np.float32)
+        vdata[:, 0:3] = verts
+        vdata[:, 3:6] = norms
+        vbo = ctx.buffer(vdata.tobytes())
+        idx = np.array(data.indices, dtype=np.int32) if len(data.indices) else np.array([], dtype=np.int32)
+        if idx.size == 0:
+            idx = np.arange(n, dtype=np.int32)
+        ibo = ctx.buffer(idx.tobytes())
+        vao = ctx.vertex_array(prog, [(vbo, '3f 3f', 'in_pos', 'in_normal')], ibo)
+        return (vbo, ibo, vao, idx.size)
+    except Exception:
+        return None
 
 class ControllerRenderer:
     def __init__(self, ctx: moderngl.Context):
@@ -896,7 +1269,9 @@ class ControllerRenderer:
         self._prog = ctx.program(vertex_shader=_CTRL_VERT, fragment_shader=_CTRL_FRAG)
         self._uloc = {n: self._prog[n] for n in self._prog}
         self._gl_clear = ctypes.windll.opengl32.glClear
-
+        self._custom = [None, None]
+        self._hmd_mesh = None
+        self._load_custom(ctx)
         verts, indices = _build_controller_mesh()
         self._vbo = ctx.buffer(verts.tobytes())
         self._ibo = ctx.buffer(indices.tobytes())
@@ -905,53 +1280,120 @@ class ControllerRenderer:
             [(self._vbo, '3f 3f', 'in_pos', 'in_normal')],
             self._ibo,
         )
-
+    def _load_custom(self, ctx):
+        try:
+            left_path = _resolve_vr_model_path("core", "3d_models", "OculusQ2", "OculusQ2ControllerL.fbx")
+            right_path = _resolve_vr_model_path("core", "3d_models", "OculusQ2", "OculusQ2ControllerR.fbx")
+            hmd_path = _resolve_vr_model_path("core", "3d_models", "generic_hmd", "generic_hmd.obj")
+            lm = _load_mesh_to_vao(left_path, ctx, self._prog)
+            rm = _load_mesh_to_vao(right_path, ctx, self._prog)
+            hm = _load_mesh_to_vao(hmd_path, ctx, self._prog)
+            if lm is not None:
+                self._custom[0] = lm
+            if rm is not None:
+                self._custom[1] = rm
+            if hm is not None:
+                self._hmd_mesh = hm
+        except Exception:
+            pass
     def _set(self, name, val):
         if name in self._uloc:
             self._uloc[name].value = val
-
-    def render_controller(self, ctrl: ControllerState, proj, view, color):
+    def render_controller(self, ctrl: ControllerState, proj, view, color, idx=0):
         if not ctrl.valid:
             return
-
-        model = _make_model_matrix(_xr_to_world(ctrl.pos), ctrl.quat, scale=1.0)
-
+        custom = self._custom[idx] if 0 <= idx < 2 else None
+        if custom is not None and isinstance(custom, tuple) and len(custom) == 4:
+            vbo, ibo, vao, cnt = custom
+            model = _make_model_matrix(_xr_controller_to_world(ctrl.pos), _controller_world_quat(ctrl.quat), scale=1.0)
+            mv = _mat4_mul(view, model)
+            mvp = _mat4_mul(proj, mv)
+            rot = _quat_to_mat3(*ctrl.quat)
+            nm = (rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8])
+            self._set('u_mvp', tuple(mvp))
+            self._set('u_normal_mat', nm)
+            self._set('u_color', color)
+            self._set('u_grip', ctrl.grip)
+            try:
+                vao.render(moderngl.TRIANGLES)
+            except Exception:
+                pass
+            return
+        model = _make_model_matrix(_xr_controller_to_world(ctrl.pos), _controller_world_quat(ctrl.quat), scale=1.0)
         mv = _mat4_mul(view, model)
         mvp = _mat4_mul(proj, mv)
-
-        rot = _quat_to_mat3(*ctrl.quat)
-        nm = (
-            rot[0], rot[3], rot[6],
-            rot[1], rot[4], rot[7],
-            rot[2], rot[5], rot[8],
-        )
-
+        rot = _quat_to_mat3(*_controller_world_quat(ctrl.quat))
+        nm = (rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8])
         self._set('u_mvp', tuple(mvp))
         self._set('u_normal_mat', nm)
         self._set('u_color', color)
         self._set('u_grip', ctrl.grip)
         self._vao.render(moderngl.TRIANGLES)
-
+    def render_hmd(self, proj, view):
+        if self._hmd_mesh is None:
+            return
+        pos = _xr_hmd_to_world()
+        quat = _controller_world_quat(_vr_state._hmd_quat)
+        model = _make_model_matrix(pos, quat, scale=1.0)
+        mv = _mat4_mul(view, model)
+        mvp = _mat4_mul(proj, mv)
+        rot = _quat_to_mat3(*quat)
+        nm = (rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8])
+        self._set('u_mvp', tuple(mvp))
+        self._set('u_normal_mat', nm)
+        self._set('u_color', (0.2, 0.2, 0.22))
+        self._set('u_grip', 0.0)
+        try:
+            vbo, ibo, vao, cnt = self._hmd_mesh
+            vao.render(moderngl.TRIANGLES)
+        except Exception:
+            pass
     def render_for_eye(self, eye: dict):
         self._gl_clear(0x00000100)
         self._ctx.enable(moderngl.DEPTH_TEST)
         proj = _make_proj_matrix(_vr_state._eye_fovs[eye['eye_idx']], near=0.001, far=50.0)
         view = _make_view_matrix(eye['pos'], eye['fwd'], eye['right'], eye['up'])
         colors = [(0.3, 0.6, 1.0), (1.0, 0.4, 0.3)]
-        any_valid = any(c.valid for c in _vr_state.controllers)
-        if not any_valid and not getattr(self, '_ctrl_warn_printed', False):
-            self._ctrl_warn_printed = True
-            print(f'[VR] Controllers not valid: grips={[c.grip for c in _vr_state.controllers]} valid={[c.valid for c in _vr_state.controllers]} pose_spaces={[s is not None for s in _vr_state._pose_spaces]} action_set={_vr_state._action_set is not None}')
         for i, ctrl in enumerate(_vr_state.controllers):
-            self.render_controller(ctrl, proj, view, colors[i])
+            self.render_controller(ctrl, proj, view, colors[i], idx=i)
+        try:
+            self.render_hmd(proj, view)
+        except Exception:
+            pass
         self._ctx.disable(moderngl.DEPTH_TEST)
-
+    def render_for_desktop(self, view, proj):
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        colors = [(0.3, 0.6, 1.0), (1.0, 0.4, 0.3)]
+        for i, ctrl in enumerate(_vr_state.controllers):
+            self.render_controller(ctrl, proj, view, colors[i], idx=i)
+        try:
+            self.render_hmd(proj, view)
+        except Exception:
+            pass
+        self._ctx.disable(moderngl.DEPTH_TEST)
     def release(self):
-        self._vbo.release()
-        self._ibo.release()
-        self._vao.release()
+        try:
+            self._vbo.release()
+            self._ibo.release()
+            self._vao.release()
+        except Exception:
+            pass
+        for m in self._custom:
+            if m is not None and isinstance(m, tuple):
+                try:
+                    m[0].release()
+                    m[1].release()
+                    m[2].release()
+                except Exception:
+                    pass
+        if self._hmd_mesh is not None and isinstance(self._hmd_mesh, tuple):
+            try:
+                self._hmd_mesh[0].release()
+                self._hmd_mesh[1].release()
+                self._hmd_mesh[2].release()
+            except Exception:
+                pass
         self._prog.release()
-
 
 class VRRenderer:
     def __init__(self, ctx: moderngl.Context):
@@ -965,16 +1407,15 @@ class VRRenderer:
         verts = np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
         self._compose_vao = ctx.simple_vertex_array(self._compose_prog, ctx.buffer(verts), 'in_position')
         self._ctrl_renderer = ControllerRenderer(ctx)
-
     def eye_fbo(self, eye_idx: int) -> VREyeFramebuffer:
         return self._fbos[eye_idx]
-
     def render_controllers_for_eye(self, eye: dict):
         fb = self._fbos[eye['eye_idx']].fbo
         fb.use()
         self._ctx.viewport = (0, 0, self._fbos[eye['eye_idx']].w, self._fbos[eye['eye_idx']].h)
         self._ctrl_renderer.render_for_eye(eye)
-
+    def render_controllers_desktop(self, view, proj):
+        self._ctrl_renderer.render_for_desktop(view, proj)
     def compose_to_screen(self, screen_fbo, wnd_w: int, wnd_h: int):
         screen_fbo.use()
         self._ctx.viewport = (0, 0, wnd_w, wnd_h)
@@ -996,31 +1437,26 @@ class VRRenderer:
         if 'u_resolution' in u:
             u['u_resolution'].value = (float(wnd_w), float(wnd_h))
         self._compose_vao.render(moderngl.TRIANGLE_STRIP)
-
     def release(self):
         for fb in self._fbos:
             fb.release()
         self._ctrl_renderer.release()
         self._compose_prog.release()
 
-
 _COMPOSE_VERT = open(_SHADER_DIR / "shaders/vr/vr_compose_vert.glsl", "r", encoding="utf-8").read()
 _COMPOSE_FRAG = open(_SHADER_DIR / "shaders/vr/vr_compose_frag.glsl", "r", encoding="utf-8").read()
-
 
 class VRToggleState:
     def __init__(self):
         self.enabled = False
         self.renderer: VRRenderer | None = None
         self._ctx: moderngl.Context | None = None
-
     def toggle(self, ctx: moderngl.Context) -> bool:
         if self.enabled:
             self._disable()
         else:
             self._enable(ctx)
         return self.enabled
-
     def _enable(self, ctx: moderngl.Context):
         self._ctx = ctx
         if initialize(ctx):
@@ -1029,7 +1465,6 @@ class VRToggleState:
         else:
             self.enabled = False
             print('[VR] VR initialization failed.')
-
     def _disable(self):
         if self.renderer is not None:
             self.renderer.release()
@@ -1039,37 +1474,31 @@ class VRToggleState:
         self.enabled = False
         print('[VR] VR mode disabled.')
 
-
 _vr_toggle = VRToggleState()
-
 
 def toggle_vr(ctx: moderngl.Context) -> bool:
     return _vr_toggle.toggle(ctx)
 
-
 def vr_enabled() -> bool:
     return _vr_toggle.enabled or _vr_state.active
-
 
 def get_hmd_pos_offset() -> tuple[float, float, float]:
     return _vr_state._hmd_pos_offset
 
-
 def reset_hmd_origin():
     _vr_state._hmd_pos_origin = None
-
 
 def get_ipd() -> float:
     return _vr_state.ipd_override
 
-
 def set_ipd(ipd: float):
     _vr_state.ipd_override = max(0.010, min(0.200, ipd))
 
+def reset_ipd():
+    _vr_state.ipd_override = IPD_DEFAULT
 
 def get_renderer() -> VRRenderer | None:
     return _vr_toggle.renderer
-
 
 def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo, params, wnd_w: int, wnd_h: int):
     rnd = _vr_toggle.renderer
@@ -1077,6 +1506,7 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
         print('[VR] render_vr_frame: renderer is None, skipping')
         end_xr_frame()
         return
+    eye_view = _vr_state.eye_view_enabled
     use_xr = _vr_state.active and _vr_state._session_running and len(_vr_state._swapchains) == 2
     eyes = get_eye_transforms(params)
     for eye in eyes:
@@ -1087,10 +1517,8 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
         ctx.enable(moderngl.DEPTH_TEST)
         efbo.fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
         fractal_window_render_eye(efbo.fbo, efbo.w, efbo.h, eye)
-
     for eye in eyes:
         rnd.render_controllers_for_eye(eye)
-
     if use_xr:
         try:
             gl = _load_gl_funcs()
@@ -1124,13 +1552,18 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
                         print(f'[VR] release_image {i} error: {e}')
         except Exception as e:
             print(f'[VR] Swapchain blit error: {e}')
-    rnd.compose_to_screen(screen_fbo, wnd_w, wnd_h)
+    if eye_view:
+        rnd.compose_to_screen(screen_fbo, wnd_w, wnd_h)
+    else:
+        try:
+            ctx.viewport = (0, 0, wnd_w, wnd_h)
+        except Exception:
+            pass
     if use_xr:
         try:
             end_xr_frame()
         except Exception:
             pass
-
 
 def poll_xr_events():
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state.instance):
@@ -1204,7 +1637,6 @@ def poll_xr_events():
     except Exception as e:
         print(f'[VR] poll_xr_events error: {e}')
 
-
 def sync_hmd_pose():
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
         return False
@@ -1251,7 +1683,6 @@ def sync_hmd_pose():
     except Exception as e:
         print(f'[VR] locate_views error: {e}')
         return False
-
 
 def end_xr_frame():
     if not (_XR_AVAILABLE and _vr_state.active and _vr_state._frame_begun):
@@ -1312,14 +1743,70 @@ def end_xr_frame():
         _vr_state._frame_discard = False
         _vr_state._frame_state = None
 
-
 def had_frames() -> bool:
     return _vr_state._frames_rendered > 0
-
 
 def session_running() -> bool:
     return _vr_state._session_running
 
-
 def get_controllers():
     return _vr_state.controllers
+
+def _make_perspective_flat(fov_deg, aspect, near, far):
+    f = 1.0 / math.tan(math.radians(fov_deg)*0.5)
+    return [f/aspect, 0.0, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 0.0, -(far+near)/(far-near), -1.0, 0.0, 0.0, -(2.0*far*near)/(far-near), 0.0]
+
+def render_desktop_vr(vp, view_mat, proj_mat, fw, fh):
+    rnd = _vr_toggle.renderer
+    if rnd is None:
+        try:
+            if _vr_toggle._ctx is not None:
+                rnd = VRRenderer(_vr_toggle._ctx)
+                _vr_toggle.renderer = rnd
+            else:
+                return
+        except Exception:
+            return
+    try:
+        cam = getattr(vp, '_cam', None)
+        if cam is None:
+            return
+        pos = cam.position
+        fwd = cam.forward
+        up = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0,1,0)
+        right = fwd.cross(up).normalized()
+        cam_up = right.cross(fwd).normalized()
+        view_flat = _make_view_matrix((pos.x, pos.y, pos.z), (fwd.x, fwd.y, fwd.z), (right.x, right.y, right.z), (cam_up.x, cam_up.y, cam_up.z))
+        aspect = fw / max(1, fh)
+        proj_flat = _make_perspective_flat(cam.fov if hasattr(cam, 'fov') else 60.0, aspect, cam.near if hasattr(cam, 'near') else 0.1, cam.far if hasattr(cam, 'far') else 1000.0)
+        try:
+            rnd.render_controllers_desktop(view_flat, proj_flat)
+        except Exception:
+            pass
+        try:
+            vp_mat = view_mat * proj_mat
+        except Exception:
+            vp_mat = None
+        hits = get_controller_hits()
+        lines = []
+        for idx, (ent, hit, dist, ray) in enumerate(hits):
+            if ray is None:
+                continue
+            origin, fwdv = ray
+            has_hit = ent is not None and hit is not None
+            end = hit if has_hit else (origin[0]+fwdv[0]*10.0, origin[1]+fwdv[1]*10.0, origin[2]+fwdv[2]*10.0)
+            from core.maths.math3d import Vec3
+            c = [1.0, 0.9, 0.2, 1.0] if has_hit else ([0.2, 0.9, 1.0, 1.0] if idx==0 else [1.0, 0.3, 0.3, 1.0])
+            if has_hit:
+                trig = _vr_state.controllers[idx].trigger
+                if trig > TRIGGER_THRESHOLD:
+                    c = [1.0, 1.0, 0.2, 1.0]
+            lines.append((Vec3(*origin), Vec3(*end), c))
+        if lines and vp_mat is not None:
+            try:
+                vp._renderer.render_gizmo_lines(lines, vp_mat, pos, fw, fh, thickness_multiplier=2.0)
+            except Exception:
+                pass
+    except Exception:
+        pass
+

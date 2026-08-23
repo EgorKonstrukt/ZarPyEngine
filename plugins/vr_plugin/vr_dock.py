@@ -52,6 +52,12 @@ class VRControlWidget(QWidget):
         self._ipd_lbl.setFixedWidth(60)
         ipd_row.addWidget(self._ipd_lbl)
         ipd_layout.addRow(ipd_row)
+        ipd_btn_row = QHBoxLayout()
+        self._ipd_reset_btn = QPushButton("Reset IPD")
+        self._ipd_reset_btn.clicked.connect(self._on_reset_ipd)
+        ipd_btn_row.addWidget(self._ipd_reset_btn)
+        ipd_btn_row.addStretch()
+        ipd_layout.addRow(ipd_btn_row)
         layout.addWidget(ipd_group)
 
         origin_group = QGroupBox("Tracking")
@@ -63,6 +69,14 @@ class VRControlWidget(QWidget):
         self._offset_lbl = QLabel("Offset: 0.00, 0.00, 0.00")
         origin_layout.addWidget(self._offset_lbl)
         layout.addWidget(origin_group)
+
+        view_group = QGroupBox("Viewport")
+        view_layout = QVBoxLayout(view_group)
+        view_layout.setContentsMargins(6, 12, 6, 6)
+        self._eye_view_btn = QPushButton("View: Eye")
+        self._eye_view_btn.clicked.connect(self._on_toggle_view)
+        view_layout.addWidget(self._eye_view_btn)
+        layout.addWidget(view_group)
 
         ctrl_group = QGroupBox("Controllers")
         ctrl_layout = QVBoxLayout(ctrl_group)
@@ -87,14 +101,42 @@ class VRControlWidget(QWidget):
         set_ipd(ipd)
         self._ipd_lbl.setText(f"{ipd:.3f} m")
 
+    def _on_reset_ipd(self):
+        from plugins.vr_plugin.vr_core import reset_ipd
+        reset_ipd()
+        self._refresh()
+
     def _on_reset_origin(self):
         from plugins.vr_plugin.vr_core import reset_hmd_origin
         reset_hmd_origin()
 
+    def _on_toggle_view(self):
+        from plugins.vr_plugin.vr_core import toggle_eye_view
+        v = toggle_eye_view()
+        self._eye_view_btn.setText("View: Eye" if v else "View: Desktop")
+        if hasattr(self._plugin, '_eye_view'):
+            self._plugin._eye_view = v
+            if self._plugin._vr_view_btn is not None:
+                try:
+                    import qtawesome as qta
+                    if v:
+                        self._plugin._vr_view_btn.setText(" Eye")
+                        self._plugin._vr_view_btn.setIcon(qta.icon("fa5s.eye", color="#4fc3f7"))
+                    else:
+                        self._plugin._vr_view_btn.setText(" Desktop")
+                        self._plugin._vr_view_btn.setIcon(qta.icon("fa5s.desktop", color="#aed581"))
+                except Exception:
+                    pass
+        try:
+            if self._engine.viewport:
+                self._engine.viewport.update()
+        except Exception:
+            pass
+
     def _refresh(self):
         from plugins.vr_plugin.vr_core import (
             is_available, vr_enabled, session_running, is_active,
-            get_ipd, get_hmd_pos_offset, get_controllers,
+            get_ipd, get_hmd_pos_offset, get_controllers, is_eye_view,
         )
         avail = is_available()
         enabled = vr_enabled() or is_active()
@@ -119,6 +161,11 @@ class VRControlWidget(QWidget):
         self._ipd_slider.setValue(int(ipd * 1000))
         self._ipd_slider.blockSignals(False)
         self._ipd_lbl.setText(f"{ipd:.3f} m")
+        try:
+            self._eye_view_btn.setText("View: Eye" if is_eye_view() else "View: Desktop")
+            self._eye_view_btn.setEnabled(enabled)
+        except Exception:
+            pass
 
         off = get_hmd_pos_offset()
         self._offset_lbl.setText(f"Offset: {off[0]:.2f}, {off[1]:.2f}, {off[2]:.2f}")
@@ -131,7 +178,9 @@ class VRControlWidget(QWidget):
             (self._ctrl_right_lbl, ctrls[1], "Right"),
         ]:
             if ctrl.valid:
-                lbl.setText(f"{name}:  OK  grip={ctrl.grip:.2f}")
+                trig = getattr(ctrl, 'trigger', 0.0)
+                ts = getattr(ctrl, 'thumbstick', (0.0, 0.0))
+                lbl.setText(f"{name}: OK grip={ctrl.grip:.2f} trig={trig:.2f} stick={ts[0]:.2f},{ts[1]:.2f}")
                 lbl.setStyleSheet("color: #44cc44;")
             else:
                 lbl.setText(f"{name}:  --")

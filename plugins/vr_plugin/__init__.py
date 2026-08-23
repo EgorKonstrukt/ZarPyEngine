@@ -21,10 +21,8 @@ try:
 except Exception:
     _HAS_VR_BATCH = False
 
-
 class _EyeCamera:
     DEFAULT_FOV = 60.0
-
     def __init__(self, view_mat, proj_mat, pos, fwd, fov_deg):
         self._view = view_mat
         self._proj = proj_mat
@@ -34,62 +32,120 @@ class _EyeCamera:
         self._is_2d_mode = False
         self._is_orthographic = False
         self._ortho_zoom_distance = 1.0
-
     def get_view_matrix(self):
         return self._view
-
     def get_projection_matrix(self, aspect=1.0):
         return self._proj
-
     @property
     def forward(self):
         return self._fwd
-
     @property
     def position(self):
         return self._pos
-
     @property
     def fov(self):
         return self._fov
-
     @property
     def is_2d_mode(self):
         return False
-
     @property
     def is_orthographic(self):
         return False
-
 
 class VRPlugin(PluginBase):
     NAME = "VRPlugin"
     VERSION = "1.0.0"
     DESCRIPTION = "VR display integration with OpenXR"
     SYSTEM = False
-
     def __init__(self):
         super().__init__()
         self._viewport = None
         self._original_paintGL = None
         self._vr_active = False
         self._dock_widget = None
-
+        self._vr_view_btn = None
+        self._eye_view = True
     def initialize(self, engine):
         super().initialize(engine)
         self.register_dock("VR Control", self._create_dock, area="bottom")
-
     def _create_dock(self):
         from plugins.vr_plugin.vr_dock import VRControlWidget
         self._dock_widget = VRControlWidget(self._engine, self)
         return self._dock_widget
-
     def toggle_vr(self):
         if self._vr_active:
             self._disable_vr()
         else:
             self._enable_vr()
-
+    def _install_toolbar_button(self, vp):
+        try:
+            import qtawesome as qta
+            from PyQt6.QtWidgets import QPushButton
+            if self._vr_view_btn is not None:
+                try:
+                    self._vr_view_btn.setVisible(True)
+                    return
+                except Exception:
+                    pass
+            bar = getattr(vp, '_toolbar', None)
+            if bar is None:
+                return
+            lay = bar.layout()
+            if lay is None:
+                return
+            cam_row = lay.itemAt(0).layout() if lay.count() > 0 else None
+            if cam_row is None:
+                return
+            btn = QPushButton(qta.icon("fa5s.eye", color="#d4d4d4"), " Eye")
+            btn.setCheckable(False)
+            btn.setToolTip("Toggle VR Eye / Desktop view")
+            btn.setMinimumWidth(70)
+            def _on_click():
+                self._eye_view = not self._eye_view
+                try:
+                    from plugins.vr_plugin import vr_core
+                    vr_core.set_eye_view(self._eye_view)
+                except Exception:
+                    pass
+                if self._eye_view:
+                    btn.setText(" Eye")
+                    btn.setIcon(qta.icon("fa5s.eye", color="#4fc3f7"))
+                else:
+                    btn.setText(" Desktop")
+                    btn.setIcon(qta.icon("fa5s.desktop", color="#aed581"))
+                try:
+                    vp.update()
+                except Exception:
+                    pass
+            btn.clicked.connect(_on_click)
+            if self._eye_view:
+                btn.setIcon(qta.icon("fa5s.eye", color="#4fc3f7"))
+            else:
+                btn.setIcon(qta.icon("fa5s.desktop", color="#aed581"))
+            cam_row.addWidget(btn)
+            self._vr_view_btn = btn
+            self._eye_view = True
+            try:
+                from plugins.vr_plugin import vr_core
+                vr_core.set_eye_view(True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    def _remove_toolbar_button(self):
+        if self._vr_view_btn is not None:
+            try:
+                self._vr_view_btn.setVisible(False)
+                self._vr_view_btn.deleteLater()
+            except Exception:
+                pass
+            self._vr_view_btn = None
+    def on_viewport_ready(self, vp):
+        try:
+            if self._vr_active:
+                self._install_toolbar_button(vp)
+        except Exception:
+            pass
     def _enable_vr(self):
         from plugins.vr_plugin import vr_core
         vp = self._engine.viewport
@@ -111,9 +167,14 @@ class VRPlugin(PluginBase):
         vr_core._vr_toggle._ctx = vp._ctx
         vr_core._vr_toggle.enabled = True
         self._vr_active = True
+        self._eye_view = True
+        try:
+            vr_core.set_eye_view(True)
+        except Exception:
+            pass
+        self._install_toolbar_button(vp)
         self._original_paintGL = vp.paintGL
         plugin = self
-
         def _vr_paint(self_):
             if getattr(self_, '_in_render_tick', False):
                 return
@@ -172,6 +233,13 @@ class VRPlugin(PluginBase):
                 if not eng.play_mode:
                     self_._update_editor_particles(dt, self_._selected_entities)
                 self_._cam.update(dt)
+                try:
+                    from plugins.vr_plugin import vr_core as _vc
+                    if _vc.is_active() and _vc.session_running():
+                        _vc.update_vr_locomotion(self_._cam, dt)
+                        _vc.handle_trigger_selection(self_)
+                except Exception:
+                    pass
             self_._update_status_labels()
             try:
                 self_._bind_screen_fbo()
@@ -181,7 +249,12 @@ class VRPlugin(PluginBase):
                 self_._renderer.clear_color = self_._clear_color
                 if scene:
                     fw, fh = self_._get_physical_dims()
-                    if plugin._render_vr_frame(self_, scene, fw, fh):
+                    rendered = False
+                    try:
+                        rendered = plugin._render_vr_frame(self_, scene, fw, fh)
+                    except Exception:
+                        rendered = False
+                    if rendered:
                         pass
                     else:
                         aspect = fw / max(1, fh)
@@ -233,6 +306,13 @@ class VRPlugin(PluginBase):
                                 gizmo_lines = self_._gizmo.get_gizmo_lines(self_._cam, fw, fh)
                                 if gizmo_lines:
                                     self_._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh)
+                        try:
+                            from plugins.vr_plugin import vr_core as _vc2
+                            if _vc2.is_active():
+                                _vc2.render_desktop_vr(self_, view, proj, fw, fh)
+                                _vc2.handle_trigger_selection(self_)
+                        except Exception:
+                            pass
                         if not self_._no_qt_overlay:
                             if self_._overlay_widget.width() != self_.width() or self_._overlay_widget.height() != self_.height():
                                 self_._overlay_widget.resize(self_.width(), self_.height())
@@ -244,11 +324,9 @@ class VRPlugin(PluginBase):
             if self_._vsync_enabled:
                 self_.update()
             self_._in_render_tick = False
-
         vp.paintGL = types.MethodType(_vr_paint, vp)
         from core.foundation.logger import Logger
         Logger.info("[VR] Viewport hooked for VR rendering.")
-
     def _render_vr_frame(self, vp, scene, fw, fh) -> bool:
         from plugins.vr_plugin import vr_core
         if not self._vr_active:
@@ -295,7 +373,7 @@ class VRPlugin(PluginBase):
                     float(eye['right'][0]), float(eye['right'][1]), float(eye['right'][2]),
                     float(eye['up'][0]), float(eye['up'][1]), float(eye['up'][2]),
                     float(eye['fwd'][0]), float(eye['fwd'][1]), float(eye['fwd'][2]),
-                    float(al), float(ar), float(au), float(ad),
+                    math.tan(float(al)), math.tan(float(ar)), math.tan(float(au)), math.tan(float(ad)),
                     float(cam.near), float(cam.far))
                 proj_mat = Mat4(proj_arr)
                 view_mat = Mat4(view_arr)
@@ -371,6 +449,22 @@ class VRPlugin(PluginBase):
                     gizmo_lines = vp._gizmo.get_gizmo_lines(eye_cam, w, h)
                     if gizmo_lines:
                         vp._renderer.render_gizmo_lines(gizmo_lines, vp_mat, eye_pos, w, h, thickness_multiplier=1.0)
+            hits = vr_core.get_controller_hits()
+            lines = []
+            for idx2, (ent, hit, dist, ray) in enumerate(hits):
+                if ray is None:
+                    continue
+                origin, fwd = ray
+                has_hit = ent is not None and hit is not None
+                end = hit if has_hit else (origin[0]+fwd[0]*8.0, origin[1]+fwd[1]*8.0, origin[2]+fwd[2]*8.0)
+                from core.maths.math3d import Vec3 as _Vec3
+                col = [1.0, 0.95, 0.2, 1.0] if has_hit else ([0.2, 0.85, 1.0, 1.0] if idx2==0 else [1.0, 0.35, 0.35, 1.0])
+                lines.append((_Vec3(*origin), _Vec3(*end), col))
+            if lines:
+                try:
+                    vp._renderer.render_gizmo_lines(lines, vp_mat, eye_pos, w, h, thickness_multiplier=2.0)
+                except Exception:
+                    pass
         try:
             vr_core.render_vr_frame(render_eye, vp._ctx, vp._screen_fbo, Params(), fw, fh)
         except Exception as e:
@@ -403,8 +497,7 @@ class VRPlugin(PluginBase):
         vp._ctx.viewport = (0, 0, fw, fh)
         vp._ctx.disable(moderngl.DEPTH_TEST)
         vp._ctx.disable(moderngl.CULL_FACE)
-        return True
-
+        return vr_core.is_eye_view()
     def _disable_vr(self):
         from plugins.vr_plugin import vr_core
         if self._original_paintGL and self._viewport:
@@ -416,6 +509,7 @@ class VRPlugin(PluginBase):
                 self._viewport.update()
             except Exception:
                 pass
+        self._remove_toolbar_button()
         r = vr_core.get_renderer()
         if r is not None:
             try:
@@ -425,18 +519,21 @@ class VRPlugin(PluginBase):
             vr_core._vr_toggle.renderer = None
         vr_core._vr_toggle.enabled = False
         vr_core._vr_toggle._ctx = None
+        try:
+            vr_core.set_eye_view(True)
+        except Exception:
+            pass
         vr_core.shutdown()
         self._vr_active = False
+        self._eye_view = True
         self._original_paintGL = None
         self._viewport = None
         from core.foundation.logger import Logger
         Logger.info("[VR] VR disabled, original viewport restored.")
-
     def shutdown(self):
         if self._vr_active:
             self._disable_vr()
         super().shutdown()
-
 
 def get_plugin():
     return VRPlugin()
