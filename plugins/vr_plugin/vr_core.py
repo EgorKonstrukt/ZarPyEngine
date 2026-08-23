@@ -222,6 +222,13 @@ class VRState:
         self._prev_trigger = [False, False]
         self.rig_yaw = 0.0
         self.rig_vel = (0.0, 0.0, 0.0)
+        self._haptic_actions = [None, None]
+        self._ar_enabled = False
+        self._ar_planes = []
+        self._ar_anchors = []
+        self._ar_point_cloud = None
+        self._ar_supports_passthrough = False
+        self._ar_floor_y = 0.0
 
 _gl = None
 
@@ -349,6 +356,20 @@ def _setup_input(instance, session):
                 ),
             )
             _vr_state._trigger_actions[i] = xr.create_action(action_set, trig_info)
+            try:
+                haptic_type = getattr(xr.ActionType, 'VIBRATION_OUTPUT', None) or getattr(xr.ActionType, 'HAPTIC_OUTPUT', None) or 1000079000
+                haptic_info = xr.ActionCreateInfo(
+                    action_type=haptic_type,
+                    action_name=f'haptic_{side}',
+                    localized_action_name=f'Haptic {side.capitalize()}',
+                    count_subaction_paths=1,
+                    subaction_paths=ctypes.cast(
+                        (xr.Path * 1)(hand_paths[i]), ctypes.POINTER(xr.Path)
+                    ),
+                )
+                _vr_state._haptic_actions[i] = xr.create_action(action_set, haptic_info)
+            except Exception as e:
+                print(f'[VR] haptic action setup failed for {side}: {e}')
         grip_path_l = xr.string_to_path(instance, '/user/hand/left/input/squeeze/value')
         grip_path_r = xr.string_to_path(instance, '/user/hand/right/input/squeeze/value')
         pose_path_l = xr.string_to_path(instance, '/user/hand/left/input/grip/pose')
@@ -378,27 +399,32 @@ def _setup_input(instance, session):
                 ('pose', pose_path_l, pose_path_r),
                 ('thumb', thumb_l, thumb_r),
                 ('trig', trig_l, trig_r),
+                ('haptic', xr.string_to_path(instance, '/user/hand/left/output/haptic'), xr.string_to_path(instance, '/user/hand/right/output/haptic')),
             ]),
             ('/interaction_profiles/valve/index_controller', [
                 ('grip', grip_path_l, grip_path_r),
                 ('pose', pose_path_l, pose_path_r),
                 ('thumb', thumb_l, thumb_r),
                 ('trig', trig_l, trig_r),
+                ('haptic', xr.string_to_path(instance, '/user/hand/left/output/haptic'), xr.string_to_path(instance, '/user/hand/right/output/haptic')),
             ]),
             ('/interaction_profiles/htc/vive_controller', [
                 ('grip', xr.string_to_path(instance, '/user/hand/left/input/squeeze/click'), xr.string_to_path(instance, '/user/hand/right/input/squeeze/click')),
                 ('pose', pose_path_l, pose_path_r),
                 ('thumb', xr.string_to_path(instance, '/user/hand/left/input/trackpad'), xr.string_to_path(instance, '/user/hand/right/input/trackpad')),
                 ('trig', trig_l, trig_r),
+                ('haptic', xr.string_to_path(instance, '/user/hand/left/output/haptic'), xr.string_to_path(instance, '/user/hand/right/output/haptic')),
             ]),
             ('/interaction_profiles/microsoft/motion_controller', [
                 ('grip', xr.string_to_path(instance, '/user/hand/left/input/squeeze/click'), xr.string_to_path(instance, '/user/hand/right/input/squeeze/click')),
                 ('pose', pose_path_l, pose_path_r),
                 ('thumb', thumb_l, thumb_r),
                 ('trig', trig_l, trig_r),
+                ('haptic', xr.string_to_path(instance, '/user/hand/left/output/haptic'), xr.string_to_path(instance, '/user/hand/right/output/haptic')),
             ]),
             ('/interaction_profiles/khr/simple_controller', [
                 ('trig', trig_l2, trig_r2),
+                ('haptic', xr.string_to_path(instance, '/user/hand/left/output/haptic'), xr.string_to_path(instance, '/user/hand/right/output/haptic')),
             ]),
         ]:
             try:
@@ -417,6 +443,11 @@ def _setup_input(instance, session):
                     elif kind == 'trig':
                         b.append(xr.ActionSuggestedBinding(action=_vr_state._trigger_actions[0], binding=pl))
                         b.append(xr.ActionSuggestedBinding(action=_vr_state._trigger_actions[1], binding=pr))
+                    elif kind == 'haptic':
+                        if _vr_state._haptic_actions[0] is not None:
+                            b.append(xr.ActionSuggestedBinding(action=_vr_state._haptic_actions[0], binding=pl))
+                        if _vr_state._haptic_actions[1] is not None:
+                            b.append(xr.ActionSuggestedBinding(action=_vr_state._haptic_actions[1], binding=pr))
                 if b:
                     xr.suggest_interaction_profile_bindings(instance, xr.InteractionProfileSuggestedBinding(
                         interaction_profile=prof_path,
@@ -877,86 +908,200 @@ def get_controller_ray(i: int):
     fwd = _quat_to_fwd(*q)
     return (origin, fwd)
 
-def sync_vr_entities():
+class _VRParams:
+    def __init__(self, cam_pos, cam_yaw, cam_pitch):
+        self.cam_pos = cam_pos
+        self.cam_yaw = cam_yaw
+        self.cam_pitch = cam_pitch
+
+def update_vr_entities(vp, dt: float):
     try:
         from core.engine.engine import Engine
         eng = Engine.instance()
-        if not eng or not eng.scene:
+        if eng is None or eng.scene is None:
             return
         sc = eng.scene
-        from plugins.vr_plugin import vr_core as _vc_sync_check
-        is_active = _vc_sync_check.is_active() and _vc_sync_check.session_running()
+        active = is_active() and session_running()
+        if active:
+            try:
+                sync_hmd_pose()
+            except Exception:
+                pass
+            try:
+                update_vr_locomotion(vp._cam, dt)
+            except Exception:
+                pass
+        rig_pos = (0.0, 0.0, 0.0)
+        rig_yaw = 0.0
         for e in sc.get_all_entities():
-            from plugins.vr_plugin.components.vr_components import VRHead, VRLeftController, VRRightController, VRController
-            vh = e.get_component(VRHead)
-            if vh:
-                tr = e.transform
-                if tr:
-                    if is_active:
-                        pos = get_hmd_world_pos()
-                        quat = get_hmd_world_quat()
-                        tr.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(pos[0], pos[1], pos[2])
-                        tr.local_rotation = __import__('core.maths.math3d', fromlist=['Quat']).Quat(quat[0], quat[1], quat[2], quat[3])
-                    else:
-                        try:
-                            parent = e.parent
-                            if parent:
-                                tr.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
-                            else:
-                                tr.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
-                        except Exception:
-                            pass
-                        except Exception:
-                            pass
-            vc = e.get_component(VRController)
-            if not vc:
-                vc = e.get_component(VRLeftController)
-            if not vc:
-                vc = e.get_component(VRRightController)
-            if vc:
-                idx = 0 if getattr(vc, 'hand', 'Left') == 'Left' else 1
-                try:
-                    if e.get_component(VRLeftController):
-                        idx = 0
-                    elif e.get_component(VRRightController):
-                        idx = 1
-                except Exception:
-                    pass
-                tr2 = e.transform
-                if tr2:
-                    if is_active:
-                        pos2 = get_controller_world_pos(idx)
-                        quat2 = get_controller_world_quat(idx)
-                        if pos2 is not None:
-                            tr2.position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(pos2[0], pos2[1], pos2[2])
-                        if quat2 is not None:
-                            tr2.local_rotation = __import__('core.maths.math3d', fromlist=['Quat']).Quat(quat2[0], quat2[1], quat2[2], quat2[3])
-                    else:
-                        off = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(-0.25, 1.2, -0.2) if idx == 0 else __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.25, 1.2, -0.2)
-                        try:
-                            parent = e.parent
-                            if parent:
-                                tr2.local_position = off
-                            else:
-                                tr2.position = off
-                        except Exception:
-                            pass
+            rc = e.get_component(XRRig)
+            if rc is not None:
+                t = e.transform
+                if t is not None:
+                    wp = t.position
+                    rig_pos = (wp.x, wp.y, wp.z)
+                    rig_yaw = rc.rig_yaw
+                break
         try:
-            for re in sc.get_all_entities():
-                vrc = re.get_component(__import__('plugins.vr_plugin.components.vr_components', fromlist=['VR']).VR)
-                if vrc:
-                    trr = re.transform
-                    if trr:
-                        try:
-                            ipd_s = get_ipd() / 0.063
-                            trr.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(ipd_s, ipd_s, ipd_s)
-                        except Exception:
-                            pass
-                    break
+            params = _VRParams(rig_pos, rig_yaw, 0.0)
+            get_eye_transforms(params)
         except Exception:
             pass
+        Vec3 = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3
+        Quat = __import__('core.maths.math3d', fromlist=['Quat']).Quat
+        from plugins.vr_plugin.components.xr_rig import XRTrackedPoseDriver, XRController, XRHand
+        for e in sc.get_all_entities():
+            if not e.active:
+                continue
+            tpd = e.get_component(XRTrackedPoseDriver)
+            if tpd is not None:
+                _drive_xr_tracked_pose(e, tpd, active, Vec3, Quat)
+            xrc = e.get_component(XRController)
+            if xrc is not None:
+                _drive_xr_controller(e, xrc, active, Vec3, Quat)
+            xrh = e.get_component(XRHand)
+            if xrh is not None:
+                _drive_xr_hand(e, xrh, active, Vec3, Quat)
+        if active:
+            try:
+                mgr = None
+                for e in sc.get_all_entities():
+                    m = e.get_component(XRInteractionManager)
+                    if m is not None:
+                        mgr = m
+                        break
+                if mgr is not None and mgr.enabled:
+                    from plugins.vr_plugin.components.xr_interaction import update_interaction
+                    update_interaction(sc, dt, mgr)
+            except Exception:
+                pass
+            try:
+                from plugins.vr_plugin.components.xr_locomotion import apply_locomotion_providers
+                apply_locomotion_providers(sc, dt)
+            except Exception:
+                pass
+        try:
+            _sync_ar_session(sc)
+        except Exception:
+            pass
+        if active:
+            try:
+                handle_trigger_selection(vp)
+            except Exception:
+                pass
     except Exception:
         pass
+
+
+def _drive_xr_tracked_pose(e, tpd, active, Vec3, Quat):
+    tr = e.transform
+    if tr is None:
+        return
+    pt = tpd.pose_type
+    p = None
+    q = None
+    if pt in ("Head", "Center"):
+        p = get_hmd_world_pos() if active else (0.0, 1.6, 0.0)
+        q = get_hmd_world_quat() if active else (0.0, 0.0, 0.0, 1.0)
+    elif pt == "LeftHand":
+        p = get_controller_world_pos(0) if active else (-0.25, 1.2, -0.2)
+        q = get_controller_world_quat(0) if active else (0.0, 0.0, 0.0, 1.0)
+    elif pt == "RightHand":
+        p = get_controller_world_pos(1) if active else (0.25, 1.2, -0.2)
+        q = get_controller_world_quat(1) if active else (0.0, 0.0, 0.0, 1.0)
+    elif pt in ("LeftEye", "RightEye"):
+        hp = get_hmd_world_pos() if active else (0.0, 1.6, 0.0)
+        hq = get_hmd_world_quat() if active else (0.0, 0.0, 0.0, 1.0)
+        if hp is not None:
+            ipd = 0.064
+            try:
+                ipd = get_ipd()
+            except Exception:
+                pass
+            hq = hq or (0.0, 0.0, 0.0, 1.0)
+            hmd_q = Quat(hq[0], hq[1], hq[2], hq[3])
+            right = hmd_q * Vec3(1.0, 0.0, 0.0)
+            side = -1.0 if pt == "LeftEye" else 1.0
+            p = (hp[0] + right.x * ipd * 0.5 * side, hp[1] + right.y * ipd * 0.5 * side, hp[2] + right.z * ipd * 0.5 * side)
+            q = hq
+    if p is not None:
+        if active:
+            tr.position = Vec3(p[0], p[1], p[2])
+        else:
+            if e.parent is not None:
+                tr.local_position = Vec3(p[0], p[1], p[2])
+            else:
+                tr.position = Vec3(p[0], p[1], p[2])
+    if q is not None:
+        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+
+
+def _drive_xr_controller(e, xrc, active, Vec3, Quat):
+    tr = e.transform
+    if tr is None:
+        return
+    idx = 0 if xrc.controller_hand == "Left" else 1
+    p = get_controller_world_pos(idx) if active else (xrc.controller_hand == "Left" and -0.25 or 0.25, 1.2, -0.2)
+    q = get_controller_world_quat(idx) if active else (0.0, 0.0, 0.0, 1.0)
+    if p is not None:
+        if active:
+            tr.position = Vec3(p[0], p[1], p[2])
+        else:
+            if e.parent is not None:
+                tr.local_position = Vec3(p[0], p[1], p[2])
+            else:
+                tr.position = Vec3(p[0], p[1], p[2])
+    if q is not None:
+        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+    cs = _vr_state.controllers[idx]
+    xrc.trigger = getattr(cs, 'trigger', 0.0)
+    xrc.grip = getattr(cs, 'grip', 0.0)
+    xrc.thumbstick = getattr(cs, 'thumbstick', (0.0, 0.0))
+    xrc.primary_button = getattr(cs, 'primary_button', False)
+    xrc.secondary_button = getattr(cs, 'secondary_button', False)
+    if xrc._model_entity is None or getattr(xrc, '_current_model', None) != xrc.model:
+        xrc.set_model(xrc.model)
+
+
+def _drive_xr_hand(e, xrh, active, Vec3, Quat):
+    tr = e.transform
+    if tr is None:
+        return
+    idx = 0 if xrh.hand == "Left" else 1
+    p = get_controller_world_pos(idx) if active else (xrh.hand == "Left" and -0.25 or 0.25, 1.2, -0.2)
+    q = get_controller_world_quat(idx) if active else (0.0, 0.0, 0.0, 1.0)
+    if p is not None:
+        if active:
+            tr.position = Vec3(p[0], p[1], p[2])
+        else:
+            if e.parent is not None:
+                tr.local_position = Vec3(p[0], p[1], p[2])
+            else:
+                tr.position = Vec3(p[0], p[1], p[2])
+    if q is not None:
+        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+    cs = _vr_state.controllers[idx]
+    xrh.index_curl = getattr(cs, 'trigger', 0.0)
+    xrh.grip_curl = getattr(cs, 'grip', 0.0)
+    xrh.thumbs_up = 1.0 - getattr(cs, 'grip', 0.0)
+
+
+def _sync_ar_session(sc):
+    sess = None
+    for e in sc.get_all_entities():
+        s = e.get_component(ARSession)
+        if s is not None:
+            sess = s
+            break
+    if sess is not None and sess.enabled:
+        if not is_ar_mode():
+            enable_ar(floor_y=sess.floor_y)
+        else:
+            _vr_state._ar_floor_y = sess.floor_y
+        _ensure_ar_floor_plane()
+    else:
+        if is_ar_mode():
+            disable_ar()
 
 def has_vr_rig():
     try:
@@ -964,8 +1109,8 @@ def has_vr_rig():
         eng = Engine.instance()
         if eng and eng.scene:
             for e in eng.scene.get_all_entities():
-                from plugins.vr_plugin.components.vr_components import VR
-                if e.get_component(VR):
+                from plugins.vr_plugin.components.xr_rig import XRRig
+                if e.get_component(XRRig):
                     return True
     except Exception:
         pass
@@ -998,8 +1143,10 @@ def raycast_scene(origin, direction, max_dist=RAY_MAX_DIST):
             if not ent.active or not ent.transform:
                 continue
             try:
-                from plugins.vr_plugin.components.vr_components import VR, VRHead, VRController, VRLeftController, VRRightController, VRRay, VRSelection
-                if ent.get_component(VR) or ent.get_component(VRHead) or ent.get_component(VRController) or ent.get_component(VRLeftController) or ent.get_component(VRRightController):
+                from plugins.vr_plugin.components.xr_rig import XRRig, XRTrackedPoseDriver, XRController, XRHand
+                if ent.get_component(XRRig) or ent.get_component(XRTrackedPoseDriver) or ent.get_component(XRController) or ent.get_component(XRHand):
+                    continue
+                if ent.get_component(XRRig) or ent.get_component(XRTrackedPoseDriver) or ent.get_component(XRController) or ent.get_component(XRHand):
                     continue
             except Exception:
                 pass
@@ -1093,15 +1240,15 @@ def update_vr_locomotion(cam, dt: float):
         from core.engine.engine import Engine
         eng = Engine.instance()
         if eng and eng.scene:
-            for e in eng.scene.get_all_entities():
-                from plugins.vr_plugin.components.vr_components import VR
-                vr_comp = e.get_component(VR)
-                if vr_comp is not None:
-                    tr = e.transform
-                    if tr:
-                        tr.position = tr.position + __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx * dt, rvy * dt, rvz * dt)
-                        vr_comp.rig_yaw = _vr_state.rig_yaw
-                        vr_comp.velocity = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx, rvy, rvz)
+                for e in eng.scene.get_all_entities():
+                    from plugins.vr_plugin.components.xr_rig import XRRig
+                    vr_comp = e.get_component(XRRig)
+                    if vr_comp is not None:
+                        tr = e.transform
+                        if tr:
+                            tr.position = tr.position + __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx * dt, rvy * dt, rvz * dt)
+                            vr_comp.rig_yaw = _vr_state.rig_yaw
+                            vr_comp.velocity = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(rvx, rvy, rvz)
                         rig_moved = True
                     break
     except Exception:
@@ -1133,8 +1280,8 @@ def update_vr_locomotion(cam, dt: float):
             eng2 = Engine.instance()
             if eng2 and eng2.scene:
                 for e2 in eng2.scene.get_all_entities():
-                    from plugins.vr_plugin.components.vr_components import VR
-                    vr2 = e2.get_component(VR)
+                    from plugins.vr_plugin.components.xr_rig import XRRig
+                    vr2 = e2.get_component(XRRig)
                     if vr2 is not None:
                         tr2 = e2.transform
                         if tr2:
@@ -1177,6 +1324,145 @@ def handle_trigger_selection(viewport):
                     viewport.update()
                 except Exception:
                     pass
+
+def trigger_haptic(side: int, frequency: float = 1.0, amplitude: float = 1.0, duration_s: float = 0.1):
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
+        return False
+    action = _vr_state._haptic_actions[side] if 0 <= side < 2 else None
+    if action is None:
+        return False
+    try:
+        from xr import HapticVibration, HapticActionInfo
+        hand_paths = getattr(_vr_state, '_hand_paths', None)
+        sub = hand_paths[side] if hand_paths is not None else xr.NULL_PATH
+        info = HapticActionInfo(action=action, subaction_path=sub)
+        vib = HapticVibration(
+            duration=xr.Duration(int(duration_s * 1e9)),
+            frequency=frequency,
+            amplitude=max(0.0, min(1.0, amplitude)),
+        )
+        xr.apply_haptic_feedback(_vr_state.session, info, vib)
+        return True
+    except Exception as e:
+        try:
+            print(f'[VR] apply_haptic_feedback failed: {e}')
+        except Exception:
+            pass
+        return False
+
+def stop_haptic(side: int):
+    if not (_XR_AVAILABLE and _vr_state.active and _vr_state._session_running):
+        return
+    action = _vr_state._haptic_actions[side] if 0 <= side < 2 else None
+    if action is None:
+        return
+    try:
+        from xr import HapticActionInfo
+        hand_paths = getattr(_vr_state, '_hand_paths', None)
+        sub = hand_paths[side] if hand_paths is not None else xr.NULL_PATH
+        info = HapticActionInfo(action=action, subaction_path=sub)
+        xr.stop_haptic_feedback(_vr_state.session, info)
+    except Exception:
+        pass
+
+def is_ar_mode() -> bool:
+    return bool(_vr_state._ar_enabled)
+
+def supports_passthrough_ar() -> bool:
+    if not _XR_AVAILABLE:
+        return False
+    try:
+        exts = xr.enumerate_instance_extension_properties()
+        avail = {e.extension_name.decode('utf-8') if isinstance(e.extension_name, bytes) else e.extension_name for e in exts}
+        for name in ('XR_FB_passthrough', 'XR_MSFT_scene_understanding', 'XR_FB_scene'):
+            if name in avail:
+                return True
+    except Exception:
+        pass
+    return False
+
+def enable_ar(floor_y: float = 0.0):
+    _vr_state._ar_enabled = True
+    _vr_state._ar_floor_y = float(floor_y)
+    _vr_state._ar_supports_passthrough = supports_passthrough_ar()
+    try:
+        from core.foundation.logger import Logger
+        Logger.info('[VR] AR mode enabled (alpha-blend passthrough).')
+    except Exception:
+        pass
+
+def disable_ar():
+    _vr_state._ar_enabled = False
+    _vr_state._ar_planes = []
+    _vr_state._ar_anchors = []
+    _vr_state._ar_point_cloud = None
+
+def get_ar_blend_mode():
+    if _vr_state._ar_enabled:
+        try:
+            return xr.EnvironmentBlendMode.ALPHA_BLEND
+        except Exception:
+            return 3
+    try:
+        return xr.EnvironmentBlendMode.OPAQUE
+    except Exception:
+        return 1
+
+def get_ar_planes():
+    return list(_vr_state._ar_planes)
+
+def _ensure_ar_floor_plane():
+    if not _vr_state._ar_enabled:
+        return
+    if any(p.get('type') == 'floor' for p in _vr_state._ar_planes):
+        return
+    fy = _vr_state._ar_floor_y
+    _vr_state._ar_planes.append({
+        'id': 'floor',
+        'type': 'floor',
+        'pose': (0.0, fy, 0.0),
+        'normal': (0.0, 1.0, 0.0),
+        'extents': (10.0, 10.0),
+    })
+
+def add_ar_anchor(position, orientation=(0.0, 0.0, 0.0, 1.0), trackable_id=None):
+    if not _vr_state._ar_enabled:
+        return None
+    aid = f'anchor_{len(_vr_state._ar_anchors)}'
+    rec = {'id': aid, 'pose': tuple(position), 'quat': tuple(orientation), 'trackable_id': trackable_id}
+    _vr_state._ar_anchors.append(rec)
+    return aid
+
+def remove_ar_anchor(anchor_id):
+    _vr_state._ar_anchors = [a for a in _vr_state._ar_anchors if a['id'] != anchor_id]
+
+def get_ar_anchors():
+    return list(_vr_state._ar_anchors)
+
+def set_ar_point_cloud(points):
+    _vr_state._ar_point_cloud = list(points) if points else None
+
+def get_ar_point_cloud():
+    return list(_vr_state._ar_point_cloud) if _vr_state._ar_point_cloud else []
+
+def ar_raycast(origin, direction, max_dist=50.0):
+    _ensure_ar_floor_plane()
+    best = None
+    best_d = float('inf')
+    for p in _vr_state._ar_planes:
+        n = p.get('normal', (0.0, 1.0, 0.0))
+        po = p.get('pose', (0.0, 0.0, 0.0))
+        denom = direction[0]*n[0] + direction[1]*n[1] + direction[2]*n[2]
+        if abs(denom) < 1e-6:
+            continue
+        t = ((po[0]-origin[0])*n[0] + (po[1]-origin[1])*n[1] + (po[2]-origin[2])*n[2]) / denom
+        if t < 0 or t > max_dist:
+            continue
+        hit = (origin[0]+direction[0]*t, origin[1]+direction[1]*t, origin[2]+direction[2]*t)
+        if t < best_d:
+            best_d = t
+            best = (hit, p.get('id'))
+    return best, best_d
 
 def set_uniforms_for_eye(set_fn, eye: dict, rw: int, rh: int):
     al, ar, au, ad = eye['fov_angles']
@@ -1654,7 +1940,10 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
         ctx.viewport = (0, 0, efbo.w, efbo.h)
         ctx.disable(moderngl.BLEND)
         ctx.enable(moderngl.DEPTH_TEST)
-        efbo.fbo.clear(0.0, 0.0, 0.0, 1.0, 1.0)
+        if _vr_state._ar_enabled:
+            efbo.fbo.clear(0.0, 0.0, 0.0, 0.0)
+        else:
+            efbo.fbo.clear(0.0, 0.0, 0.0, 1.0)
         fractal_window_render_eye(efbo.fbo, efbo.w, efbo.h, eye)
     for eye in eyes:
         rnd.render_controllers_for_eye(eye)
@@ -1870,7 +2159,7 @@ def end_xr_frame():
             layers = layers_arr
         xr.end_frame(_vr_state.session, xr.FrameEndInfo(
             display_time=_vr_state._display_time,
-            environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
+            environment_blend_mode=get_ar_blend_mode(),
             layer_count=len(layers),
             layers=layers if layers else None,
         ))

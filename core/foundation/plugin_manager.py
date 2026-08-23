@@ -229,6 +229,44 @@ class PluginManager:
                 inst = obj()
                 inst._native_plugin_path = path
                 self.register(inst)
+        comp_dir = os.path.splitext(path)[0] + "_components"
+        self._auto_load_components(comp_dir, None)
+
+    def _auto_load_components(self, comp_dir: str, plugin_module_name: Optional[str] = None):
+        if not os.path.isdir(comp_dir):
+            return
+        key = (plugin_module_name or "zplugin").replace(".", "_")
+        for fname in sorted(os.listdir(comp_dir)):
+            if not fname.endswith(".py") or fname.startswith("_"):
+                continue
+            base = fname[:-3]
+            mod = None
+            if plugin_module_name:
+                try:
+                    mod = importlib.import_module(plugin_module_name + ".components." + base)
+                except Exception as e:
+                    Logger.warning(f"[Plugin] Could not import component '{base}' from {plugin_module_name}: {e}")
+                    mod = None
+            if mod is None:
+                mod_name = "_plugin_comp_" + key + "_" + base
+                fpath = os.path.join(comp_dir, fname)
+                try:
+                    spec = importlib.util.spec_from_file_location(mod_name, fpath)
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                except Exception as e:
+                    Logger.error(f"[Plugin] Failed to auto-load component module '{fname}': {e}", e)
+                    continue
+            registered = []
+            for attr in dir(mod):
+                obj = getattr(mod, attr)
+                if isinstance(obj, type) and obj.__module__ == mod.__name__:
+                    from core.ecs.ecs import Component, ComponentRegistry
+                    if issubclass(obj, Component):
+                        ComponentRegistry.register(obj)
+                        registered.append(obj.__name__)
+            if registered:
+                Logger.info(f"[Plugin] Auto-registered components from {fname}: {', '.join(registered)}")
 
     def load_from_file(self, path: str):
         try:
@@ -263,17 +301,27 @@ class PluginManager:
 
     def load_package(self, dirpath: str):
         try:
-            init_path = os.path.join(dirpath, "__init__.py")
-            pkg_name = "_plugin_" + os.path.basename(dirpath)
-            spec = importlib.util.spec_from_file_location(pkg_name, init_path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            basename = os.path.basename(dirpath)
+            if basename.startswith("_"):
+                return
+            canon = "plugins." + basename
+            mod = None
+            try:
+                mod = importlib.import_module(canon)
+            except Exception:
+                init_path = os.path.join(dirpath, "__init__.py")
+                pkg_name = "_plugin_" + basename
+                spec = importlib.util.spec_from_file_location(pkg_name, init_path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
             for attr in dir(mod):
                 obj = getattr(mod, attr)
                 if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:
                     inst = obj()
                     inst._native_plugin_path = dirpath
                     self.register(inst)
+            comp_dir = os.path.join(dirpath, "components")
+            self._auto_load_components(comp_dir, canon)
         except Exception as e:
             Logger.error(f"Failed to load plugin package '{dirpath}': {e}")
 

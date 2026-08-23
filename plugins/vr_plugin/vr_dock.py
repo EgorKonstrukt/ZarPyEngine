@@ -90,6 +90,16 @@ class VRControlWidget(QWidget):
         self._session_lbl = QLabel("Session: --")
         layout.addWidget(self._session_lbl)
 
+        ar_group = QGroupBox("AR / XR")
+        ar_layout = QVBoxLayout(ar_group)
+        ar_layout.setContentsMargins(6, 12, 6, 6)
+        self._ar_lbl = QLabel("AR: Off")
+        ar_layout.addWidget(self._ar_lbl)
+        self._spawn_rig_btn = QPushButton("Spawn XR Rig")
+        self._spawn_rig_btn.clicked.connect(self._on_spawn_rig)
+        ar_layout.addWidget(self._spawn_rig_btn)
+        layout.addWidget(ar_group)
+
         layout.addStretch()
 
     def _on_toggle(self):
@@ -133,6 +143,19 @@ class VRControlWidget(QWidget):
         except Exception:
             pass
 
+    def _on_spawn_rig(self):
+        try:
+            rig = self._plugin.spawn_xr_rig(self._engine)
+            if rig is not None:
+                self._ar_lbl.setText("XR Rig: Spawned")
+                try:
+                    if self._engine.viewport:
+                        self._engine.viewport.update()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _refresh(self):
         from plugins.vr_plugin.vr_core import (
             is_available, vr_enabled, session_running, is_active,
@@ -171,6 +194,17 @@ class VRControlWidget(QWidget):
         self._offset_lbl.setText(f"Offset: {off[0]:.2f}, {off[1]:.2f}, {off[2]:.2f}")
 
         self._session_lbl.setText(f"Session: {'Running' if running else 'Idle'}")
+
+        try:
+            from plugins.vr_plugin.vr_core import is_ar_mode, supports_passthrough_ar
+            if is_ar_mode():
+                self._ar_lbl.setText("AR: Active (passthrough)" if supports_passthrough_ar() else "AR: Active (alpha-blend)")
+                self._ar_lbl.setStyleSheet("color: #44ccaa;")
+            else:
+                self._ar_lbl.setText("AR: Off (add ARSession component)")
+                self._ar_lbl.setStyleSheet("color: #888888;")
+        except Exception:
+            pass
 
         ctrls = get_controllers()
         for lbl, ctrl, name in [

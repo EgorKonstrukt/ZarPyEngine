@@ -13,7 +13,12 @@ import numpy as np
 import moderngl
 
 from core.foundation.plugin_manager import PluginBase
-from plugins.vr_plugin.components.vr_components import VR, VRHead, VRController, VRLeftController, VRRightController, VRRay, VRSelection
+from plugins.vr_plugin.components import (
+    XRRig, XRTrackedPoseDriver, XRController, XRHand, XRCull,
+    XRHaptics, XRInteractionManager, XRRayInteractor, XRDirectInteractor, XRPokeInteractor,
+    XRGrabInteractable, XRSmoothMoveProvider, XRSnapTurnProvider, XRTeleportationProvider,
+    ARSession, ARCameraBackground, ARPlaneManager, ARRaycastManager, ARAnchorManager, ARPointCloudManager,
+)
 from core.maths.math3d import Mat4, Vec3
 
 try:
@@ -21,6 +26,69 @@ try:
     _HAS_VR_BATCH = True
 except Exception:
     _HAS_VR_BATCH = False
+
+def spawn_xr_rig(engine):
+    try:
+        if engine is None or engine.scene is None:
+            return None
+        sc = engine.scene
+        for e in sc.get_all_entities():
+            if e.get_component(XRRig) is not None:
+                return e
+        from core.components.mesh_filter import MeshFilter, MeshRenderer
+        from core.components.material import Material
+        import os
+        mat_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "materials", "vr_unlit.mat")
+
+        rig = sc.create_entity("XRRig")
+        rig.add_component(XRRig())
+
+        def _add_model(parent, path, scale):
+            me = sc.create_entity("XRModel")
+            mf = MeshFilter()
+            mf.mesh_path = path
+            mf.mesh_name = "mesh"
+            me.add_component(mf)
+            mr = MeshRenderer()
+            mr.enabled = True
+            try:
+                mr.material = Material.load(mat_path)
+            except Exception:
+                pass
+            me.transform.local_scale = Vec3(scale, scale, scale)
+            me.set_parent(parent, preserve_world=False)
+            return me
+
+        hmd = sc.create_entity("XRHMD")
+        hmd.add_component(XRTrackedPoseDriver())
+        hmd.get_component(XRTrackedPoseDriver).pose_type = "Center"
+        hmd.add_component(XRCull())
+        hmd.transform.local_position = Vec3(0.0, 1.6, 0.0)
+        hmd.set_parent(rig, preserve_world=False)
+        _add_model(hmd, "core/3d_models/OculusQ2/OculusQ2.fbx", 0.00035)
+
+        def _hand(name, hand, model, pos):
+            he = sc.create_entity(name)
+            tpd = XRTrackedPoseDriver()
+            tpd.pose_type = "LeftHand" if hand == "Left" else "RightHand"
+            he.add_component(tpd)
+            he.add_component(XRController(controller_hand=hand))
+            he.get_component(XRController).model = model
+            he.transform.local_position = Vec3(*pos)
+            he.set_parent(rig, preserve_world=False)
+            _add_model(he, "core/3d_models/OculusTouch/OculusTouch.fbx", 1.0)
+            he.add_component(XRHand(hand=hand))
+
+        _hand("XRControllerLeft", "Left", "OculusTouch", (-0.25, 1.2, -0.2))
+        _hand("XRControllerRight", "Right", "OculusTouch", (0.25, 1.2, -0.2))
+
+        rig.add_component(XRInteractionManager())
+        rig.add_component(XRSmoothMoveProvider())
+        rig.add_component(XRSnapTurnProvider())
+        rig.add_component(XRTeleportationProvider())
+        return rig
+    except Exception:
+        return None
 
 class _EyeCamera:
     DEFAULT_FOV = 60.0
@@ -69,16 +137,6 @@ class VRPlugin(PluginBase):
     def initialize(self, engine):
         super().initialize(engine)
         self.register_dock("VR Control", self._create_dock, area="bottom")
-        try:
-            self.register_component(VR)
-            self.register_component(VRHead)
-            self.register_component(VRController)
-            self.register_component(VRLeftController)
-            self.register_component(VRRightController)
-            self.register_component(VRRay)
-            self.register_component(VRSelection)
-        except Exception:
-            pass
     def _create_dock(self):
         from plugins.vr_plugin.vr_dock import VRControlWidget
         self._dock_widget = VRControlWidget(self._engine, self)
@@ -90,102 +148,31 @@ class VRPlugin(PluginBase):
             sc = scene or (eng.scene if eng else None)
             if sc is None:
                 return
-            has_rig = False
-            rig_ent = None
+            from plugins.vr_plugin import vr_core
+            if not vr_core.is_active():
+                return
+            spawn_xr_rig(sc)
+            sc._dirty = True
+            sc._render_version += 1
+        except Exception:
+            pass
+
+    def remove_vr_entities(self, scene=None):
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance() if hasattr(self, '_engine') else None
+            sc = scene or (eng.scene if eng else None)
+            if sc is None:
+                return
+            to_remove = []
             for e in sc.get_all_entities():
-                if e.get_component(VR):
-                    has_rig = True
-                    rig_ent = e
-                    break
-            if has_rig:
+                if e.get_component(XRRig) is not None:
+                    to_remove.append(e._id)
+            for eid in to_remove:
                 try:
-                    for child in rig_ent.children:
-                        if child.get_component(VRHead):
-                            tr = child.transform
-                            if tr:
-                                tr.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(1.0, 1.0, 1.0)
-                                tr.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
-                                from core.components.rendering.renderers.mesh_renderer import MeshRenderer
-                                mrh = child.get_component(MeshRenderer)
-                                if mrh:
-                                    mrh.materials = [{"path": "assets/materials/vr_unlit.mat"}]
-                        if child.get_component(VRController) or child.get_component(VRLeftController) or child.get_component(VRRightController):
-                            tr = child.transform
-                            if tr:
-                                is_left = child.get_component(VRLeftController) is not None or (child.get_component(VRController) and child.get_component(VRController).hand == "Left")
-                                tr.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(-0.25, 1.2, -0.2) if is_left else __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.25, 1.2, -0.2)
-                                tr.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.00035, 0.00035, 0.00035)
-                                from core.components.rendering.renderers.mesh_renderer import MeshRenderer
-                                mrc = child.get_component(MeshRenderer)
-                                if mrc:
-                                    mrc.materials = [{"path": "assets/materials/vr_unlit.mat"}]
-                                # Also ensure ray/selection still there
-                                if not child.get_component(VRRay):
-                                    child.add_component(VRRay())
-                                if not child.get_component(VRSelection):
-                                    child.add_component(VRSelection())
+                    sc.remove_entity(eid)
                 except Exception:
                     pass
-                return
-            rig = sc.create_entity("VR Rig")
-            rig.add_component(VR())
-            from core.components.transform import Transform
-            from core.components.rendering.renderers.mesh_filter import MeshFilter
-            from core.components.rendering.renderers.mesh_renderer import MeshRenderer
-            rt = rig.add_component(Transform())
-            rt.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0,0,0)
-            head = sc.create_entity("VR Head")
-            head.set_parent(rig, preserve_world=False)
-            head.add_component(VRHead())
-            ht = head.add_component(Transform())
-            ht.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.0, 1.6, 0.0)
-            ht.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(1.0, 1.0, 1.0)
-            try:
-                mf = MeshFilter()
-                mf.mesh_path = "core/3d_models/generic_hmd/generic_hmd.obj"
-                mf.mesh_name = "generic_hmd"
-                head.add_component(mf)
-                mr = MeshRenderer()
-                mr.materials = [{"path": "assets/materials/vr_unlit.mat"}]
-                head.add_component(mr)
-            except Exception:
-                pass
-            left = sc.create_entity("VR Left Controller")
-            left.set_parent(rig, preserve_world=False)
-            left.add_component(VRLeftController())
-            left.add_component(VRRay())
-            left.add_component(VRSelection())
-            lt = left.add_component(Transform())
-            lt.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(-0.25, 1.2, -0.2)
-            lt.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.00035, 0.00035, 0.00035)
-            try:
-                mf = MeshFilter()
-                mf.mesh_path = "core/3d_models/OculusQ2/OculusQ2ControllerL.fbx"
-                mf.mesh_name = "OculusQ2ControllerL"
-                left.add_component(mf)
-                mr = MeshRenderer()
-                mr.materials = [{"path": "assets/materials/vr_unlit.mat"}]
-                left.add_component(mr)
-            except Exception:
-                pass
-            right = sc.create_entity("VR Right Controller")
-            right.set_parent(rig, preserve_world=False)
-            right.add_component(VRRightController())
-            right.add_component(VRRay())
-            right.add_component(VRSelection())
-            rt = right.add_component(Transform())
-            rt.local_position = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.25, 1.2, -0.2)
-            rt.local_scale = __import__('core.maths.math3d', fromlist=['Vec3']).Vec3(0.00035, 0.00035, 0.00035)
-            try:
-                mf = MeshFilter()
-                mf.mesh_path = "core/3d_models/OculusQ2/OculusQ2ControllerR.fbx"
-                mf.mesh_name = "OculusQ2ControllerR"
-                right.add_component(mf)
-                mr = MeshRenderer()
-                mr.materials = [{"path": "assets/materials/vr_unlit.mat"}]
-                right.add_component(mr)
-            except Exception:
-                pass
             sc._dirty = True
             sc._render_version += 1
         except Exception:
@@ -193,7 +180,11 @@ class VRPlugin(PluginBase):
 
     def on_scene_loaded(self, scene):
         try:
-            self.ensure_vr_entities(scene)
+            from plugins.vr_plugin import vr_core
+            if vr_core.is_active():
+                self.ensure_vr_entities(scene)
+            else:
+                self.remove_vr_entities(scene)
         except Exception:
             pass
 
@@ -205,7 +196,11 @@ class VRPlugin(PluginBase):
                 from core.engine.engine import Engine
                 eng = Engine.instance()
                 if eng and eng.scene:
-                    self.ensure_vr_entities(eng.scene)
+                    from plugins.vr_plugin import vr_core
+                    if vr_core.is_active():
+                        self.ensure_vr_entities(eng.scene)
+                    else:
+                        self.remove_vr_entities(eng.scene)
             except Exception:
                 pass
         except Exception:
@@ -216,6 +211,11 @@ class VRPlugin(PluginBase):
             self._disable_vr()
         else:
             self._enable_vr()
+
+    def spawn_xr_rig(self, engine=None):
+        from core.engine.engine import Engine
+        eng = engine or Engine.instance()
+        return spawn_xr_rig(eng)
     def _install_toolbar_button(self, vp):
         try:
             import qtawesome as qta
@@ -372,9 +372,7 @@ class VRPlugin(PluginBase):
                 self_._cam.update(dt)
                 try:
                     from plugins.vr_plugin import vr_core as _vc
-                    if _vc.is_active() and _vc.session_running():
-                        _vc.update_vr_locomotion(self_._cam, dt)
-                        _vc.handle_trigger_selection(self_)
+                    _vc.update_vr_entities(self_, dt)
                 except Exception:
                     pass
             self_._update_status_labels()
@@ -480,11 +478,7 @@ class VRPlugin(PluginBase):
                 vr_core._vr_toggle.renderer = rnd
             except Exception:
                 return False
-        if not vr_core.sync_hmd_pose():
-            try:
-                vr_core.end_xr_frame()
-            except Exception:
-                pass
+        if not vr_core._vr_state._frame_begun:
             if not vr_core.had_frames():
                 return False
             try:
@@ -503,7 +497,7 @@ class VRPlugin(PluginBase):
         try:
             sc = scene
             for e in sc.get_all_entities():
-                vr = e.get_component(__import__('plugins.vr_plugin.components.vr_components', fromlist=['VR']).VR)
+                vr = e.get_component(XRRig)
                 if vr:
                     tr = e.transform
                     if tr:
@@ -548,11 +542,12 @@ class VRPlugin(PluginBase):
                 view_mat = Mat4.look_at(eye_pos, eye_target, eye_up)
             hmd_entities = []
             try:
+                from core.components.rendering.renderers.mesh_renderer import MeshRenderer
                 for ent in scene.get_all_entities():
-                    if ent.get_component(__import__('plugins.vr_plugin.components.vr_components', fromlist=['VRHead']).VRHead):
-                        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+                    cull = ent.get_component(XRCull)
+                    if cull is not None and cull.enabled and cull.hide_from_eye:
                         mrh = ent.get_component(MeshRenderer)
-                        if mrh and mrh.enabled:
+                        if mrh is not None and mrh.enabled:
                             hmd_entities.append((ent, mrh))
                             mrh.enabled = False
             except Exception:
@@ -678,6 +673,10 @@ class VRPlugin(PluginBase):
             except Exception:
                 pass
         self._remove_toolbar_button()
+        try:
+            self.remove_vr_entities()
+        except Exception:
+            pass
         r = vr_core.get_renderer()
         if r is not None:
             try:
