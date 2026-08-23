@@ -15,6 +15,53 @@ import moderngl
 from core.foundation.plugin_manager import PluginBase
 from core.maths.math3d import Mat4, Vec3
 
+try:
+    from core._vr_batch import build_eye_view_proj, build_controller_mvp
+    _HAS_VR_BATCH = True
+except Exception:
+    _HAS_VR_BATCH = False
+
+
+class _EyeCamera:
+    DEFAULT_FOV = 60.0
+
+    def __init__(self, view_mat, proj_mat, pos, fwd, fov_deg):
+        self._view = view_mat
+        self._proj = proj_mat
+        self._pos = pos
+        self._fwd = fwd
+        self._fov = fov_deg
+        self._is_2d_mode = False
+        self._is_orthographic = False
+        self._ortho_zoom_distance = 1.0
+
+    def get_view_matrix(self):
+        return self._view
+
+    def get_projection_matrix(self, aspect=1.0):
+        return self._proj
+
+    @property
+    def forward(self):
+        return self._fwd
+
+    @property
+    def position(self):
+        return self._pos
+
+    @property
+    def fov(self):
+        return self._fov
+
+    @property
+    def is_2d_mode(self):
+        return False
+
+    @property
+    def is_orthographic(self):
+        return False
+
+
 class VRPlugin(PluginBase):
     NAME = "VRPlugin"
     VERSION = "1.0.0"
@@ -235,32 +282,95 @@ class VRPlugin(PluginBase):
             except Exception:
                 return False
         cam = vp._cam
+        _vr_shared = {}
         class Params:
             cam_pos = (cam.position.x, cam.position.y, cam.position.z)
             cam_yaw = math.radians(cam.yaw)
             cam_pitch = math.radians(cam.pitch)
         def render_eye(fbo, w, h, eye):
             al, ar, au, ad = eye['fov_angles']
-            tl, tr, tu, td = math.tan(al), math.tan(ar), math.tan(au), math.tan(ad)
-            proj_mat = Mat4()
-            proj_mat._d[0,0] = 2.0 / (tr - tl)
-            proj_mat._d[1,1] = 2.0 / (tu - td)
-            proj_mat._d[2,0] = (tr + tl) / (tr - tl)
-            proj_mat._d[2,1] = (tu + td) / (tu - td)
-            proj_mat._d[2,2] = -(cam.far + cam.near) / (cam.far - cam.near)
-            proj_mat._d[2,3] = -1.0
-            proj_mat._d[3,2] = -(2.0 * cam.far * cam.near) / (cam.far - cam.near)
-            proj_mat._d[3,3] = 0.0
+            if _HAS_VR_BATCH:
+                view_arr, proj_arr = build_eye_view_proj(
+                    float(eye['pos'][0]), float(eye['pos'][1]), float(eye['pos'][2]),
+                    float(eye['right'][0]), float(eye['right'][1]), float(eye['right'][2]),
+                    float(eye['up'][0]), float(eye['up'][1]), float(eye['up'][2]),
+                    float(eye['fwd'][0]), float(eye['fwd'][1]), float(eye['fwd'][2]),
+                    float(al), float(ar), float(au), float(ad),
+                    float(cam.near), float(cam.far))
+                proj_mat = Mat4(proj_arr)
+                view_mat = Mat4(view_arr)
+                eye_fwd = Vec3(eye['fwd'][0], eye['fwd'][1], eye['fwd'][2])
+            else:
+                tl, tr, tu, td = math.tan(al), math.tan(ar), math.tan(au), math.tan(ad)
+                proj_mat = Mat4()
+                proj_mat._d[0,0] = 2.0 / (tr - tl)
+                proj_mat._d[1,1] = 2.0 / (tu - td)
+                proj_mat._d[2,0] = (tr + tl) / (tr - tl)
+                proj_mat._d[2,1] = (tu + td) / (tu - td)
+                proj_mat._d[2,2] = -(cam.far + cam.near) / (cam.far - cam.near)
+                proj_mat._d[2,3] = -1.0
+                proj_mat._d[3,2] = -(2.0 * cam.far * cam.near) / (cam.far - cam.near)
+                proj_mat._d[3,3] = 0.0
+                eye_pos = Vec3(eye['pos'][0], eye['pos'][1], eye['pos'][2])
+                eye_target = Vec3(eye_pos.x + eye['fwd'][0], eye_pos.y + eye['fwd'][1], eye_pos.z + eye['fwd'][2])
+                eye_up = Vec3(eye['up'][0], eye['up'][1], eye['up'][2])
+                eye_fwd = Vec3(eye['fwd'][0], eye['fwd'][1], eye['fwd'][2])
+                view_mat = Mat4.look_at(eye_pos, eye_target, eye_up)
             eye_pos = Vec3(eye['pos'][0], eye['pos'][1], eye['pos'][2])
-            eye_target = Vec3(eye_pos.x + eye['fwd'][0], eye_pos.y + eye['fwd'][1], eye_pos.z + eye['fwd'][2])
-            eye_up = Vec3(eye['up'][0], eye['up'][1], eye['up'][2])
-            view_mat = Mat4.look_at(eye_pos, eye_target, eye_up)
             vp._renderer.render_scene(
                 scene, view_mat, proj_mat, eye_pos,
                 w, h, fbo,
                 set(vp._selected_entities),
                 cam.near, cam.far, cam.fov,
+                shared_cache=_vr_shared,
             )
+            fbo.use()
+            vp._ctx.viewport = (0, 0, w, h)
+            vp_mat = view_mat * proj_mat
+            fov_deg = math.degrees(au - ad)
+            eye_cam = _EyeCamera(view_mat, proj_mat, eye_pos, eye_fwd, fov_deg)
+            dpr = vp.devicePixelRatio()
+            vp._renderer._line_width = max(1.0, float(dpr) * 1.0)
+            eng = vp._engine
+            play_mode = eng.play_mode if eng else False
+            with eng._scene_lock:
+                if vp._gizmo_visible:
+                    from editor.viewport.rendering import render_component_gizmos
+                    render_component_gizmos(vp, vp_mat, w, h)
+                from editor.viewport.rendering import render_selection_bounds
+                render_selection_bounds(vp, vp_mat, time.perf_counter(), vp._last_dt, fw=w, fh=h, cam_pos=eye_pos)
+                if not play_mode:
+                    try:
+                        from editor.viewport.component_icons import render_component_icons_gl
+                        render_component_icons_gl(vp, vp_mat=vp_mat, pw=w, ph=h)
+                    except Exception:
+                        pass
+                vp._render_api_gizmos(override_vp_mat=vp_mat, fw=w, fh=h)
+                if not play_mode:
+                    try:
+                        from editor.viewport.collaboration import render_remote_collaborator_gizmos
+                        render_remote_collaborator_gizmos(vp, vp_mat, eye_pos, w, h)
+                    except Exception:
+                        pass
+            if vp._debug_lines:
+                vp._renderer.render_gizmo_lines(vp._debug_lines, vp_mat, eye_pos, w, h)
+                vp._debug_lines.clear()
+            if vp._show_bvh_debug and not play_mode:
+                vp._render_bvh_debug()
+            if not play_mode:
+                from editor.viewport.navigation_gizmo import draw_axis_gizmo_api
+                draw_axis_gizmo_api(vp, vp_mat, fw=w, fh=h)
+            if vp._pb_scale_gizmo and vp._pb_scale_gizmo.active and not play_mode:
+                vp._pb_scale_gizmo.render()
+            if vp._gizmo_visible:
+                gizmo_result = vp._gizmo.get_gizmo_arrays(eye_cam, w, h)
+                if gizmo_result is not None:
+                    gs, ge, gcol = gizmo_result
+                    vp._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, w, h, thickness_multiplier=1.0)
+                else:
+                    gizmo_lines = vp._gizmo.get_gizmo_lines(eye_cam, w, h)
+                    if gizmo_lines:
+                        vp._renderer.render_gizmo_lines(gizmo_lines, vp_mat, eye_pos, w, h, thickness_multiplier=1.0)
         try:
             vr_core.render_vr_frame(render_eye, vp._ctx, vp._screen_fbo, Params(), fw, fh)
         except Exception as e:

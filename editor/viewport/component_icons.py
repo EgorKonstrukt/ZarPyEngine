@@ -79,7 +79,7 @@ def _icon_entities(scene):
     return result
 
 
-def render_component_icons_gl(vp):
+def render_component_icons_gl(vp, vp_mat=None, pw=None, ph=None):
     scene = vp._engine.scene
     if not scene or not vp._gizmo_icons_visible:
         return
@@ -87,12 +87,17 @@ def render_component_icons_gl(vp):
     cfg = get_global_config()
     if not cfg.get("gizmo.show_icons", True):
         return
-    w, h = vp.width(), vp.height()
-    if w <= 0 or h <= 0 or not vp._renderer:
-        return
     dpr = vp.devicePixelRatio()
-    pw, ph = w * dpr, h * dpr
-    vp_mat = vp._cam.get_view_matrix() * vp._cam.get_projection_matrix(w / max(1, h))
+    if vp_mat is None:
+        w, h = vp.width(), vp.height()
+        if w <= 0 or h <= 0 or not vp._renderer:
+            return
+        vp_mat = vp._cam.get_view_matrix() * vp._cam.get_projection_matrix(w / max(1, h))
+    if pw is None or ph is None:
+        w, h = vp.width(), vp.height()
+        if w <= 0 or h <= 0 or not vp._renderer:
+            return
+        pw, ph = w * dpr, h * dpr
     cam_pos = vp._cam.position
     icon_scale = cfg.get("gizmo.icon_scale", 2.0)
     base_size = 16 * icon_scale

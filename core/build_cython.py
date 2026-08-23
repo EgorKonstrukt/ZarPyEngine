@@ -64,6 +64,7 @@ EXTENSIONS = [
     _ext("core._scene_query", "_scene_query.pyx"),
     _ext("core._render_collect", "_render_collect.pyx"),
     _ext("core._math_mat4", "_math_mat4.pyx"),
+    _ext("core._vr_batch", "_vr_batch.pyx"),
 ]
 
 def build():

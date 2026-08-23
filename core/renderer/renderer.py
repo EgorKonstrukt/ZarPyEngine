@@ -2302,7 +2302,8 @@ out vec4 frag_color;
                      viewport_w: int, viewport_h: int, fbo=None,
                      selected_entities: Optional[set] = None,
                      cam_near: float = 0.01, cam_far: float = 1000.0, cam_fov: float = 60.0,
-                      display_w: int = None, display_h: int = None):
+                      display_w: int = None, display_h: int = None,
+                      shared_cache: dict = None):
         if not self._initialized:
             return
         _scale = self._render_scale
@@ -2321,10 +2322,15 @@ out vec4 frag_color;
             self._gizmo._stat_upload_partial = 0
         if prof:
             prof.start("render_scene")
-        snap = _RenderSnapshot()
-        if scene:
-            with eng._scene_lock:
-                snap = self._collect_snapshot(scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos)
+        if shared_cache is not None and 'snap' in shared_cache:
+            snap = shared_cache['snap']
+        else:
+            snap = _RenderSnapshot()
+            if scene:
+                with eng._scene_lock:
+                    snap = self._collect_snapshot(scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos)
+            if shared_cache is not None:
+                shared_cache['snap'] = snap
         lights = snap.lights
         dir_light = snap.dir_light
         sky_component = snap.sky_component
@@ -2384,17 +2390,27 @@ out vec4 frag_color;
         self._mesh_loader.process_pending()
         if prof:
             prof.stop("mesh_async_load")
-        self._skinning_cache.clear()
+        if shared_cache is not None and 'skinning' in shared_cache:
+            self._skinning_cache = shared_cache['skinning']
+        else:
+            self._skinning_cache.clear()
+            if shared_cache is not None:
+                shared_cache['skinning'] = self._skinning_cache
         if prof:
             prof.start("render_shadow_pass")
         shadow_groups = {}
-        try:
-            shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene, skinning_cache=self._skinning_cache)
-            if snap.projectors:
-                self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
-        except Exception as _sh_err:
-            import traceback as _tb
-            _tb.print_exc()
+        if shared_cache is not None and 'shadow_groups' in shared_cache:
+            shadow_groups = shared_cache['shadow_groups']
+        else:
+            try:
+                shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene, skinning_cache=self._skinning_cache)
+                if snap.projectors:
+                    self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
+            except Exception as _sh_err:
+                import traceback as _tb
+                _tb.print_exc()
+            if shared_cache is not None:
+                shared_cache['shadow_groups'] = shadow_groups
         if prof:
             prof.stop("render_shadow_pass")
         self._scene_fbo.use()
@@ -2406,14 +2422,17 @@ out vec4 frag_color;
             if prof:
                 prof.stop("render_skybox")
         if dynamic_cubemaps is not None and not self._rendering_cubemap_face:
-            if prof:
-                prof.start("update_dynamic_cubemaps")
-            probe_pos = snap.dynamic_cubemaps_pos if (snap.dynamic_cubemaps_pos is not None and not getattr(dynamic_cubemaps, 'follow_camera', True)) else cam_pos
-            dynamic_cubemaps.update(self._ctx, view_mat, proj_mat, probe_pos, scene, self,
-                                    main_snap=snap, skip_entity=snap.dynamic_cubemaps_entity)
-            self._scene_fbo.use()
-            if prof:
-                prof.stop("update_dynamic_cubemaps")
+            if not (shared_cache is not None and shared_cache.get('_cubemaps_done')):
+                if prof:
+                    prof.start("update_dynamic_cubemaps")
+                probe_pos = snap.dynamic_cubemaps_pos if (snap.dynamic_cubemaps_pos is not None and not getattr(dynamic_cubemaps, 'follow_camera', True)) else cam_pos
+                dynamic_cubemaps.update(self._ctx, view_mat, proj_mat, probe_pos, scene, self,
+                                        main_snap=snap, skip_entity=snap.dynamic_cubemaps_entity)
+                self._scene_fbo.use()
+                if prof:
+                    prof.stop("update_dynamic_cubemaps")
+                if shared_cache is not None:
+                    shared_cache['_cubemaps_done'] = True
         self._ctx.viewport = (0, 0, rw, rh)
         if use_polygon_mode:
             self._ctx.wireframe = True
@@ -2638,7 +2657,12 @@ out vec4 frag_color;
                     mesh = self._get_water_plane_mesh(max(2, res))
                     grid_center = cam_pos
                     grid_size = float(getattr(water_component, "ocean_size", 2000.0))
-                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                    if shared_cache is not None and id(water_component) in shared_cache.get('_water_sims', {}):
+                        sim_tex = shared_cache['_water_sims'][id(water_component)]
+                    else:
+                        sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                        if shared_cache is not None:
+                            shared_cache.setdefault('_water_sims', {})[id(water_component)] = sim_tex
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
@@ -2653,7 +2677,12 @@ out vec4 frag_color;
                     mesh = self._get_water_box_mesh(res)
                     grid_center = tr.position if tr else cam_pos
                     grid_size = float(getattr(water_component, "pond_size", 20.0))
-                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                    if shared_cache is not None and id(water_component) in shared_cache.get('_water_sims', {}):
+                        sim_tex = shared_cache['_water_sims'][id(water_component)]
+                    else:
+                        sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                        if shared_cache is not None:
+                            shared_cache.setdefault('_water_sims', {})[id(water_component)] = sim_tex
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
@@ -2668,7 +2697,12 @@ out vec4 frag_color;
                     mesh = self._get_water_plane_mesh(res)
                     grid_center = tr.position if tr else cam_pos
                     grid_size = float(getattr(water_component, "pond_size", 200.0))
-                    sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                    if shared_cache is not None and id(water_component) in shared_cache.get('_water_sims', {}):
+                        sim_tex = shared_cache['_water_sims'][id(water_component)]
+                    else:
+                        sim_tex = self._step_water_sim(water_component, grid_center, grid_size, water_y, sim_dt)
+                        if shared_cache is not None:
+                            shared_cache.setdefault('_water_sims', {})[id(water_component)] = sim_tex
                     water_component.render_water(self._ctx, self._shaders, view_mat, proj_mat,
                                                  dir_light, cam_pos, mesh,
                                                  self._scene_color_tex, self._scene_depth_tex,
@@ -2874,7 +2908,10 @@ out vec4 frag_color;
         prev_view_proj = self._prev_view_proj_by_target.get(_pv_key)
         self._prev_view_proj_by_target[_pv_key] = unjit_proj @ view_mat
         if GraphicsEffect._registry and not self._effects_disabled:
-            GraphicsEffect.increment_frame()
+            if shared_cache is None or not shared_cache.get('_fx_done'):
+                GraphicsEffect.increment_frame()
+                if shared_cache is not None:
+                    shared_cache['_fx_done'] = True
             if prof:
                 prof.start("render_graphics_effects")
             self._ctx.disable(moderngl.DEPTH_TEST)

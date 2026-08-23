@@ -15,7 +15,7 @@ from core.gizmo.pipeline import GizmoPipeline
 from core.assets.font_atlas import request_font_atlas, get_default_font_path as get_def_font
 
 
-def render_component_gizmos(vp, vp_mat: Mat4):
+def render_component_gizmos(vp, vp_mat: Mat4, fw: int = None, fh: int = None):
     scene = vp._engine.scene if vp._engine else None
     if not scene:
         return
@@ -28,7 +28,7 @@ def render_component_gizmos(vp, vp_mat: Mat4):
                 meshes.extend(ct.gizmo_collect_meshes(scene))
             except Exception:
                 pass
-    pipe.flush_and_render(vp, vp_mat)
+    pipe.flush_and_render(vp, vp_mat, fw=fw, fh=fh)
     if meshes:
         vp._renderer.render_gizmo_meshes(meshes, vp_mat)
 
@@ -90,7 +90,7 @@ def _render_corner_spheres_np(vp, vp_mat, corners, radius, color):
     vp._renderer.render_gizmo_mesh_np(v_data, np.asarray(all_idx, dtype=np.uint32), vp_mat)
 
 
-def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
+def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state, fw: int = None, fh: int = None, cam_pos=None):
     from core.components.transform import Transform
     from core.components.rendering.renderers.mesh_filter import MeshFilter
     from core.components.rendering.renderers.mesh_renderer import MeshRenderer
@@ -260,8 +260,10 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
         else:
             return
     state[0], state[1], state[2] = cur_min, cur_max, alpha
-    cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
-    fw, fh = vp._get_physical_dims()
+    if cam_pos is None:
+        cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
+    if fw is None or fh is None:
+        fw, fh = vp._get_physical_dims()
     starts, ends = _box_edges_np(cur_min, cur_max)
     n_edges = starts.shape[0]
     colors_arr = np.empty((n_edges, 4), dtype=np.float32)
@@ -292,7 +294,7 @@ def _render_entity_bounds(vp, vp_mat, time_s, dt, entities, color, state):
         _render_corner_spheres_np(vp, vp_mat, verts_3d, world_r, color)
 
 
-def render_selection_bounds(vp, vp_mat: Mat4, time_s: float, dt: float = 0.0):
+def render_selection_bounds(vp, vp_mat: Mat4, time_s: float, dt: float = 0.0, fw: int = None, fh: int = None, cam_pos=None):
     cfg = get_global_config()
     if not cfg.get("gizmo.selection_bounds", True):
         return
@@ -303,7 +305,7 @@ def render_selection_bounds(vp, vp_mat: Mat4, time_s: float, dt: float = 0.0):
     c = cfg.get("gizmo.selection_bounds_color", [0.25, 0.55, 1.0])
     color = [c[0], c[1], c[2], 1.0]
     selected = getattr(vp, '_selected_entities', None) or []
-    _render_entity_bounds(vp, vp_mat, time_s, dt, selected, color, vp._sel_bounds_state)
+    _render_entity_bounds(vp, vp_mat, time_s, dt, selected, color, vp._sel_bounds_state, fw=fw, fh=fh, cam_pos=cam_pos)
     collab = vp._engine.collab_manager if hasattr(vp._engine, 'collab_manager') else None
     if not collab or not collab.connected:
         return

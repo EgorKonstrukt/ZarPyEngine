@@ -86,8 +86,9 @@ class GizmoPipeline:
     def flush(self, time_s: float = 0.0):
         self._render_via(Gizmos.draw_lines, time_s)
 
-    def flush_and_render(self, vp, vp_mat, time_s: float = 0.0):
-        fw, fh = vp._get_physical_dims()
+    def flush_and_render(self, vp, vp_mat, time_s: float = 0.0, fw: int = None, fh: int = None):
+        if fw is None or fh is None:
+            fw, fh = vp._get_physical_dims()
         cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
 
         def render_func(s, e, c):

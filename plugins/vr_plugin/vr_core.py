@@ -227,6 +227,38 @@ def _load_gl_funcs():
     return _gl
 
 
+GL_DRAW_FRAMEBUFFER = 0x8CA9
+GL_READ_FRAMEBUFFER = 0x8CA8
+GL_FRAMEBUFFER = 0x8D40
+GL_COLOR_ATTACHMENT0 = 0x8CE0
+GL_TEXTURE_2D = 0x0DE1
+GL_COLOR_BUFFER_BIT = 0x4000
+GL_NEAREST = 0x2600
+GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+
+_BLIT_FBO_IDS = None
+
+
+def _get_blit_fbo_id(gl, idx):
+    global _BLIT_FBO_IDS
+    if _BLIT_FBO_IDS is None:
+        arr = (ctypes.c_uint * 2)(0, 0)
+        gl.GenFramebuffers(2, arr)
+        _BLIT_FBO_IDS = arr
+    return int(_BLIT_FBO_IDS[idx])
+
+
+def _free_blit_fbos():
+    global _BLIT_FBO_IDS
+    if _BLIT_FBO_IDS is not None:
+        try:
+            gl = _load_gl_funcs()
+            gl.DeleteFramebuffers(2, _BLIT_FBO_IDS)
+        except Exception:
+            pass
+        _BLIT_FBO_IDS = None
+
+
 _vr_state = VRState()
 
 
@@ -252,6 +284,7 @@ def _setup_input(instance, session):
             xr.string_to_path(instance, '/user/hand/left'),
             xr.string_to_path(instance, '/user/hand/right'),
         ]
+        _vr_state._hand_paths = hand_paths
 
         for i, side in enumerate(['left', 'right']):
             grip_info = xr.ActionCreateInfo(
@@ -466,6 +499,8 @@ def shutdown():
     _vr_state.space = None
     _vr_state.system_id = None
     _vr_state._session_running = False
+    _free_blit_fbos()
+    _vr_state._xr_layer = None
     _vr_state._frame_begun = False
     _vr_state._frame_discard = False
     _vr_state._frame_state = None
@@ -477,10 +512,12 @@ def shutdown():
 def _sync_controller_input():
     if not (_vr_state.active and _vr_state._session_running and _vr_state._action_set is not None):
         return
-    hand_paths = [
-        xr.string_to_path(_vr_state.instance, '/user/hand/left'),
-        xr.string_to_path(_vr_state.instance, '/user/hand/right'),
-    ]
+    hand_paths = getattr(_vr_state, '_hand_paths', None)
+    if hand_paths is None:
+        hand_paths = [
+            xr.string_to_path(_vr_state.instance, '/user/hand/left'),
+            xr.string_to_path(_vr_state.instance, '/user/hand/right'),
+        ]
     try:
         active_sets = (xr.ActiveActionSet * 1)(
             xr.ActiveActionSet(action_set=_vr_state._action_set, subaction_path=xr.NULL_PATH)
@@ -556,7 +593,6 @@ def _update_ipd_pinch():
             delta = dist - _vr_state._ipd_pinch_dist0
             new_ipd = _vr_state._ipd_pinch_ipd0 + delta * IPD_SCALE
             _vr_state.ipd_override = max(0.010, min(0.200, new_ipd))
-            print(f'[VR] IPD pinch: dist={dist:.3f} delta={delta:.3f} ipd={_vr_state.ipd_override:.4f}')
     else:
         _vr_state._ipd_pinch_active = False
 
@@ -859,6 +895,7 @@ class ControllerRenderer:
         self._ctx = ctx
         self._prog = ctx.program(vertex_shader=_CTRL_VERT, fragment_shader=_CTRL_FRAG)
         self._uloc = {n: self._prog[n] for n in self._prog}
+        self._gl_clear = ctypes.windll.opengl32.glClear
 
         verts, indices = _build_controller_mesh()
         self._vbo = ctx.buffer(verts.tobytes())
@@ -873,12 +910,10 @@ class ControllerRenderer:
         if name in self._uloc:
             self._uloc[name].value = val
 
-    def render_controller(self, ctrl: ControllerState, eye: dict, fov_angles, color):
+    def render_controller(self, ctrl: ControllerState, proj, view, color):
         if not ctrl.valid:
             return
 
-        proj = _make_proj_matrix(fov_angles, near=0.001, far=50.0)
-        view = _make_view_matrix(eye['pos'], eye['fwd'], eye['right'], eye['up'])
         model = _make_model_matrix(_xr_to_world(ctrl.pos), ctrl.quat, scale=1.0)
 
         mv = _mat4_mul(view, model)
@@ -898,17 +933,17 @@ class ControllerRenderer:
         self._vao.render(moderngl.TRIANGLES)
 
     def render_for_eye(self, eye: dict):
-        GL_DEPTH_BUFFER_BIT = 0x00000100
-        opengl32 = ctypes.windll.opengl32
-        opengl32.glClear(GL_DEPTH_BUFFER_BIT)
+        self._gl_clear(0x00000100)
         self._ctx.enable(moderngl.DEPTH_TEST)
+        proj = _make_proj_matrix(_vr_state._eye_fovs[eye['eye_idx']], near=0.001, far=50.0)
+        view = _make_view_matrix(eye['pos'], eye['fwd'], eye['right'], eye['up'])
         colors = [(0.3, 0.6, 1.0), (1.0, 0.4, 0.3)]
         any_valid = any(c.valid for c in _vr_state.controllers)
         if not any_valid and not getattr(self, '_ctrl_warn_printed', False):
             self._ctrl_warn_printed = True
             print(f'[VR] Controllers not valid: grips={[c.grip for c in _vr_state.controllers]} valid={[c.valid for c in _vr_state.controllers]} pose_spaces={[s is not None for s in _vr_state._pose_spaces]} action_set={_vr_state._action_set is not None}')
         for i, ctrl in enumerate(_vr_state.controllers):
-            self.render_controller(ctrl, eye, _vr_state._eye_fovs[eye['eye_idx']], colors[i])
+            self.render_controller(ctrl, proj, view, colors[i])
         self._ctx.disable(moderngl.DEPTH_TEST)
 
     def release(self):
@@ -1059,14 +1094,7 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
     if use_xr:
         try:
             gl = _load_gl_funcs()
-            GL_DRAW_FRAMEBUFFER = 0x8CA9
-            GL_READ_FRAMEBUFFER = 0x8CA8
-            GL_FRAMEBUFFER = 0x8D40
-            GL_COLOR_ATTACHMENT0 = 0x8CE0
-            GL_TEXTURE_2D = 0x0DE1
-            GL_COLOR_BUFFER_BIT = 0x4000
-            GL_NEAREST = 0x2600
-            GL_FRAMEBUFFER_COMPLETE = 0x8CD5
+            status_checked = [False]
             for i, sc in enumerate(_vr_state._swapchains):
                 dst_tex = sc.acquire()
                 try:
@@ -1074,26 +1102,22 @@ def render_vr_frame(fractal_window_render_eye, ctx: moderngl.Context, screen_fbo
                     src_fbo_id = src_fb.fbo.glo
                     w, h = sc.w, sc.h
                     sw, sh = src_fb.w, src_fb.h
-                    blit_fbo = (ctypes.c_uint * 1)(0)
-                    gl.GenFramebuffers(1, blit_fbo)
-                    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_fbo[0])
+                    blit_id = _get_blit_fbo_id(gl, i)
+                    gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, blit_id)
                     gl.FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0)
                     gl.DrawBuffer(GL_COLOR_ATTACHMENT0)
-                    if gl.CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
-                        print(f'[VR] swapchain fbo {i} incomplete')
-                    else:
-                        gl.BindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo_id)
-                        gl.ReadBuffer(GL_COLOR_ATTACHMENT0)
-                        gl.BlitFramebuffer(0, 0, sw, sh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST)
+                    if not status_checked[0]:
+                        if gl.CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE:
+                            print(f'[VR] swapchain fbo {i} incomplete')
+                        status_checked[0] = True
+                    gl.BindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo_id)
+                    gl.ReadBuffer(GL_COLOR_ATTACHMENT0)
+                    gl.BlitFramebuffer(0, 0, sw, sh, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST)
                 except Exception as e:
                     print(f'[VR] blit eye {i} error: {e}')
                 finally:
                     gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0)
                     gl.BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
-                    try:
-                        gl.DeleteFramebuffers(1, blit_fbo)
-                    except Exception:
-                        pass
                     try:
                         sc.release_image()
                     except Exception as e:
@@ -1235,45 +1259,44 @@ def end_xr_frame():
     fs = _vr_state._frame_state
     try:
         layers = []
-        layer_holder = None
-        views_holder = None
         if not _vr_state._frame_discard and fs is not None and len(_vr_state._swapchains) == 2 and all(p is not None for p in _vr_state._eye_poses):
-            proj_views = []
-            sub_imgs = []
-            fovs = []
-            for i in range(2):
-                sc = _vr_state._swapchains[i]
-                sub_img = xr.SwapchainSubImage(
-                    swapchain=sc.swapchain,
-                    image_rect=xr.Rect2Di(
-                        offset=xr.Offset2Di(x=0, y=0),
-                        extent=xr.Extent2Di(width=sc.w, height=sc.h)
-                    ),
-                    image_array_index=0
+            layer = getattr(_vr_state, '_xr_layer', None)
+            if layer is None:
+                sub_imgs = []
+                fovs = []
+                for i in range(2):
+                    sc = _vr_state._swapchains[i]
+                    sub_imgs.append(xr.SwapchainSubImage(
+                        swapchain=sc.swapchain,
+                        image_rect=xr.Rect2Di(
+                            offset=xr.Offset2Di(x=0, y=0),
+                            extent=xr.Extent2Di(width=sc.w, height=sc.h)
+                        ),
+                        image_array_index=0
+                    ))
+                    fovs.append(xr.Fovf(angle_left=0.0, angle_right=0.0, angle_up=0.0, angle_down=0.0))
+                proj_views = (xr.CompositionLayerProjectionView * 2)(
+                    xr.CompositionLayerProjectionView(sub_image=sub_imgs[0], fov=fovs[0]),
+                    xr.CompositionLayerProjectionView(sub_image=sub_imgs[1], fov=fovs[1]))
+                proj_layer = xr.CompositionLayerProjection()
+                proj_layer.layer_flags = 0
+                proj_layer.space = _vr_state.space
+                proj_layer.view_count = 2
+                proj_layer._views = ctypes.cast(proj_views, ctypes.POINTER(xr.CompositionLayerProjectionView))
+                layers_arr = (ctypes.POINTER(xr.CompositionLayerBaseHeader) * 1)(
+                    ctypes.cast(ctypes.byref(proj_layer), ctypes.POINTER(xr.CompositionLayerBaseHeader))
                 )
-                sub_imgs.append(sub_img)
-                fov = xr.Fovf(
+                _vr_state._xr_layer = (proj_views, fovs, proj_layer, layers_arr)
+            proj_views, fovs, proj_layer, layers_arr = _vr_state._xr_layer
+            for i in range(2):
+                fovs[i] = xr.Fovf(
                     angle_left=_vr_state._eye_fovs[i][0],
                     angle_right=_vr_state._eye_fovs[i][1],
                     angle_up=_vr_state._eye_fovs[i][2],
                     angle_down=_vr_state._eye_fovs[i][3]
                 )
-                fovs.append(fov)
-                proj_views.append(xr.CompositionLayerProjectionView(
-                    pose=_vr_state._eye_poses[i],
-                    fov=fovs[i],
-                    sub_image=sub_imgs[i]
-                ))
-            views_holder = (xr.CompositionLayerProjectionView * len(proj_views))(*proj_views)
-            proj_layer = xr.CompositionLayerProjection()
-            proj_layer.layer_flags = 0
-            proj_layer.space = _vr_state.space
-            proj_layer.view_count = len(views_holder)
-            proj_layer._views = ctypes.cast(views_holder, ctypes.POINTER(xr.CompositionLayerProjectionView))
-            layers_arr = (ctypes.POINTER(xr.CompositionLayerBaseHeader) * 1)(
-                ctypes.cast(ctypes.byref(proj_layer), ctypes.POINTER(xr.CompositionLayerBaseHeader))
-            )
-            layer_holder = (proj_layer, layers_arr)
+                proj_views[i].pose = _vr_state._eye_poses[i]
+                proj_views[i].fov = fovs[i]
             layers = layers_arr
         xr.end_frame(_vr_state.session, xr.FrameEndInfo(
             display_time=_vr_state._display_time,

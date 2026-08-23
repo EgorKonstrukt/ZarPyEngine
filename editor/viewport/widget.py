@@ -1519,16 +1519,21 @@ class SceneViewport(QOpenGLWidget):
     def add_debug_line(self, start: Vec3, end: Vec3, color: list[float]):
         self._debug_lines.append((start, end, color))
 
-    def _render_api_gizmos(self):
+    def _render_api_gizmos(self, override_vp_mat=None, fw=None, fh=None):
         gm = self._gizmos_api
         if not gm or not gm.enabled:
             return
         if self._engine and self._engine.play_mode and not gm.show_in_runtime:
             return
-        fw, fh = self._get_physical_dims()
-        view = self._cam.get_view_matrix()
-        proj = self._cam.get_projection_matrix(fw / max(1, fh))
-        vp_mat = view * proj
+        if override_vp_mat is not None:
+            vp_mat = override_vp_mat
+            if fw is None or fh is None:
+                fw, fh = self._get_physical_dims()
+        else:
+            fw, fh = self._get_physical_dims()
+            view = self._cam.get_view_matrix()
+            proj = self._cam.get_projection_matrix(fw / max(1, fh))
+            vp_mat = view * proj
         starts, ends, colors = gm.build_render_arrays()
         if starts is not None:
             rev = getattr(gm, '_revision', 0)

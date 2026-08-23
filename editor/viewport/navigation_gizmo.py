@@ -419,7 +419,7 @@ def _get_gizmo_world_pos(vp):
     return gizmo_pos, world_len
 
 
-def draw_axis_gizmo_api(vp, vp_mat):
+def draw_axis_gizmo_api(vp, vp_mat, fw=None, fh=None):
     result = _get_gizmo_world_pos(vp)
     if result is None:
         return
@@ -427,7 +427,8 @@ def draw_axis_gizmo_api(vp, vp_mat):
     if world_len < 0.01:
         return
 
-    fw, fh = vp._get_physical_dims()
+    if fw is None or fh is None:
+        fw, fh = vp._get_physical_dims()
 
     neg_len = world_len * 0.5
     base_colors = ((1.0, 0.2, 0.2, 1.0), (0.2, 1.0, 0.2, 1.0), (0.2, 0.4, 1.0, 1.0))
