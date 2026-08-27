@@ -44,7 +44,7 @@ _SAH_TRAV = 1.0
 _SAH_HIT = 1.0
 _PAR_THRESH = 50000
 _BINNED_THRESH = 4096
-_BVH_CACHE_VERSION = 12
+_BVH_CACHE_VERSION = 13
 
 
 def _spread_bits_vec(v: np.ndarray) -> np.ndarray:
@@ -295,6 +295,44 @@ class BVH:
         bvh._tri_v2 = tri_u32[slot_idx + 2]
         return bvh
 
+    def _apply_pair_layout(self) -> None:
+        nodes = self._nodes
+        n = len(nodes)
+        if n == 0:
+            return
+        root_old = int(self._root_idx)
+        out = np.zeros((n + 1, 8), dtype=np.float32)
+        old2new = np.full(n, -1, dtype=np.intp)
+        out[1] = nodes[root_old]
+        old2new[root_old] = 1
+        stack = [root_old]
+        nxt = 2
+        while stack:
+            o = stack.pop()
+            nd = nodes[o]
+            if nd[7] >= 0:
+                l = int(nd[6])
+                r = int(nd[7])
+                old2new[l] = nxt
+                out[nxt] = nodes[l]
+                nxt += 1
+                old2new[r] = nxt
+                out[nxt] = nodes[r]
+                nxt += 1
+                stack.append(r)
+                stack.append(l)
+        out[0, 6] = 0.0
+        out[0, 7] = -1.0
+        inner = out[:, 7] >= 0
+        li = out[inner, 6].astype(np.intp)
+        ri = out[inner, 7].astype(np.intp)
+        out[inner, 6] = old2new[li].astype(np.float32)
+        out[inner, 7] = old2new[ri].astype(np.float32)
+        self._nodes = out
+        self._root_idx = 1
+        self._cached_depths = None
+        self._node_views = None
+
     def _build(self, tri_order, n_tris):
         import sys
         sys.setrecursionlimit(1000000)
@@ -497,6 +535,7 @@ class BVH:
         self._nodes = ctx.nodes[:ctx.node_count]
         self._tri_indices = ctx.tri_indices[:ctx.tri_offset]
         self._root_idx = ctx.node_count - 1
+        self._apply_pair_layout()
 
     def _build_lbvh(self, tri_order, n_tris):
         verts3 = self._vertices.reshape(-1, 3)
@@ -536,6 +575,7 @@ class BVH:
                                      0.0, -2.0]], dtype=np.float32)
             self._tri_indices = ctx.tri_indices[:1]
             self._root_idx = 0
+            self._apply_pair_layout()
             return
 
         leaves_est = (n_tris + _LEAF_SIZE - 1) // _LEAF_SIZE
@@ -636,6 +676,7 @@ class BVH:
         self._nodes = nodes_out[:node_count]
         self._tri_indices = ctx.tri_indices[:tri_offset]
         self._root_idx = 0
+        self._apply_pair_layout()
 
     def intersect(self, ox: float, oy: float, oz: float,
                   dx: float, dy: float, dz: float,
@@ -830,7 +871,7 @@ class BVH:
                 sizes[i] = 1 + sizes[l] + sizes[r]
 
         order = np.empty(n, dtype=np.int64)
-        stack = [n - 1]
+        stack = [int(self._root_idx)]
         w = 0
         while stack:
             old = stack.pop()
@@ -1353,7 +1394,7 @@ def _node_depth(bvh, ni):
 
 def _compute_node_depths(bvh):
     nodes = bvh._nodes
-    depths = [0] * len(nodes)
+    depths = [1 << 29] * len(nodes)
 
     def walk(ni, d):
         if ni < 0 or ni >= len(nodes):
