@@ -70,6 +70,12 @@ def setup_toolbar(vp):
     vp._bvh_btn.clicked.connect(vp._toggle_bvh_debug)
     cam_row.addWidget(vp._bvh_btn)
 
+    vp._rt_heatmap_btn = QPushButton(qta.icon("fa5s.fire", color="#d4d4d4"), " Heat")
+    vp._rt_heatmap_btn.setCheckable(True)
+    vp._rt_heatmap_btn.setMinimumWidth(50)
+    vp._rt_heatmap_btn.clicked.connect(vp._toggle_rt_heatmap)
+    cam_row.addWidget(vp._rt_heatmap_btn)
+
     vp._depth_spin = QSpinBox()
     vp._depth_spin.setRange(0, 32)
     vp._depth_spin.setValue(24)

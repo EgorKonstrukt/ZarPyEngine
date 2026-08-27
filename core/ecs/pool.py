@@ -74,7 +74,17 @@ def asset() -> ThreadPoolExecutor:
 
 def bvh() -> ProcessPoolExecutor:
     global _bvh_pool
-    if _bvh_pool is None or getattr(_bvh_pool, "_shutdown", False):
+    if _bvh_pool is None or getattr(_bvh_pool, "_shutdown", False) or getattr(_bvh_pool, "_broken", False):
+        if _bvh_pool is not None:
+            try:
+                _bvh_pool.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                try:
+                    _bvh_pool.shutdown(wait=False)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         _bvh_pool = ProcessPoolExecutor(
             max_workers=min(4, (os.cpu_count() or 2))
         )

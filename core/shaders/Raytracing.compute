@@ -1,9 +1,3 @@
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
-//
-// Copyright (c) 2026 Zarrakun
-
 ComputeShader "Zarin/Raytracing"
 {
     Properties
@@ -12,6 +6,8 @@ ComputeShader "Zarin/Raytracing"
         _SamplesPerPixel("Samples Per Pixel", Int) = 1
         _ResolutionScale("Resolution Scale", Float) = 1.0
         _Accumulate("Accumulate Frames", Int) = 0
+        _HeatmapMode("Heatmap Mode", Int) = 0
+        _HeatmapScale("Heatmap Scale", Float) = 40.0
     }
 
     GLSLPROGRAM
@@ -55,6 +51,8 @@ ComputeShader "Zarin/Raytracing"
     uniform int u_frame;
     uniform int u_accumulate;
     uniform int u_samples_per_pixel;
+    uniform int u_heatmap_mode;
+    uniform float u_heatmap_scale;
     uniform sampler2D u_sky_env;
     uniform sampler2DArray u_albedo_array;
     uniform int u_albedo_tex_count;
@@ -69,6 +67,14 @@ ComputeShader "Zarin/Raytracing"
         float tmin = max(max(tmin_v.x, tmin_v.y), tmin_v.z);
         float tmax = min(min(tmax_v.x, tmax_v.y), tmax_v.z);
         return (tmin > tmax || tmax <= 0.0) ? -1.0 : max(tmin, 0.0);
+    }
+
+    vec3 heatmap_palette(float t) {
+        t = clamp(t, 0.0, 1.0);
+        if (t < 0.25) return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t * 4.0);
+        else if (t < 0.5) return mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), (t - 0.25) * 4.0);
+        else if (t < 0.75) return mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), (t - 0.5) * 4.0);
+        else return mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (t - 0.75) * 4.0);
     }
 
     vec3 fresnel_schlick(float cos_theta, vec3 F0) {
@@ -106,13 +112,11 @@ ComputeShader "Zarin/Raytracing"
         stack_t[sp] = 0.0;
         sp++;
         float best_t = 1e30;
-
         while (sp > 0) {
             sp--;
             int ni = stack_n[sp];
             float ni_t = stack_t[sp];
             if (ni_t >= best_t) continue;
-
             int base = ni * 8;
             int left_or_start = int(bvh_nodes[base + 6]);
             int right_or_count = int(bvh_nodes[base + 7]);
@@ -140,7 +144,6 @@ ComputeShader "Zarin/Raytracing"
                 }
                 continue;
             }
-
             int tri_end = left_or_start + (-right_or_count - 1);
             for (int ti = left_or_start; ti < tri_end; ti++) {
                 int ib = int((idx_offset + ti)) * 3;
@@ -150,29 +153,110 @@ ComputeShader "Zarin/Raytracing"
                 int i0i = int(i0) * 8;
                 int i1i = int(i1) * 8;
                 int i2i = int(i2) * 8;
-
                 vec3 v0 = vec3(vert_data[i0i], vert_data[i0i + 1], vert_data[i0i + 2]);
                 vec3 v1 = vec3(vert_data[i1i], vert_data[i1i + 1], vert_data[i1i + 2]);
                 vec3 v2 = vec3(vert_data[i2i], vert_data[i2i + 1], vert_data[i2i + 2]);
-
                 vec3 e1 = v1 - v0;
                 vec3 e2 = v2 - v0;
                 vec3 p = cross(rd, e2);
                 float det = dot(e1, p);
                 if (abs(det) < 1e-12) continue;
-
                 float inv_det = 1.0 / det;
                 vec3 t_vec = ro - v0;
                 float u = dot(t_vec, p) * inv_det;
                 if (u < 0.0 || u > 1.0) continue;
-
                 vec3 q = cross(t_vec, e1);
                 float v = dot(rd, q) * inv_det;
                 if (v < 0.0 || (u + v) > 1.0) continue;
-
                 float tt = dot(e2, q) * inv_det;
                 if (tt <= 0.0 || tt >= best_t) continue;
+                best_t = tt;
+                hit_pos = ro + tt * rd;
+                vec3 n0 = vec3(vert_data[i0i + 3], vert_data[i0i + 4], vert_data[i0i + 5]);
+                vec3 n1 = vec3(vert_data[i1i + 3], vert_data[i1i + 4], vert_data[i1i + 5]);
+                vec3 n2 = vec3(vert_data[i2i + 3], vert_data[i2i + 4], vert_data[i2i + 5]);
+                float w = 1.0 - u - v;
+                hit_N = normalize(n0 * w + n1 * u + n2 * v);
+                vec2 uv0 = vec2(vert_data[i0i + 6], vert_data[i0i + 7]);
+                vec2 uv1 = vec2(vert_data[i1i + 6], vert_data[i1i + 7]);
+                vec2 uv2 = vec2(vert_data[i2i + 6], vert_data[i2i + 7]);
+                hit_uv = uv0 * w + uv1 * u + uv2 * v;
+            }
+        }
+        return best_t;
+    }
 
+    float intersect_bvh_steps(vec3 ro, vec3 rd, vec3 inv_d, int bvh_offset, int idx_offset,
+                        inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv, inout int steps) {
+        if (bvh_offset < 0) return 1e30;
+        int stack_n[64];
+        float stack_t[64];
+        int sp = 0;
+        stack_n[sp] = bvh_offset;
+        stack_t[sp] = 0.0;
+        sp++;
+        float best_t = 1e30;
+        while (sp > 0) {
+            sp--;
+            int ni = stack_n[sp];
+            float ni_t = stack_t[sp];
+            if (ni_t >= best_t) continue;
+            steps++;
+            int base = ni * 8;
+            int left_or_start = int(bvh_nodes[base + 6]);
+            int right_or_count = int(bvh_nodes[base + 7]);
+            if (right_or_count >= 0) {
+                int lbase = left_or_start * 8;
+                int rbase = right_or_count * 8;
+                float lt = ray_aabb_min(ro, inv_d, vec3(bvh_nodes[lbase], bvh_nodes[lbase + 1], bvh_nodes[lbase + 2]),
+                                        vec3(bvh_nodes[lbase + 3], bvh_nodes[lbase + 4], bvh_nodes[lbase + 5]));
+                float rt = ray_aabb_min(ro, inv_d, vec3(bvh_nodes[rbase], bvh_nodes[rbase + 1], bvh_nodes[rbase + 2]),
+                                        vec3(bvh_nodes[rbase + 3], bvh_nodes[rbase + 4], bvh_nodes[rbase + 5]));
+                steps += 2;
+                bool lhit = lt >= 0.0 && lt < best_t;
+                bool rhit = rt >= 0.0 && rt < best_t;
+                if (lhit && rhit) {
+                    if (lt < rt) {
+                        stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
+                        stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
+                    } else {
+                        stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
+                        stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
+                    }
+                } else if (lhit) {
+                    stack_n[sp] = left_or_start; stack_t[sp] = lt; sp++;
+                } else if (rhit) {
+                    stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++;
+                }
+                continue;
+            }
+            int tri_end = left_or_start + (-right_or_count - 1);
+            for (int ti = left_or_start; ti < tri_end; ti++) {
+                steps++;
+                int ib = int((idx_offset + ti)) * 3;
+                uint i0 = idx_data[ib];
+                uint i1 = idx_data[ib + 1];
+                uint i2 = idx_data[ib + 2];
+                int i0i = int(i0) * 8;
+                int i1i = int(i1) * 8;
+                int i2i = int(i2) * 8;
+                vec3 v0 = vec3(vert_data[i0i], vert_data[i0i + 1], vert_data[i0i + 2]);
+                vec3 v1 = vec3(vert_data[i1i], vert_data[i1i + 1], vert_data[i1i + 2]);
+                vec3 v2 = vec3(vert_data[i2i], vert_data[i2i + 1], vert_data[i2i + 2]);
+                vec3 e1 = v1 - v0;
+                vec3 e2 = v2 - v0;
+                vec3 p = cross(rd, e2);
+                float det = dot(e1, p);
+                if (abs(det) < 1e-12) continue;
+                float inv_det = 1.0 / det;
+                vec3 t_vec = ro - v0;
+                float u = dot(t_vec, p) * inv_det;
+                if (u < 0.0 || u > 1.0) continue;
+                vec3 q = cross(t_vec, e1);
+                float v = dot(rd, q) * inv_det;
+                if (v < 0.0 || (u + v) > 1.0) continue;
+                float tt = dot(e2, q) * inv_det;
+                if (tt <= 0.0 || tt >= best_t) continue;
                 best_t = tt;
                 hit_pos = ro + tt * rd;
                 vec3 n0 = vec3(vert_data[i0i + 3], vert_data[i0i + 4], vert_data[i0i + 5]);
@@ -198,22 +282,18 @@ ComputeShader "Zarin/Raytracing"
             vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
             float aabb_t = ray_aabb_min(ro, inv_rd, wbmin, wbmax);
             if (aabb_t < 0.0 || aabb_t >= max_dist) continue;
-
             int bvh_offset = int(inst_data[ib + 32]);
             int idx_off = int(inst_data[ib + 34]);
             int mat_idx = int(inst_data[ib + 35]);
-
             mat4 inv_wm = mat4(
                 vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
                 vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
                 vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
                 vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
             );
-
             vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
             vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
             vec3 inv_lrd = 1.0 / lrd;
-
             if (bvh_offset < 0) continue;
             int stack_n[32];
             float stack_t[32];
@@ -226,7 +306,6 @@ ComputeShader "Zarin/Raytracing"
                 int ni = stack_n[sp];
                 float ni_t = stack_t[sp];
                 if (ni_t >= max_dist) continue;
-
                 int base = ni * 8;
                 int left_or_start = int(bvh_nodes[base + 6]);
                 int right_or_count = int(bvh_nodes[base + 7]);
@@ -241,7 +320,6 @@ ComputeShader "Zarin/Raytracing"
                     if (rt >= 0.0 && rt < max_dist) { stack_n[sp] = right_or_count; stack_t[sp] = rt; sp++; }
                     continue;
                 }
-
                 int tri_end = left_or_start + (-right_or_count - 1);
                 for (int ti = left_or_start; ti < tri_end; ti++) {
                     int idx_b = int((idx_off + ti)) * 3;
@@ -251,11 +329,9 @@ ComputeShader "Zarin/Raytracing"
                     int i0i = int(i0) * 8;
                     int i1i = int(i1) * 8;
                     int i2i = int(i2) * 8;
-
                     vec3 v0 = vec3(vert_data[i0i], vert_data[i0i + 1], vert_data[i0i + 2]);
                     vec3 v1 = vec3(vert_data[i1i], vert_data[i1i + 1], vert_data[i1i + 2]);
                     vec3 v2 = vec3(vert_data[i2i], vert_data[i2i + 1], vert_data[i2i + 2]);
-
                     vec3 e1 = v1 - v0;
                     vec3 e2 = v2 - v0;
                     vec3 p = cross(lrd, e2);
@@ -292,29 +368,24 @@ ComputeShader "Zarin/Raytracing"
         vec2 best_uv = vec2(0.0);
         int best_mat = -1;
         int best_inst = -1;
-
         for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
             int ib = inst * 46;
             vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
             vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
             float aabb_t = ray_aabb_min(ro, inv_rd, wbmin, wbmax);
             if (aabb_t < 0.0 || aabb_t >= best_t) continue;
-
             int bvh_offset = int(inst_data[ib + 32]);
             int idx_off = int(inst_data[ib + 34]);
             int mat_idx = int(inst_data[ib + 35]);
-
             mat4 inv_wm = mat4(
                 vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
                 vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
                 vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
                 vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
             );
-
             vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
             vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
             vec3 inv_lrd = 1.0 / lrd;
-
             vec3 lpos, lN;
             vec2 luv;
             float tt = intersect_bvh(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv);
@@ -334,7 +405,61 @@ ComputeShader "Zarin/Raytracing"
                 best_uv = luv;
             }
         }
+        hit_pos = best_pos;
+        hit_N = best_N;
+        hit_uv = best_uv;
+        hit_mat = best_mat;
+        hit_inst = best_inst;
+        return best_t;
+    }
 
+    float intersect_scene_steps(vec3 ro, vec3 rd, vec3 inv_rd,
+                          inout vec3 hit_pos, inout vec3 hit_N, inout vec2 hit_uv,
+                          inout int hit_mat, inout int hit_inst, inout int steps) {
+        float best_t = 1e30;
+        vec3 best_pos = vec3(0.0);
+        vec3 best_N = vec3(0.0, 1.0, 0.0);
+        vec2 best_uv = vec2(0.0);
+        int best_mat = -1;
+        int best_inst = -1;
+        for (int inst = 0; inst < u_instance_count && inst < MAX_INSTANCES; inst++) {
+            int ib = inst * 46;
+            vec3 wbmin = vec3(inst_data[ib + 38], inst_data[ib + 39], inst_data[ib + 40]);
+            vec3 wbmax = vec3(inst_data[ib + 41], inst_data[ib + 42], inst_data[ib + 43]);
+            float aabb_t = ray_aabb_min(ro, inv_rd, wbmin, wbmax);
+            steps++;
+            if (aabb_t < 0.0 || aabb_t >= best_t) continue;
+            int bvh_offset = int(inst_data[ib + 32]);
+            int idx_off = int(inst_data[ib + 34]);
+            int mat_idx = int(inst_data[ib + 35]);
+            mat4 inv_wm = mat4(
+                vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
+                vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
+                vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
+                vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
+            );
+            vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
+            vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
+            vec3 inv_lrd = 1.0 / lrd;
+            vec3 lpos, lN;
+            vec2 luv;
+            float tt = intersect_bvh_steps(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv, steps);
+            if (tt < best_t) {
+                best_t = tt;
+                best_mat = mat_idx;
+                best_inst = inst;
+                mat4 wm = mat4(
+                    vec4(inst_data[ib], inst_data[ib+1], inst_data[ib+2], inst_data[ib+3]),
+                    vec4(inst_data[ib+4], inst_data[ib+5], inst_data[ib+6], inst_data[ib+7]),
+                    vec4(inst_data[ib+8], inst_data[ib+9], inst_data[ib+10], inst_data[ib+11]),
+                    vec4(inst_data[ib+12], inst_data[ib+13], inst_data[ib+14], inst_data[ib+15])
+                );
+                best_pos = (wm * vec4(lpos, 1.0)).xyz;
+                vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
+                best_N = (dot(wN, rd) > 0.0) ? -wN : wN;
+                best_uv = luv;
+            }
+        }
         hit_pos = best_pos;
         hit_N = best_N;
         hit_uv = best_uv;
@@ -350,18 +475,15 @@ ComputeShader "Zarin/Raytracing"
         int bvh_offset = int(inst_data[ib + 32]);
         int idx_off = int(inst_data[ib + 34]);
         int mat_idx = int(inst_data[ib + 35]);
-
         mat4 inv_wm = mat4(
             vec4(inst_data[ib+16], inst_data[ib+17], inst_data[ib+18], inst_data[ib+19]),
             vec4(inst_data[ib+20], inst_data[ib+21], inst_data[ib+22], inst_data[ib+23]),
             vec4(inst_data[ib+24], inst_data[ib+25], inst_data[ib+26], inst_data[ib+27]),
             vec4(inst_data[ib+28], inst_data[ib+29], inst_data[ib+30], inst_data[ib+31])
         );
-
         vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
         vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
         vec3 inv_lrd = 1.0 / lrd;
-
         vec3 lpos, lN;
         vec2 luv;
         float tt = intersect_bvh(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv);
@@ -369,7 +491,6 @@ ComputeShader "Zarin/Raytracing"
             hit_mat = -1;
             return tt;
         }
-
         mat4 wm = mat4(
             vec4(inst_data[ib], inst_data[ib+1], inst_data[ib+2], inst_data[ib+3]),
             vec4(inst_data[ib+4], inst_data[ib+5], inst_data[ib+6], inst_data[ib+7]),
@@ -391,7 +512,6 @@ ComputeShader "Zarin/Raytracing"
         vec3 lro = (inv_wm * vec4(ro, 1.0)).xyz;
         vec3 lrd = normalize((inv_wm * vec4(rd, 0.0)).xyz);
         vec3 inv_lrd = 1.0 / lrd;
-
         vec3 lpos, lN;
         vec2 luv;
         float tt = intersect_bvh(lro, lrd, inv_lrd, bvh_offset, idx_off, lpos, lN, luv);
@@ -399,7 +519,6 @@ ComputeShader "Zarin/Raytracing"
             hit_mat = -1;
             return tt;
         }
-
         hit_pos = (wm * vec4(lpos, 1.0)).xyz;
         vec3 wN = normalize(transpose(mat3(inv_wm)) * lN);
         hit_N = (dot(wN, rd) > 0.0) ? wN : -wN;
@@ -421,7 +540,6 @@ ComputeShader "Zarin/Raytracing"
             float lrange = light_data[base+11];
             float lspot_cos = light_data[base+12];
             float linner_cos = light_data[base+13];
-
             vec3 light_dir;
             float attenuation = 1.0;
             if (lt == 0) {
@@ -438,15 +556,12 @@ ComputeShader "Zarin/Raytracing"
                     if (attenuation < EPS) continue;
                 }
             }
-
             float NdotL = dot(N, light_dir);
             if (NdotL <= 0.0) continue;
-
             float shadow_dist = (lt == 0) ? 1e20 : length(lpos - pos);
             vec3 shadow_ro = pos + N * 0.002;
             float shadow = trace_shadow(shadow_ro, light_dir, shadow_dist);
             if (shadow < 0.01) continue;
-
             vec3 H = normalize(V + light_dir);
             float NdotH = dot(N, H);
             float HdotV = dot(H, V);
@@ -499,13 +614,10 @@ ComputeShader "Zarin/Raytracing"
         float cur_ior = 1.0;
         vec3 entry_pos = vec3(0.0);
         vec3 entry_albedo = vec3(1.0);
-
         mat4 medium_inv_wm, medium_wm;
         int medium_bvh_offset = -1, medium_idx_off = 0, medium_mat_idx = 0;
-
         int bounce = 0;
         int max_iters = (u_max_bounces + 1) * 6 + 16;
-
         for (int it = 0; it < max_iters; it++) {
             vec3 hit_pos, hit_N;
             vec2 hit_uv;
@@ -519,12 +631,10 @@ ComputeShader "Zarin/Raytracing"
             } else {
                 hit_t = intersect_scene(ro, rd, inv_rd, hit_pos, hit_N, hit_uv, hit_mat, hit_inst);
             }
-
             if (hit_mat < 0) {
                 accumulated += throughput * sample_sky(rd);
                 break;
             }
-
             int mb = hit_mat * 20;
             vec4 albedo_rgba = vec4(mat_data[mb], mat_data[mb+1], mat_data[mb+2], mat_data[mb+11]);
             vec3 albedo = albedo_rgba.rgb;
@@ -539,11 +649,9 @@ ComputeShader "Zarin/Raytracing"
             float ior = mat_data[mb+13];
             float roughness = max(1.0 - smoothness, 0.001);
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
-
             vec4 tex_albedo = sample_albedo_tex(hit_uv, albedo_tex_layer);
             albedo *= tex_albedo.rgb;
             alpha *= tex_albedo.a;
-
             if (medium_inst >= 0) {
                 float path_len = length(hit_pos - entry_pos);
                 vec3 absorption = exp(-path_len * max(vec3(0.01), (vec3(1.0) - entry_albedo)) * 3.0);
@@ -563,27 +671,20 @@ ComputeShader "Zarin/Raytracing"
                 }
                 continue;
             }
-
             if (em_intensity > EPS) {
                 vec3 em = throughput * emission * em_intensity;
                 accumulated += em;
                 g_emissive += em;
             }
-
             vec3 V = -rd;
             float NdotV = max(dot(hit_N, V), 0.0);
-
             vec3 direct = direct_light(hit_pos, hit_N, V, NdotV, albedo, roughness, metallic, F0) * occlusion;
             accumulated += throughput * direct;
-
             if (bounce >= u_max_bounces) break;
-
             float spec_w = mix(0.04, 1.0, smoothness);
             spec_w = mix(spec_w, 1.0, metallic);
             float diff_w = (1.0 - metallic) * (1.0 - spec_w);
-
             accumulated += throughput * diff_w * albedo * sample_sky(hit_N) * occlusion;
-
             float transmittance = 1.0 - alpha * (1.0 - transmission);
             float h = _hash(pix + vec2(fi * 91.7 + float(bounce) * 13.1, fi * 53.3 + float(bounce) * 27.7));
             if (transmittance > 0.02) {
@@ -638,7 +739,6 @@ ComputeShader "Zarin/Raytracing"
                 rd = normalize(reflect_dir);
                 throughput *= mix(vec3(spec_w), albedo * spec_w, metallic);
             }
-
             if (max(max(throughput.x, throughput.y), throughput.z) < 0.005) break;
             bounce++;
         }
@@ -649,14 +749,12 @@ ComputeShader "Zarin/Raytracing"
         ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
         ivec2 screen_size = imageSize(output_image);
         if (pix.x >= screen_size.x || pix.y >= screen_size.y) return;
-
         vec3 ray_o = u_camera_pos;
         vec3 color = vec3(0.0);
         vec3 em_total = vec3(0.0);
         int spp = max(u_samples_per_pixel, 1);
         float inv_spp = 1.0 / float(spp);
         vec2 screen_dims = vec2(u_screen_width, u_screen_height);
-
         vec2 uv0 = (vec2(pix) + 0.5) / screen_dims;
         vec4 wn0 = u_inv_view_proj * vec4(uv0.x * 2.0 - 1.0, uv0.y * 2.0 - 1.0, 1.0, 1.0);
         vec3 base_dir = wn0.xyz / wn0.w - ray_o;
@@ -664,20 +762,52 @@ ComputeShader "Zarin/Raytracing"
         vec3 dx_dir = (wnx.xyz / wnx.w - ray_o) - base_dir;
         vec4 wny = u_inv_view_proj * vec4(uv0.x * 2.0 - 1.0, (uv0.y + 1.0 / screen_dims.y) * 2.0 - 1.0, 1.0, 1.0);
         vec3 dy_dir = (wny.xyz / wny.w - ray_o) - base_dir;
-
+        if (u_heatmap_mode != 0) {
+            float scale = max(u_heatmap_scale, 1.0);
+            vec3 heat_acc = vec3(0.0);
+            for (int s = 0; s < spp; s++) {
+                float fi = float(u_frame * spp + s);
+                vec2 jitter = vec2(
+                    _hash(pix + vec2(fi * 13.7, fi * 29.3)) - 0.5,
+                    _hash(pix + vec2(fi * 41.1, fi * 7.9)) - 0.5
+                );
+                vec3 ray_d = normalize(base_dir + jitter.x * dx_dir + jitter.y * dy_dir);
+                vec3 inv_rd = 1.0 / ray_d;
+                vec3 hp, hn;
+                vec2 huv;
+                int hm, hi;
+                int steps = 0;
+                float ht = intersect_scene_steps(ray_o, ray_d, inv_rd, hp, hn, huv, hm, hi, steps);
+                float t = clamp(float(steps) / scale, 0.0, 1.0);
+                if (u_heatmap_mode == 2) {
+                    t = clamp(log(float(steps) + 1.0) / log(scale + 1.0), 0.0, 1.0);
+                }
+                vec3 hc = heatmap_palette(t);
+                if (ht >= 1e29) hc *= 0.35;
+                heat_acc += hc * inv_spp;
+            }
+            if (u_accumulate == 0 || u_accum_frame <= 1) {
+                imageStore(output_image, pix, vec4(heat_acc, 1.0));
+                imageStore(emissive_image, pix, vec4(0.0));
+            } else {
+                vec4 prev = imageLoad(output_image, pix);
+                float t = float(u_accum_frame);
+                heat_acc = prev.rgb * ((t - 1.0) / t) + heat_acc / t;
+                imageStore(output_image, pix, vec4(heat_acc, 1.0));
+                imageStore(emissive_image, pix, vec4(0.0));
+            }
+            return;
+        }
         for (int s = 0; s < spp; s++) {
             float fi = float(u_frame * spp + s);
             vec2 jitter = vec2(
                 _hash(pix + vec2(fi * 13.7, fi * 29.3)) - 0.5,
                 _hash(pix + vec2(fi * 41.1, fi * 7.9)) - 0.5
             );
-
             vec3 ray_d = normalize(base_dir + jitter.x * dx_dir + jitter.y * dy_dir);
-
             color += trace_ray(ray_o, ray_d, pix, fi) * inv_spp;
             em_total += g_emissive * inv_spp;
         }
-
         if (u_accumulate == 0 || u_accum_frame <= 1) {
             imageStore(output_image, pix, vec4(color, 1.0));
             imageStore(emissive_image, pix, vec4(em_total, 1.0));

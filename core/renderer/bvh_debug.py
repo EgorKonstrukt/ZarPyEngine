@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import os
 import numpy as np
 import moderngl
 from typing import Optional
-
 from core.shaders.compute_shader import compile_compute_shader
 
 
@@ -20,7 +18,7 @@ class BVHDebugRenderer:
         self._ctx_id = 0
 
     def render(self, ctx: moderngl.Context, bvh, world_matrix, vp_mat,
-               max_depth: int = 4):
+               max_depth: int = 4, heatmap_intensity: float = 1.0):
         if not bvh or not bvh.nodes or len(bvh.nodes) == 0:
             return
         ctx_id = id(ctx)
@@ -46,6 +44,8 @@ class BVHDebugRenderer:
             self._prog["u_max_depth"] = max_depth
             self._prog["u_vp_matrix"].write(vp_mat.to_f32().tobytes())
             self._prog["u_world_matrix"].write(world_matrix.to_f32().tobytes())
+            if "u_heatmap_intensity" in self._prog:
+                self._prog["u_heatmap_intensity"] = float(heatmap_intensity)
         except KeyError:
             return
         groups = (nn + 255) // 256
@@ -55,7 +55,6 @@ class BVHDebugRenderer:
         line_vert_count = int(np.frombuffer(counter_data, dtype=np.uint32)[0])
         if line_vert_count == 0:
             return
-        old_cull = bool(ctx.cull_face)
         ctx.disable(moderngl.CULL_FACE)
         ctx.disable(moderngl.DEPTH_TEST)
         ctx.enable(moderngl.BLEND)
@@ -63,8 +62,6 @@ class BVHDebugRenderer:
         self._vao.render(moderngl.LINES, vertices=line_vert_count)
         ctx.disable(moderngl.BLEND)
         ctx.enable(moderngl.DEPTH_TEST)
-        if old_cull:
-            ctx.enable(moderngl.CULL_FACE)
 
     def _ensure_progs(self, ctx: moderngl.Context) -> bool:
         if self._prog is None:

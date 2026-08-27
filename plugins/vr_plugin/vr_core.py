@@ -885,6 +885,19 @@ def _controller_world_quat(q):
         return _quat_mul(rig_q, q)
     return q
 
+def _world_quat_to_local(e, wq):
+    parent_ent = getattr(e, 'parent', None)
+    if parent_ent is None:
+        return wq
+    pt = parent_ent.transform
+    if pt is None:
+        return wq
+    try:
+        pq = pt.world_matrix.decompose()[1]
+    except Exception:
+        return wq
+    return (pq.conjugate().normalized() * wq).normalized()
+
 def get_controller_world_pos(i: int):
     if 0 <= i < 2:
         c = _vr_state.controllers[i]
@@ -931,6 +944,11 @@ def update_vr_entities(vp, dt: float):
                 update_vr_locomotion(vp._cam, dt)
             except Exception:
                 pass
+            try:
+                from plugins.vr_plugin.components.xr_locomotion import apply_locomotion_providers
+                apply_locomotion_providers(sc, dt)
+            except Exception:
+                pass
         rig_pos = (0.0, 0.0, 0.0)
         rig_yaw = 0.0
         for e in sc.get_all_entities():
@@ -973,11 +991,6 @@ def update_vr_entities(vp, dt: float):
                 if mgr is not None and mgr.enabled:
                     from plugins.vr_plugin.components.xr_interaction import update_interaction
                     update_interaction(sc, dt, mgr)
-            except Exception:
-                pass
-            try:
-                from plugins.vr_plugin.components.xr_locomotion import apply_locomotion_providers
-                apply_locomotion_providers(sc, dt)
             except Exception:
                 pass
         try:
@@ -1033,7 +1046,10 @@ def _drive_xr_tracked_pose(e, tpd, active, Vec3, Quat):
             else:
                 tr.position = Vec3(p[0], p[1], p[2])
     if q is not None:
-        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+        lq = Quat(q[0], q[1], q[2], q[3])
+        if active:
+            lq = _world_quat_to_local(e, lq)
+        tr.local_rotation = lq
 
 
 def _drive_xr_controller(e, xrc, active, Vec3, Quat):
@@ -1052,7 +1068,10 @@ def _drive_xr_controller(e, xrc, active, Vec3, Quat):
             else:
                 tr.position = Vec3(p[0], p[1], p[2])
     if q is not None:
-        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+        lq = Quat(q[0], q[1], q[2], q[3])
+        if active:
+            lq = _world_quat_to_local(e, lq)
+        tr.local_rotation = lq
     cs = _vr_state.controllers[idx]
     xrc.trigger = getattr(cs, 'trigger', 0.0)
     xrc.grip = getattr(cs, 'grip', 0.0)
@@ -1079,7 +1098,10 @@ def _drive_xr_hand(e, xrh, active, Vec3, Quat):
             else:
                 tr.position = Vec3(p[0], p[1], p[2])
     if q is not None:
-        tr.local_rotation = Quat(q[0], q[1], q[2], q[3])
+        lq = Quat(q[0], q[1], q[2], q[3])
+        if active:
+            lq = _world_quat_to_local(e, lq)
+        tr.local_rotation = lq
     cs = _vr_state.controllers[idx]
     xrh.index_curl = getattr(cs, 'trigger', 0.0)
     xrh.grip_curl = getattr(cs, 'grip', 0.0)
@@ -1720,10 +1742,11 @@ class ControllerRenderer:
         custom = self._custom[idx] if 0 <= idx < 2 else None
         if custom is not None and isinstance(custom, tuple) and len(custom) == 4:
             vbo, ibo, vao, cnt = custom
-            model = _make_model_matrix(_xr_controller_to_world(ctrl.pos), _controller_world_quat(ctrl.quat), scale=1.0)
+            wq = _controller_world_quat(ctrl.quat)
+            model = _make_model_matrix(_xr_controller_to_world(ctrl.pos), wq, scale=1.0)
             mv = _mat4_mul(view, model)
             mvp = _mat4_mul(proj, mv)
-            rot = _quat_to_mat3(*ctrl.quat)
+            rot = _quat_to_mat3(*wq)
             nm = (rot[0], rot[3], rot[6], rot[1], rot[4], rot[7], rot[2], rot[5], rot[8])
             self._set('u_mvp', tuple(mvp))
             self._set('u_normal_mat', nm)
@@ -2103,7 +2126,7 @@ def sync_hmd_pose():
         p1 = _vr_state._eye_positions[1]
         mid_pos = ((p0[0]+p1[0])*0.5, (p0[1]+p1[1])*0.5, (p0[2]+p1[2])*0.5)
         if _vr_state._hmd_pos_origin is None:
-            _vr_state._hmd_pos_origin = mid_pos
+            _vr_state._hmd_pos_origin = (mid_pos[0], mid_pos[1] - 1.6, mid_pos[2])
         ox, oy, oz = _vr_state._hmd_pos_origin
         _vr_state._hmd_pos_offset = (mid_pos[0]-ox, mid_pos[1]-oy, mid_pos[2]-oz)
         _sync_controller_input()

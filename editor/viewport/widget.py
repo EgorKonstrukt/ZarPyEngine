@@ -210,6 +210,7 @@ class SceneViewport(QOpenGLWidget):
         self._fps_history: list[float] = []
         self._debug_lines: list[tuple[Vec3, Vec3, list[float]]] = []
         self._show_bvh_debug: bool = False
+        self._show_rt_heatmap: bool = False
         self._overlay_canvas = None
         try:
             self._im = InputManager.instance()
@@ -362,6 +363,22 @@ class SceneViewport(QOpenGLWidget):
 
     def _toggle_bvh_debug(self, checked: bool):
         self._show_bvh_debug = checked
+        self.update()
+
+    def _toggle_rt_heatmap(self, checked: bool):
+        self._show_rt_heatmap = checked
+        try:
+            from core.components.rendering.renderers.raytracing_renderer import RaytracingRenderer
+            sc = self._engine.scene if hasattr(self, '_engine') and self._engine else None
+            if sc:
+                for ent in sc.get_entities_with_component(RaytracingRenderer):
+                    rr = ent.get_component(RaytracingRenderer)
+                    if rr:
+                        rr._heatmap_mode = 1 if checked else 0
+                        rr._heatmap_scale = 50.0 if checked else 40.0
+                        rr._accum_frame = 1
+        except Exception:
+            pass
         self.update()
 
     def _render_bvh_debug(self):

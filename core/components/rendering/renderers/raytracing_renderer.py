@@ -47,6 +47,8 @@ class RaytracingRenderer(Component):
             InspectorField("_samples_per_pixel", "Samples Per Pixel", FieldType.INT, 1, 16),
             InspectorField("_accumulate", "Accumulate Frames", FieldType.BOOL),
             InspectorField("_show_overlay", "Show Overlay", FieldType.BOOL),
+            InspectorField("_heatmap_mode", "Heatmap Mode", FieldType.INT, 0, 2),
+            InspectorField("_heatmap_scale", "Heatmap Scale", FieldType.FLOAT, 1.0, 256.0),
         ]
 
     def __init__(self):
@@ -57,6 +59,8 @@ class RaytracingRenderer(Component):
         self._samples_per_pixel: int = 1
         self._accumulate: bool = False
         self._show_overlay: bool = True
+        self._heatmap_mode: int = 0
+        self._heatmap_scale: float = 40.0
 
         self._program: Optional[moderngl.ComputeShader] = None
         self._output_tex: Optional[moderngl.Texture] = None
@@ -115,6 +119,8 @@ class RaytracingRenderer(Component):
             "samples_per_pixel": self._samples_per_pixel,
             "accumulate": self._accumulate,
             "show_overlay": self._show_overlay,
+            "heatmap_mode": self._heatmap_mode,
+            "heatmap_scale": self._heatmap_scale,
         })
         return d
 
@@ -127,6 +133,8 @@ class RaytracingRenderer(Component):
         r._samples_per_pixel = int(data.get("samples_per_pixel", 1))
         r._accumulate = data.get("accumulate", False)
         r._show_overlay = data.get("show_overlay", True)
+        r._heatmap_mode = int(data.get("heatmap_mode", 0))
+        r._heatmap_scale = float(data.get("heatmap_scale", 40.0))
         return r
 
     def _ensure_resources(self, ctx: moderngl.Context, width: int, height: int):
@@ -337,6 +345,12 @@ class RaytracingRenderer(Component):
             if not mesh or mesh.vertices is None or len(mesh.vertices) < 3:
                 continue
             bvh = get_mesh_bvh(mesh.vertices, mesh.indices)
+            if not bvh or not bvh.nodes:
+                try:
+                    from core.spatial.bvh import get_mesh_bvh_sync
+                    bvh = get_mesh_bvh_sync(mesh.vertices, mesh.indices, timeout=0.5)
+                except Exception:
+                    bvh = None
             if not bvh or not bvh.nodes:
                 continue
 
@@ -557,6 +571,10 @@ class RaytracingRenderer(Component):
             prog["u_frame"] = self._frame
             prog["u_accumulate"] = 1 if self._accumulate else 0
             prog["u_samples_per_pixel"] = self._samples_per_pixel
+            if "u_heatmap_mode" in prog:
+                prog["u_heatmap_mode"] = int(self._heatmap_mode)
+            if "u_heatmap_scale" in prog:
+                prog["u_heatmap_scale"] = float(self._heatmap_scale)
         except KeyError as e:
             Logger.warning(f"Raytracing uniform missing: {e}")
             return False
