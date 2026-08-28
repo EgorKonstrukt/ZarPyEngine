@@ -260,6 +260,10 @@ def get_global_config() -> Config:
                 "thumb_size": 64,
                 "dual_pane": True
             },
+            "plotter": {
+                "refresh_interval": 100,
+                "history_limit": 2000
+            },
             "audio": {
                 "enable_audio": True,
                 "device_name": "",
