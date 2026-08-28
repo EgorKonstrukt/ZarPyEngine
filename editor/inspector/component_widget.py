@@ -851,7 +851,7 @@ class ComponentWidget(QWidget):
                 te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
             self._add_field(field.label, te, prop_name, field.toggle_field)
         elif field.field_type.value == "vec2":
-            w, sbs = make_vec2_row(field.label, value, lambda: None)
+            w, sbs = make_vec2_row(field.label, value if value is not None else Vec2(0.0, 0.0), lambda: None)
             comp_cls = type(c)
             for sb in sbs:
                 sb.valueChanged.connect(lambda v, pn=prop_name, sbs_box=sbs, cls=comp_cls: self._on_vec2_changed(pn, sbs_box))
@@ -859,6 +859,8 @@ class ComponentWidget(QWidget):
                 def make_setter(idx):
                     def setter(v):
                         vec = getattr(c, prop_name)
+                        if vec is None:
+                            vec = Vec2(0.0, 0.0)
                         if isinstance(vec, (list, tuple)):
                             lst = [float(vec[0]), float(vec[1])]
                         else:
@@ -872,12 +874,13 @@ class ComponentWidget(QWidget):
                 sb.valueChanged.connect(make_setter(i))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3":
-            w, sbs = make_vec3_row(field.label, value, lambda: None)
-            comp_cls = type(c)
+            w, sbs = make_vec3_row(field.label, value if value is not None else Vec3(0.0, 0.0, 0.0), lambda: None)
             for i, sb in enumerate(sbs):
                 def make_setter(idx):
                     def setter(v):
                         vec = getattr(c, prop_name)
+                        if vec is None:
+                            vec = Vec3(0.0, 0.0, 0.0)
                         if isinstance(vec, (list, tuple)):
                             lst = [float(vec[0]), float(vec[1]), float(vec[2])]
                         else:
@@ -927,12 +930,13 @@ class ComponentWidget(QWidget):
             self._update_layer_mask_text(btn, _mask, layer_names)
             self._add_field(field.label, btn, prop_name, field.toggle_field)
         elif field.field_type.value == "vec4":
-            w, sbs = make_vec4_row(field.label, value, lambda: None)
-            comp_cls = type(c)
+            w, sbs = make_vec4_row(field.label, value if value is not None else Vec4(0.0, 0.0, 0.0, 0.0), lambda: None)
             for i, sb in enumerate(sbs):
                 def make_setter(idx):
                     def setter(v):
                         vec = getattr(c, prop_name)
+                        if vec is None:
+                            vec = Vec4(0.0, 0.0, 0.0, 0.0)
                         lst = [vec.x, vec.y, vec.z, vec.w]
                         lst[idx] = v
                         setattr(c, prop_name, type(vec)(*lst))

@@ -426,6 +426,7 @@ class Entity:
             else:
                 s.add(self._id)
             sc._render_version += 1
+            sc._invalidate_update_cache()
         if comp_type.__name__ == _TRANSFORM_NAME:
             self._transform_type = comp_type
             for c in comps.values():
@@ -468,6 +469,7 @@ class Entity:
             if idx:
                 idx.discard(self._id)
             sc._render_version += 1
+            sc._invalidate_update_cache()
 
     def remove_all_components(self, cls: Type[T]):
         clist = self._type_map.pop(cls, None)
@@ -500,6 +502,7 @@ class Entity:
             idx = sc._component_indices.get(base)
             if idx:
                 idx.discard(self._id)
+            sc._invalidate_update_cache()
 
     def remove_component_by_key(self, key: str):
         comp = self._components.pop(key, None)
@@ -535,6 +538,7 @@ class Entity:
             idx = sc._component_indices.get(base)
             if idx:
                 idx.discard(self._id)
+            sc._invalidate_update_cache()
 
     def get_component(self, cls: Type[T]) -> Optional[T]:
         clist = self._type_map.get(cls)
@@ -1035,6 +1039,10 @@ class Scene:
         "FollowTransformConstraint",
     })
 
+    _IK_TYPES = frozenset({
+        "TwoBoneIK", "FABRIKChain",
+    })
+
     def update(self, dt: float):
         prof = self._get_profiler()
         if prof is None:
@@ -1047,15 +1055,21 @@ class Scene:
             prof.stop("scene_update")
             return
         CT = self._CONSTRAINT_TYPES
+        IK = self._IK_TYPES
         try:
             from core._constraint_update import batch_update_constraints
             constraints = []
+            iks = []
             others = []
             append_c = constraints.append
             append_o = others.append
+            append_ik = iks.append
             for c in update_list:
-                if type(c).__name__ in CT:
+                tn = type(c).__name__
+                if tn in CT:
                     append_c(c)
+                elif tn in IK:
+                    append_ik(c)
                 else:
                     append_o(c)
             if constraints:
@@ -1075,9 +1089,27 @@ class Scene:
                         log_error = Logger.error
                     ent = c._entity
                     log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+            if iks:
+                # IK runs AFTER pose application (Animation / Animator).
+                try:
+                    from core._ik import batch_update_ik
+                    batch_update_ik(iks, dt)
+                except ImportError:
+                    for c in iks:
+                        try:
+                            c.on_update(dt)
+                        except Exception as ex:
+                            if log_error is None:
+                                from core.foundation.logger import Logger
+                                log_error = Logger.error
+                            ent = c._entity
+                            log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
         except ImportError:
             for c in update_list:
                 try:
+                    if type(c).__name__ in IK:
+                        # still let the component solve: it batches itself
+                        continue
                     c.on_update(dt)
                 except Exception as ex:
                     if log_error is None:
@@ -1085,6 +1117,16 @@ class Scene:
                         log_error = Logger.error
                     ent = c._entity
                     log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+            for c in update_list:
+                if type(c).__name__ in IK:
+                    try:
+                        c.on_update(dt)
+                    except Exception as ex:
+                        if log_error is None:
+                            from core.foundation.logger import Logger
+                            log_error = Logger.error
+                        ent = c._entity
+                        log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
         prof.stop("scene_update")
 
     def fixed_update(self, dt: float):

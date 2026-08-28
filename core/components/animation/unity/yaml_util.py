@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-_DOC_RE = re.compile(r"^---\s*!u!\s*(\d+)\s*&\s*(-?\d+)\s*$")
+_DOC_RE = re.compile(r"^---\s*!u!\s*(\d+)\s*&\s*(-?\d+)(\s+stripped)?\s*$")
 _DOC_BARE_RE = re.compile(r"^---\s*$")
 _HEX_RE = re.compile(r"^[-+]?0x[0-9a-fA-F]+$")
 
@@ -308,6 +308,10 @@ def parse_unity_documents(text: str) -> list[dict[str, Any]]:
             file_id = int(m.group(2))
             i += 1
         elif _DOC_BARE_RE.match(content):
+            i += 1
+        elif content.startswith("---"):
+            # Unknown/partial document marker (e.g. stripped variants) —
+            # always advance so the loop cannot stall.
             i += 1
         start = i
         while i < n and not (raw_lines[i][0] == 0 and raw_lines[i][1].startswith("---")):
