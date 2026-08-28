@@ -5,22 +5,23 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-import math
 from typing import Optional
 import qtawesome as qta
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QSplitter,
-    QFrame, QDoubleSpinBox, QComboBox, QMenu,
+    QSplitter, QDialog,
+    QDoubleSpinBox, QComboBox, QMenu,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF, QPointF, QLineF
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF, QPointF
 from PyQt6.QtGui import (
-    QPainter, QPen, QColor, QBrush, QFont, QMouseEvent, QWheelEvent,
-    QKeyEvent, QAction, QPainterPath, QFontMetrics, QPalette,
+    QPainter, QPen, QBrush, QMouseEvent, QWheelEvent,
+    QKeyEvent, QPainterPath, QFontMetrics, QPalette,
 )
 from core.foundation.curve import Curve, CurveKey, TangentMode
-from core.components.animation.animation_clip import AnimationClip, AnimationEvent
+from core.components.animation.animation_clip import AnimationClip
 from core.config.editor_scale import scale, scale_xy
+from core.components.properties import read_prop, to_float
+from editor.inspector.entity_property_picker import EntityPropertyDialog
 
 _FPS = 60
 _TIMELINE_HEIGHT = 30
@@ -71,7 +72,6 @@ class TimelineRuler(QWidget):
         p.setPen(QPen(self.palette().mid(), 1))
         p.drawLine(QPointF(_LABEL_WIDTH, 0), QPointF(_LABEL_WIDTH, h))
         clip_len = self._clip.length if self._clip else 1.0
-        total_w = clip_len * self._pixels_per_second
         major_interval = self._get_major_interval()
         minor_interval = major_interval / 5.0
         p.setPen(QPen(self.palette().mid(), 1))
@@ -331,8 +331,6 @@ class CurveEditorWidget(QWidget):
         p.fillRect(0, 0, w, h, self.palette().window())
         p.setPen(QPen(self.palette().mid(), 1))
         p.drawRect(self._margin, self._margin, w - self._margin * 2, h - self._margin * 2)
-        grid_x = self._view_rect.width() / 5.0
-        grid_y = self._view_rect.height() / 5.0
         for i in range(1, 6):
             gx = self._margin + i * (w - self._margin * 2) / 5.0
             p.setPen(QPen(self.palette().mid(), 1))
@@ -577,46 +575,13 @@ class AnimationPanel(QDockWidget):
     def _add_property(self):
         if not self._clip or not self._entity:
             return
-        menu = QMenu(self)
-        self._build_property_menu(menu)
-        btn = self.sender() if self.sender() else self._add_prop_btn
-        menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
-
-    def _build_property_menu(self, menu: QMenu):
-        from core.components.inspector_meta import FieldType
-        for comp in self._entity.get_all_components():
-            comp_name = type(comp).__name__
-            comp_menu = menu.addMenu(comp_name)
-            fields = []
-            if hasattr(comp, '_inspector_fields'):
-                fields = comp._inspector_fields()
-            for f in fields:
-                if f.field_type == FieldType.FLOAT:
-                    self._add_prop_action(comp_menu, f.label, f"{comp_name}/{f.name}")
-                elif f.field_type == FieldType.INT:
-                    self._add_prop_action(comp_menu, f.label, f"{comp_name}/{f.name}")
-                elif f.field_type == FieldType.BOOL:
-                    self._add_prop_action(comp_menu, f.label, f"{comp_name}/{f.name}")
-                elif f.field_type == FieldType.VEC3:
-                    sub = comp_menu.addMenu(f.label)
-                    self._add_prop_action(sub, "x", f"{comp_name}/{f.name}.x")
-                    self._add_prop_action(sub, "y", f"{comp_name}/{f.name}.y")
-                    self._add_prop_action(sub, "z", f"{comp_name}/{f.name}.z")
-                elif f.field_type == FieldType.VEC2:
-                    sub = comp_menu.addMenu(f.label)
-                    self._add_prop_action(sub, "x", f"{comp_name}/{f.name}.x")
-                    self._add_prop_action(sub, "y", f"{comp_name}/{f.name}.y")
-                elif f.field_type == FieldType.COLOR:
-                    sub = comp_menu.addMenu(f.label)
-                    self._add_prop_action(sub, "r", f"{comp_name}/{f.name}.r")
-                    self._add_prop_action(sub, "g", f"{comp_name}/{f.name}.g")
-                    self._add_prop_action(sub, "b", f"{comp_name}/{f.name}.b")
-                    self._add_prop_action(sub, "a", f"{comp_name}/{f.name}.a")
-
-    def _add_prop_action(self, menu: QMenu, label: str, path: str):
-        action = menu.addAction(label)
-        action.setData(path)
-        action.triggered.connect(lambda checked=False, p=path: self._on_add_property(p))
+        entity_id = self._entity.id
+        dlg = EntityPropertyDialog(self._engine.scene, entity_id, "", self, locked=True)
+        dlg.setWindowTitle(f"Add Property — {self._entity.name}")
+        if dlg.exec_near_cursor() == QDialog.DialogCode.Accepted:
+            path = dlg.result_property()
+            if path:
+                self._on_add_property(path)
 
     def _on_add_property(self, path: str):
         if self._clip:
@@ -645,8 +610,19 @@ class AnimationPanel(QDockWidget):
             self._dopesheet.set_selected_property(path)
             self._curve_editor.set_curve(path, self._clip.curves[path])
 
+    def _apply_preview(self, t: float):
+        if not self._clip or not self._entity:
+            return
+        try:
+            from core.components.properties import write_prop
+            for path, val in self._clip.evaluate(t).items():
+                write_prop(self._entity, path, val)
+        except Exception:
+            pass
+
     def _on_scrub(self, t: float):
         self._current_time = t
+        self._apply_preview(t)
         self._time_spin.blockSignals(True)
         self._time_spin.setValue(t)
         self._time_spin.blockSignals(False)
@@ -654,6 +630,7 @@ class AnimationPanel(QDockWidget):
 
     def _on_spin_time(self, t: float):
         self._current_time = t
+        self._apply_preview(t)
         self._timeline_ruler.set_time(t)
         self._dopesheet.set_time(t)
 
@@ -675,6 +652,7 @@ class AnimationPanel(QDockWidget):
         self._timeline_ruler.set_time(0.0)
         self._dopesheet.set_time(0.0)
         self._time_spin.setValue(0.0)
+        self._apply_preview(0.0)
 
     def _tick(self):
         if not self._clip:
@@ -689,6 +667,7 @@ class AnimationPanel(QDockWidget):
                 self._toggle_play()
         self._timeline_ruler.set_time(self._current_time)
         self._dopesheet.set_time(self._current_time)
+        self._apply_preview(self._current_time)
         self._time_spin.blockSignals(True)
         self._time_spin.setValue(self._current_time)
         self._time_spin.blockSignals(False)
@@ -697,7 +676,8 @@ class AnimationPanel(QDockWidget):
         if not self._clip or not self._selected_property:
             return
         curve = self._clip.add_curve(self._selected_property)
-        curve.add_key(self._current_time, 0.0)
+        val = to_float(read_prop(self._entity, self._selected_property))
+        curve.add_key(self._current_time, val if val is not None else 0.0)
         self._mark_dirty()
         self._update_property_list()
         self._curve_editor.set_curve(self._selected_property, curve)

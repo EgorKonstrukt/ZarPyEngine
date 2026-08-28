@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.animation.animation_clip import AnimationClip
-from core.foundation.curve import Curve
 
 
 @ComponentRegistry.register
@@ -84,15 +83,11 @@ class Animation(Component):
             self._apply_value(ent, path, value)
 
     def _apply_value(self, entity, path: str, value: float):
-        parts = path.split("/")
-        if len(parts) < 2:
-            return
-        comp_name = parts[0]
-        prop_name = parts[1]
-        for c in entity.get_all_components():
-            if type(c).__name__ == comp_name:
-                if hasattr(c, prop_name):
-                    setattr(c, prop_name, value)
+        try:
+            from core.components.properties import write_prop
+            write_prop(entity, path, value)
+        except Exception:
+            pass
 
     def serialize(self) -> dict:
         data = super().serialize()
