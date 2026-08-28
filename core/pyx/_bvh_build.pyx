@@ -43,6 +43,10 @@ def sah_compute_best_split(
     cdef np.ndarray left_mask_arr
     cdef np.uint8_t[:] left_mask
 
+    cdef int _MAX_SAH_BINS = 12
+    if sah_bins < 2 or sah_bins > _MAX_SAH_BINS:
+        sah_bins = _MAX_SAH_BINS
+
     cmin_x = 1e30; cmin_y = 1e30; cmin_z = 1e30
     cmax_x = -1e30; cmax_y = -1e30; cmax_z = -1e30
 

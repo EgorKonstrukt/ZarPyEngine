@@ -35,6 +35,7 @@ _CATEGORIES: dict[str, list[tuple[str, str, str, str]]] = {
         ("Html View", "html", "#5a5a5a", "HTML rich text viewer"),
         ("LCD Number", "lcdnumber", "#3a6a3a", "Digital number display"),
         ("Calendar", "calendar", "#5a5a3a", "Date picker calendar"),
+        ("Chart", "chart", "#3a5a7a", "Interactive chart/plot widget"),
     ],
     "Layout": [
         ("Horizontal Layout", "horizontallayout", "#2a4a3a", "Arranges children left to right"),

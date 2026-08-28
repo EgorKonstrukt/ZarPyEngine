@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QDial, QTextBrowser,
     QSplitter, QStackedWidget, QToolBox, QCalendarWidget,
     QLCDNumber, QPlainTextEdit, QScrollBar, QToolButton,
-    QFontComboBox, QMdiArea, QMdiSubWindow,
+    QFontComboBox, QMdiArea, QMdiSubWindow, QVBoxLayout,
 )
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QPen
@@ -1288,9 +1288,69 @@ WIDGET_REGISTRY = {
     "ScrollBar": ScrollBar,
     "ToolButton": ToolButton,
     "FontCombo": FontCombo,
-    "MdiArea": MdiArea,
+"MdiArea": MdiArea,
     "MdiSubWindow": MdiSubWindow,
 }
+
+
+class ChartPlotter(QWidget):
+    def __init__(self, x: float = 0, y: float = 0, w: float = 320, h: float = 200, parent=None):
+        super().__init__(parent)
+        self._anchor = ANCHOR_TOP_LEFT; self._anchor_offset_x = 0.0; self._anchor_offset_y = 0.0
+        self._z_index = 0; self._tag = ""; self._widget_id: Optional[str] = None
+        self._canvas_ref: Optional[Any] = None; self._canvas_size = (800, 600)
+        self._orig_w = w; self._orig_h = h; self.setObjectName("GuiChart")
+        self._chart = None
+        self._show_toolbar = False
+        self._show_sidebar = False
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(0)
+        _set_widget_bounds(self, x, y, w, h)
+
+    def chart(self):
+        if self._chart is not None:
+            return self._chart
+        from editor.plotter import ChartWidget
+        chart = ChartWidget(parent=self, show_toolbar=self._show_toolbar,
+                            show_legend=True, show_sidebar=self._show_sidebar)
+        self._lay.addWidget(chart)
+        self._chart = chart
+        return chart
+
+    def setChartConfig(self, show_toolbar: bool = False, show_sidebar: bool = False):
+        if show_toolbar != self._show_toolbar or show_sidebar != self._show_sidebar:
+            self._show_toolbar = show_toolbar
+            self._show_sidebar = show_sidebar
+            chart = self._chart
+            if chart is not None:
+                chart.setToolbarVisible(show_toolbar)
+                chart.setSidebarVisible(show_sidebar)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        chart = self.__dict__.get("_chart")
+        if chart is not None:
+            try:
+                return getattr(chart, name)
+            except RuntimeError:
+                pass
+        raise AttributeError(name)
+
+    def update_anchor(self, canvas_w, canvas_h):
+        nx, ny, nw, nh = _update_anchor(self, self._anchor, canvas_w, canvas_h, self._anchor_offset_x, self._anchor_offset_y, self._orig_w, self._orig_h)
+        _set_widget_bounds(self, nx, ny, nw, nh)
+
+    def serialize(self):
+        return {"type": "Chart", "x": self.x(), "y": self.y(), "w": self.width(), "h": self.height(), "anchor": self._anchor, "z_index": self._z_index, "tag": self._tag}
+    @staticmethod
+    def deserialize(data):
+        c = ChartPlotter(data.get("x", 0), data.get("y", 0), data.get("w", 320), data.get("h", 200))
+        c._anchor = data.get("anchor", ANCHOR_TOP_LEFT); c._z_index = data.get("z_index", 0); c._tag = data.get("tag", ""); return c
+
+
+WIDGET_REGISTRY["Chart"] = ChartPlotter
 
 
 _WIDGET_BASE_STYLES: dict[str, str] = {
@@ -1324,8 +1384,9 @@ _WIDGET_BASE_STYLES: dict[str, str] = {
     "GuiScrollBar": "background: #2d2d2d; border: 1px solid #555;",
     "GuiToolButton": "background-color: #4a4a4a; color: #ddd; border: 1px solid #666; border-radius: 3px; padding: 2px 6px; font-size: 12px;",
     "GuiFontCombo": "background: #1e1e1e; color: #ddd; border: 1px solid #555; border-radius: 3px; padding: 2px 4px; font-size: 12px;",
-    "GuiMdiArea": "background: #1e1e1e; border: 1px solid #555;",
+"GuiMdiArea": "background: #1e1e1e; border: 1px solid #555;",
     "GuiMdiSubWindow": "background: #2d2d2d; color: #ddd;",
+    "GuiChart": "background: #1e1e1e; border: 1px solid #555;",
 }
 
 
@@ -1451,7 +1512,8 @@ def get_widget_type_for_object(obj_name: str) -> str:
         "GuiLCDNumber": "QLCDNumber", "GuiPlainText": "QPlainTextEdit",
         "GuiScrollBar": "QScrollBar", "GuiToolButton": "QToolButton",
         "GuiFontCombo": "QFontComboBox",
-        "GuiMdiArea": "QMdiArea", "GuiMdiSubWindow": "QMdiSubWindow",
+"GuiMdiArea": "QMdiArea", "GuiMdiSubWindow": "QMdiSubWindow",
+        "GuiChart": "QWidget",
     }
     return TYPE_MAP.get(obj_name, "QWidget")
 

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from core.components.gui.controls.fontcombo_component import FontComboComponent
     from core.components.gui.containers.mdiarea_component import MdiAreaComponent
     from core.components.gui.controls.tooltip_component import TooltipComponent
+    from core.components.gui.controls.chart_component import ChartComponent
     from core.components.gui.layout.layout_element_component import LayoutElementComponent
     from core.components.gui.layout.horizontal_layout_component import (
         HorizontalLayoutComponent, VerticalLayoutComponent, GridLayoutComponent,
@@ -81,6 +82,7 @@ _LAZY_IMPORTS: dict[str, str] = {
     "FontComboComponent": "core.components.gui.controls.fontcombo_component",
     "MdiAreaComponent": "core.components.gui.containers.mdiarea_component",
     "TooltipComponent": "core.components.gui.controls.tooltip_component",
+    "ChartComponent": "core.components.gui.controls.chart_component",
     "LayoutElementComponent": "core.components.gui.layout.layout_element_component",
     "HorizontalLayoutComponent": "core.components.gui.layout.horizontal_layout_component",
     "VerticalLayoutComponent": "core.components.gui.layout.horizontal_layout_component",
@@ -131,6 +133,7 @@ def _build_component_map() -> dict:
     from core.components.gui.controls.toolbutton_component import ToolButtonComponent
     from core.components.gui.controls.fontcombo_component import FontComboComponent
     from core.components.gui.containers.mdiarea_component import MdiAreaComponent
+    from core.components.gui.controls.chart_component import ChartComponent
     return {
         "panel": PanelComponent,
         "label": LabelComponent,
@@ -163,6 +166,7 @@ def _build_component_map() -> dict:
         "toolbutton": ToolButtonComponent,
         "fontcombo": FontComboComponent,
         "mdiarea": MdiAreaComponent,
+        "chart": ChartComponent,
     }
 
 GUI_COMPONENT_MAP = None
@@ -188,6 +192,7 @@ __all__ = [
     "ToolBoxComponent", "CalendarComponent", "LCDComponent", "PlainTextComponent",
     "ScrollBarComponent", "ToolButtonComponent", "FontComboComponent",
     "MdiAreaComponent", "TooltipComponent", "LayoutElementComponent",
+    "ChartComponent",
     "HorizontalLayoutComponent", "VerticalLayoutComponent", "GridLayoutComponent",
     "GUI_COMPONENT_MAP", "_ensure_component_map",
 ]

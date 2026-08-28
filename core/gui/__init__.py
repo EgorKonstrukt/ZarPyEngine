@@ -13,7 +13,7 @@ from core.gui.widgets import (
     ANCHOR_CENTER_LEFT, ANCHOR_CENTER, ANCHOR_CENTER_RIGHT,
     ANCHOR_BOTTOM_LEFT, ANCHOR_BOTTOM_CENTER, ANCHOR_BOTTOM_RIGHT,
     ANCHOR_STRETCH_ALL, ANCHOR_STRETCH_WIDTH, ANCHOR_STRETCH_HEIGHT,
-    WIDGET_REGISTRY, apply_fusion_style,
+    WIDGET_REGISTRY, apply_fusion_style, ChartPlotter,
 )
 from core.gui.canvas import GuiCanvas
 from core.gui.api import GuiApi
