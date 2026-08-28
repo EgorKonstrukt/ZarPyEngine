@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 from typing import Optional
 from core.ecs.ecs import Component, ComponentRegistry
+from core.components.animation.animation_clip import AnimationClip
+from core.components.animation.animation_component import _resolve_bone_path
 from core.components.animation.animator_controller import (
     AnimatorController,
     AnimatorState,
@@ -16,6 +18,15 @@ from core.components.animation.animator_controller import (
     AnimatorParameterType,
     AnimatorConditionMode,
 )
+
+
+def _slerp_tuple(a, b, t: float):
+    from core.maths.math3d import Quat
+    qa = Quat(a[0], a[1], a[2], a[3])
+    qb = Quat(b[0], b[1], b[2], b[3])
+    q = qa.slerp(qb, t)
+    q.normalize()
+    return (q.x, q.y, q.z, q.w)
 
 
 @ComponentRegistry.register
@@ -223,32 +234,61 @@ class Animator(Component):
         to_state = ctrl.get_state(0, to_name)
         if not from_state or not to_state:
             return
-        from_vals = self._evaluate_state_at_time(from_state, self._previous_state_time)
-        to_vals = self._evaluate_state_at_time(to_state, self._current_time)
+        from_clip = self._ensure_clip(from_state)
+        to_clip = self._ensure_clip(to_state)
         ent = self._entity
         if ent is None:
             return
+        from_vals: dict = {}
+        from_rots: dict = {}
+        for bone_path, prop, value in (from_clip.evaluate_all(self._previous_state_time)
+                                       if from_clip else []):
+            from_vals[(bone_path, prop)] = value
+        for bone_path, prop, quat in (from_clip.evaluate_rotations_all(self._previous_state_time)
+                                      if from_clip else []):
+            from_rots[(bone_path, prop)] = quat
+        to_vals: dict = {}
+        to_rots: dict = {}
+        for bone_path, prop, value in (to_clip.evaluate_all(self._current_time)
+                                       if to_clip else []):
+            to_vals[(bone_path, prop)] = value
+        for bone_path, prop, quat in (to_clip.evaluate_rotations_all(self._current_time)
+                                      if to_clip else []):
+            to_rots[(bone_path, prop)] = quat
         eased = 1.0 - math.pow(1.0 - t, 3) if t < 0.5 else math.pow(t * 2.0 - 1.0, 3) * 0.5 + 0.5
-        all_keys = set(from_vals.keys()) | set(to_vals.keys())
-        for path in all_keys:
-            fv = from_vals.get(path, 0.0)
-            tv = to_vals.get(path, 0.0)
+        for key in set(from_vals.keys()) | set(to_vals.keys()):
+            bone_path, prop = key
+            fv = from_vals.get(key, 0.0)
+            tv = to_vals.get(key, 0.0)
             blended = fv + (tv - fv) * eased
-            self._apply_value(ent, path, blended)
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_value(target, prop, blended)
+        for key in set(from_rots.keys()) | set(to_rots.keys()):
+            bone_path, prop = key
+            fr = from_rots.get(key, (0.0, 0.0, 0.0, 1.0))
+            tr = to_rots.get(key, (0.0, 0.0, 0.0, 1.0))
+            blended = _slerp_tuple(fr, tr, eased)
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_rotation(target, prop, blended)
 
     def _apply_state(self, state: AnimatorState):
         ent = self._entity
         if ent is None:
             return
-        vals = self._evaluate_state_at_time(state, self._current_time)
-        for path, value in vals.items():
-            self._apply_value(ent, path, value)
+        clip = self._ensure_clip(state)
+        if clip is None:
+            return
+        for bone_path, prop, value in clip.evaluate_all(self._current_time):
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_value(target, prop, value)
+        for bone_path, prop, quat in clip.evaluate_rotations_all(self._current_time):
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_rotation(target, prop, quat)
 
-    def _evaluate_state_at_time(self, state: AnimatorState, time: float) -> dict[str, float]:
-        if not state.clip:
-            return {}
-        clip = state.clip
-        return clip.evaluate(time)
+    def _ensure_clip(self, state: AnimatorState) -> AnimationClip | None:
+        if state.clip is None and state.clip_path:
+            state.clip = AnimationClip.load(state.clip_path)
+        return state.clip
 
     def _get_clip_length(self, state: AnimatorState) -> float:
         if state.clip:
@@ -261,15 +301,21 @@ class Animator(Component):
         return True
 
     def _apply_value(self, entity, path: str, value: float):
-        parts = path.split("/")
-        if len(parts) < 2:
+        try:
+            from core.components.properties import write_prop
+            write_prop(entity, path, value)
+        except Exception:
+            pass
+
+    def _apply_rotation(self, entity, path: str, quat):
+        if entity is None:
             return
-        comp_name = parts[0]
-        prop_name = parts[1]
-        for c in entity.get_all_components():
-            if type(c).__name__ == comp_name:
-                if hasattr(c, prop_name):
-                    setattr(c, prop_name, value)
+        try:
+            from core.components.animation.animation_component import _as_quat
+            from core.components.properties import write_prop
+            write_prop(entity, path, _as_quat(quat))
+        except Exception:
+            pass
 
     def serialize(self) -> dict:
         data = super().serialize()

@@ -614,9 +614,17 @@ class AnimationPanel(QDockWidget):
         if not self._clip or not self._entity:
             return
         try:
+            from core.components.animation.animation_component import (
+                _as_quat,
+                _resolve_bone_path,
+            )
             from core.components.properties import write_prop
-            for path, val in self._clip.evaluate(t).items():
-                write_prop(self._entity, path, val)
+            for bone_path, prop, val in self._clip.evaluate_all(t):
+                target = _resolve_bone_path(self._entity, bone_path)
+                write_prop(target, prop, val)
+            for bone_path, prop, quat in self._clip.evaluate_rotations_all(t):
+                target = _resolve_bone_path(self._entity, bone_path)
+                write_prop(target, prop, _as_quat(quat))
         except Exception:
             pass
 

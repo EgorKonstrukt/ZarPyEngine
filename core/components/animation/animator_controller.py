@@ -246,10 +246,45 @@ class AnimatorController:
             json.dump(self.to_dict(), f, indent=2)
         self._path = path
 
+    def save_unity(self, path: str):
+        from core.components.animation.unity.exporters import controller_to_unity_yaml
+        import os
+        import hashlib
+
+        with open(path, "w") as f:
+            f.write(controller_to_unity_yaml(self))
+        meta = path + ".meta"
+        if not os.path.exists(meta):
+            with open(meta, "w") as f:
+                f.write(
+                    "fileFormatVersion: 2\n"
+                    "guid: %s\n"
+                    "NativeFormatImporter:\n"
+                    "  externalObjects: {}\n"
+                    "  mainObjectFileID: 9100000\n"
+                    "  userData: \n"
+                    "  assetBundleName: \n"
+                    "  assetBundleVariant: \n" % hashlib.md5(path.encode("utf-8")).hexdigest()
+                )
+        self._path = path
+
     @classmethod
     def load(cls, path: str) -> AnimatorController:
-        with open(path) as f:
-            d = json.load(f)
-        ctrl = cls.from_dict(d)
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            header = fh.read(4096)
+        fh = open(path, encoding="utf-8", errors="replace")
+        try:
+            if header.lstrip().startswith("%YAML") or header.lstrip().startswith(
+                "%TAG"
+            ) or header.lstrip().startswith("--- !u!"):
+                from core.components.animation.unity.controller_importer import (
+                    import_controller,
+                )
+
+                ctrl = import_controller(path)
+            else:
+                ctrl = cls.from_dict(json.load(fh))
+        finally:
+            fh.close()
         ctrl._path = path
         return ctrl

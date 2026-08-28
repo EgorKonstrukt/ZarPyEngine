@@ -10,6 +10,40 @@ from core.ecs.ecs import Component, ComponentRegistry
 from core.components.animation.animation_clip import AnimationClip
 
 
+def _as_quat(value):
+    from core.maths.math3d import Quat
+    if isinstance(value, Quat):
+        return value
+    try:
+        t = tuple(value)
+        if len(t) == 4 and all(isinstance(c, (int, float)) for c in t):
+            return Quat(t[0], t[1], t[2], t[3])
+    except TypeError:
+        pass
+    return value
+
+
+def _resolve_bone_path(root, bone_path: str):
+    if not bone_path:
+        return root
+    parts = [p for p in bone_path.split("/") if p]
+    if not parts:
+        return root
+    current = root
+    if parts[0] and parts[0] == (getattr(root, "name", "") or ""):
+        parts = parts[1:]
+    for seg in parts:
+        found = None
+        for child in (current.children if current is not None else []):
+            if child.name == seg:
+                found = child
+                break
+        if found is None:
+            return current or root
+        current = found
+    return current or root
+
+
 @ComponentRegistry.register
 class Animation(Component):
     _updates: bool = True
@@ -78,14 +112,26 @@ class Animation(Component):
         ent = self._entity
         if ent is None:
             return
-        values = clip.evaluate(self._time)
-        for path, value in values.items():
-            self._apply_value(ent, path, value)
+        for bone_path, prop, value in clip.evaluate_all(self._time):
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_value(target, prop, value)
+        for bone_path, prop, quat in clip.evaluate_rotations_all(self._time):
+            target = _resolve_bone_path(ent, bone_path)
+            self._apply_rotation(target, prop, quat)
 
     def _apply_value(self, entity, path: str, value: float):
         try:
             from core.components.properties import write_prop
             write_prop(entity, path, value)
+        except Exception:
+            pass
+
+    def _apply_rotation(self, entity, path: str, quat):
+        if entity is None:
+            return
+        try:
+            from core.components.properties import write_prop
+            write_prop(entity, path, _as_quat(quat))
         except Exception:
             pass
 

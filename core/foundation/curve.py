@@ -159,6 +159,12 @@ class Curve:
     def copy(self) -> "Curve":
         return Curve.from_dict(self.to_dict())
 
+    def find_key(self, time: float) -> Optional[CurveKey]:
+        for k in self.keys:
+            if abs(k.time - float(time)) < 1e-6:
+                return k
+        return None
+
     @classmethod
     def from_dict(cls, data: dict) -> Curve:
         c = cls()
@@ -173,4 +179,101 @@ class Curve:
                 tangent_mode=TangentMode(kd.get("tangent_mode", "smooth")),
             )
             c.keys.append(k)
+        return c
+
+
+@dataclass
+class QuaternionKey:
+    time: float
+    value: tuple  # (x, y, z, w)
+
+
+def _quat_slerp(a: tuple, b: tuple, t: float) -> tuple:
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    dot = ax * bx + ay * by + az * bz + aw * bw
+    if dot < 0.0:
+        bx, by, bz, bw = -bx, -by, -bz, -bw
+        dot = -dot
+    dot = min(max(dot, -1.0), 1.0)
+    if dot > 0.9995:
+        k = t
+        result = (ax + (bx - ax) * k, ay + (by - ay) * k,
+                  az + (bz - az) * k, aw + (bw - aw) * k)
+        return _quat_normalize(result)
+    theta_0 = np.arccos(dot)
+    theta = theta_0 * t
+    sin_theta = np.sin(theta)
+    sin_theta_0 = np.sin(theta_0)
+    s0 = np.cos(theta) - dot * sin_theta / sin_theta_0
+    s1 = sin_theta / sin_theta_0
+    return _quat_normalize((
+        s0 * ax + s1 * bx, s0 * ay + s1 * by,
+        s0 * az + s1 * bz, s0 * aw + s1 * bw,
+    ))
+
+
+def _quat_normalize(v: tuple) -> tuple:
+    x, y, z, w = v
+    length = (x * x + y * y + z * z + w * w) ** 0.5
+    if length < 1e-12:
+        return (0.0, 0.0, 0.0, 1.0)
+    return (x / length, y / length, z / length, w / length)
+
+
+def _to_quat_tuple(value) -> tuple:
+    if isinstance(value, tuple) and len(value) == 4:
+        return value
+    try:
+        from core.maths.math3d import Quat
+    except ImportError:
+        Quat = None
+    if Quat is not None and isinstance(value, Quat):
+        return (value.x, value.y, value.z, value.w)
+    seq = tuple(value)
+    if len(seq) == 4:
+        return (float(seq[0]), float(seq[1]), float(seq[2]), float(seq[3]))
+    raise ValueError(f"cannot convert to quaternion: {value!r}")
+
+
+class QuaternionCurve:
+    """Unity-style rotation curve: keys hold quaternions, slerp interpolated."""
+
+    def __init__(self):
+        self.keys: list[QuaternionKey] = []
+
+    def add_key(self, time: float, value) -> QuaternionKey:
+        k = QuaternionKey(float(time), _to_quat_tuple(value))
+        self.keys.append(k)
+        self.keys.sort(key=lambda x: x.time)
+        return k
+
+    def clear(self):
+        self.keys = []
+
+    def evaluate(self, time: float) -> tuple:
+        if not self.keys:
+            return (0.0, 0.0, 0.0, 1.0)
+        if time <= self.keys[0].time:
+            return self.keys[0].value
+        if time >= self.keys[-1].time:
+            return self.keys[-1].value
+        for i in range(len(self.keys) - 1):
+            if self.keys[i].time <= time <= self.keys[i + 1].time:
+                a = self.keys[i]
+                b = self.keys[i + 1]
+                if b.time - a.time < 1e-10:
+                    return a.value
+                t = (time - a.time) / (b.time - a.time)
+                return _quat_slerp(a.value, b.value, t)
+        return self.keys[-1].value
+
+    def keys_dict(self) -> list[dict]:
+        return [{"time": k.time, "value": list(k.value)} for k in self.keys]
+
+    @classmethod
+    def from_keys_dict(cls, items: list[dict]) -> "QuaternionCurve":
+        c = cls()
+        for item in items:
+            c.add_key(float(item["time"]), item["value"])
         return c
