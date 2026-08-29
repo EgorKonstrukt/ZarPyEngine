@@ -703,18 +703,49 @@ def _confirm_discard_dirty(mw) -> bool:
 
 
 def _do_open_scene(mw, path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tab_name = os.path.splitext(os.path.basename(path))[0]
-        mw._engine.resolve_scene_paths(data)
-        from core.ecs.ecs import Scene, ComponentRegistry
-        scene = Scene.deserialize(data, ComponentRegistry)
-        scene.path = path
-        scene.mark_clean()
-        mw._scene_tab_manager.add_tab(tab_name, path=path, scene=scene)
-    except Exception as e:
-        Logger.error(f"Error opening scene: {e}", e)
+    eng = mw._engine
+    from core.foundation.progress import task_start, task_update, task_complete
+    from core.ecs.embedded_resources import extract_embedded_resources as _extract
+    task_id = "scene:open"
+    task_start(task_id, f"Opening {os.path.basename(path)}...", fraction=0.0, total=1.0)
+    def _report():
+        def _cb(done: int, total_: int, name: str):
+            frac = None if total_ <= 0 else done / max(1, total_)
+            task_update(task_id, fraction=frac, detail=name)
+        return _cb
+    def _worker():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            _extract(data, eng.project_root, eng._embedded_cache_mode(), progress_cb=_report())
+            eng.resolve_scene_paths(data)
+        except Exception as ex:
+            msg = str(ex)
+            Logger.error(f"Error opening scene: {ex}", ex)
+            def _err():
+                task_complete(task_id)
+                from core.foundation import progress
+                progress.notify_error(f"Failed to open scene: {msg}")
+            from editor.scene_async import call_on_main
+            call_on_main(_err)
+            return
+        def _apply():
+            try:
+                from core.ecs.ecs import Scene, ComponentRegistry
+                scene = Scene.deserialize(data, ComponentRegistry)
+                scene.embedded_resources = data.get("embedded_resources", {})
+                scene.path = path
+                scene.mark_clean()
+                tab_name = os.path.splitext(os.path.basename(path))[0]
+                mw._scene_tab_manager.add_tab(tab_name, path=path, scene=scene)
+            except Exception as e:
+                Logger.error(f"Error opening scene: {e}", e)
+            finally:
+                task_complete(task_id)
+        from editor.scene_async import call_on_main
+        call_on_main(_apply)
+    import threading
+    threading.Thread(target=_worker, name="scene-open-worker", daemon=True).start()
 
 
 def _sync_tab_after_save(mw):
@@ -732,8 +763,7 @@ def save_scene(mw):
     if not mw._engine.scene.path:
         save_scene_as(mw)
     else:
-        mw._engine.save_scene()
-        _sync_tab_after_save(mw)
+        mw._engine.save_scene_async(on_done=lambda _ok: _sync_tab_after_save(mw))
 
 
 def save_scene_as(mw):
@@ -743,7 +773,7 @@ def save_scene_as(mw):
     if path:
         if not path.endswith(".zpes"):
             path += ".zpes"
-        mw._engine.save_scene(path)
+        mw._engine.save_scene_async(path, on_done=lambda _ok: _sync_tab_after_save(mw))
         if hasattr(mw, '_scene_tab_manager') and mw._scene_tab_manager:
             active = mw._scene_tab_manager.active_tab
             if active:

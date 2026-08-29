@@ -16,8 +16,10 @@ from core.foundation.logger import Logger
 from core.config.config import get_global_config
 from core.config.constants import PATH_FIELDS as _PATH_FIELDS
 from core.ecs.pool import general as _get_pool
+from core.ecs.embedded_resources import embed_scene_resources as _embed_scene_resources
+from core.ecs.embedded_resources import extract_embedded_resources as _extract_embedded_resources
 from core.foundation.profiler import Profiler as _Profiler
-from core.foundation.progress import task_complete, task_start
+from core.foundation.progress import task_complete, task_start, task_update
 
 if TYPE_CHECKING:
     from core.engine.engine_worker import GameWorker
@@ -119,6 +121,126 @@ class Engine:
                 audio.apply_project_audio_config()
         except Exception:
             pass
+    def _embedded_cache_mode(self) -> str:
+        try:
+            from core.config.config import get_global_config
+            return get_global_config().get("engine.embedded_cache_mode", "project")
+        except Exception:
+            return "project"
+    def _compress_level(self) -> int:
+        try:
+            val = get_global_config().get("engine.embedded_compression_level", "balanced")
+            if isinstance(val, bool) or not isinstance(val, int):
+                return {"fast": 1, "balanced": 6, "max": 9}.get(str(val).lower(), 6)
+            return max(0, min(9, val))
+        except Exception:
+            return 6
+    def _defer_gui(self, fn):
+        poster = getattr(self, "_gui_poster", None)
+        if poster is not None:
+            poster(fn)
+        else:
+            fn()
+    def _persist_scene_data(self, data: dict, path: str, level: int, task_id: str,
+                            existing_storage: Optional[dict] = None) -> dict:
+        def _cb(done: int, total_: int, name: str) -> None:
+            frac = None if total_ <= 0 else done / max(1, total_)
+            task_update(task_id, fraction=frac, detail=name)
+        _embed_scene_resources(data, self.project_root, existing_storage,
+                               compress_level=level, progress_cb=_cb)
+        storage = data.get("embedded_resources", {})
+        self.relativize_scene_paths(data)
+        build_path = path + ".build"
+        with open(build_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(build_path, path)
+        return storage
+    def save_scene_async(self, path: Optional[str] = None, on_done: Optional[Any] = None):
+        scene = self._scene
+        if scene is None:
+            return
+        save_path = path or scene.path
+        if not save_path:
+            Logger.warning("No path for scene save.")
+            return
+        os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+        level = self._compress_level()
+        task_id = "scene:save"
+        task_start(task_id, f"Saving scene {os.path.basename(save_path)}...", fraction=0.0, total=1.0)
+        snapshot = scene.serialize()
+        if scene.embedded_resources:
+            snapshot["embedded_resources"] = scene.embedded_resources
+        existing = scene.embedded_resources
+        def _worker():
+            ok = True
+            storage = {}
+            try:
+                storage = self._persist_scene_data(snapshot, save_path, level, task_id, existing)
+            except Exception as e:
+                ok = False
+                Logger.error(f"Failed to save scene: {e}", e)
+            def _finish():
+                if ok:
+                    scene.embedded_resources = storage
+                    scene.path = save_path
+                    scene.mark_clean()
+                    self._emit_event("scene_saved", scene)
+                task_complete(task_id)
+                if callable(on_done):
+                    on_done(ok)
+            self._defer_gui(_finish)
+        threading.Thread(target=_worker, name="scene-save-worker", daemon=True).start()
+    def load_scene_async(self, path: str, data: Optional[dict] = None,
+                         on_done: Optional[Any] = None):
+        task_id = "scene:load"
+        task_start(task_id, f"Loading scene {os.path.basename(path)}...", fraction=0.0, total=1.0)
+        def _cb(done: int, total_: int, name: str) -> None:
+            frac = None if total_ <= 0 else done / max(1, total_)
+            task_update(task_id, fraction=frac, detail=name)
+        def _worker(snapshot: dict):
+            try:
+                embedded = _extract_embedded_resources(snapshot, self.project_root,
+                                                       self._embedded_cache_mode(), progress_cb=_cb)
+                self.resolve_scene_paths(snapshot)
+            except Exception as ex:
+                msg = str(ex)
+                Logger.error(f"Failed to load scene '{path}': {ex}", ex)
+                def _err():
+                    from core.foundation import progress
+                    progress.notify_error(f"Failed to load scene: {msg}")
+                    task_complete(task_id)
+                self._defer_gui(_err)
+                return
+            self._defer_gui(lambda: self._apply_loaded(snapshot, embedded, path, task_id, on_done))
+        if data is None:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                Logger.error(f"Failed to load scene '{path}': {e}", e)
+                task_complete(task_id)
+                return
+        threading.Thread(target=_worker, args=(data,), name="scene-load-worker", daemon=True).start()
+    def _apply_loaded(self, data: dict, embedded: dict, path: str, task_id: str,
+                      on_done: Optional[Any] = None):
+        try:
+            if self._scene:
+                self._plugin_manager.notify_scene_unloaded(self._scene)
+            from core.components.rendering.postfx.graphics_effect import GraphicsEffect
+            GraphicsEffect.cleanup_registry()
+            self._scene = Scene.deserialize(data, self._component_registry)
+            self._scene.embedded_resources = embedded
+            self._scene.path = path
+            self._scene.mark_clean()
+            self._plugin_manager.notify_scene_loaded(self._scene)
+            Logger.info(f"Scene loaded: {path}")
+            self._emit_event("scene_loaded", self._scene)
+        except Exception as e:
+            Logger.error(f"Failed to load scene '{path}': {e}", e)
+        finally:
+            task_complete(task_id)
+        if callable(on_done):
+            on_done(self._scene)
     def resolve_scene_paths(self, data: dict):
         root = self.project_root
         entities = data.get("entities", {})
@@ -196,12 +318,14 @@ class Engine:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 data["_source"] = path
+                embedded = _extract_embedded_resources(data, self.project_root, self._embedded_cache_mode())
                 self.resolve_scene_paths(data)
                 if self._scene:
                     self._plugin_manager.notify_scene_unloaded(self._scene)
                 from core.components.rendering.postfx.graphics_effect import GraphicsEffect
                 GraphicsEffect.cleanup_registry()
                 self._scene = Scene.deserialize(data, self._component_registry)
+                self._scene.embedded_resources = embedded
                 self._scene.path = path
                 self._scene.mark_clean()
                 self._plugin_manager.notify_scene_loaded(self._scene)
@@ -241,6 +365,8 @@ class Engine:
         task_start("scene:save", f"Saving scene {os.path.basename(save_path)}...")
         try:
             data = self._scene.serialize()
+            _embed_scene_resources(data, self.project_root, self._scene.embedded_resources)
+            self._scene.embedded_resources = data.get("embedded_resources", {})
             self.relativize_scene_paths(data)
             os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
             with open(save_path, "w", encoding="utf-8") as f:

@@ -238,7 +238,7 @@ class Entity:
         '_update_list', '_fixed_update_list',
         '_active', '_parent', '_children', '_tags', '_layer',
         '_scene', '_prefab_guid', '_prefab_source_id',
-        '_transform_type',
+        '_transform_type', '_embed_resources',
     )
 
     def __init__(self, name: str = "Entity", eid: Optional[str] = None,
@@ -259,6 +259,7 @@ class Entity:
         self._prefab_guid: Optional[str] = prefab_guid
         self._prefab_source_id: Optional[str] = None
         self._transform_type: Optional[type] = None
+        self._embed_resources: bool = False
 
     def _get_transform_type(self):
         tt = self._transform_type
@@ -334,6 +335,18 @@ class Entity:
 
     @layer.setter
     def layer(self, v: int): self._layer = v
+
+    @property
+    def embed_resources(self) -> bool: return self._embed_resources
+
+    @embed_resources.setter
+    def embed_resources(self, v: bool):
+        if self._embed_resources == v:
+            return
+        self._embed_resources = bool(v)
+        sc = self._scene
+        if sc:
+            sc._render_version += 1
 
     @property
     def prefab_guid(self) -> Optional[str]: return self._prefab_guid
@@ -603,6 +616,8 @@ class Entity:
             d["prefab_guid"] = self._prefab_guid
         if self._prefab_source_id:
             d["prefab_source_id"] = self._prefab_source_id
+        if self._embed_resources:
+            d["embed_resources"] = True
         return d
 
     @classmethod
@@ -613,6 +628,7 @@ class Entity:
         e._tags = set(data.get("tags", []))
         e._layer = data.get("layer", 0)
         e._prefab_source_id = data.get("prefab_source_id")
+        e._embed_resources = bool(data.get("embed_resources", False))
         for cd in data.get("components", []):
             ctype = cd.get("type")
             comp_cls = registry.get(ctype)
@@ -687,6 +703,9 @@ class Scene:
         self._render_version: int = 0
         self._engine_ref = None
         self._scene_prof: Any = None
+        self._embed_all: bool = False
+        self._compress_resources: bool = False
+        self._embedded_resources: dict = {}
         self._active_update_components: set[Component] = set()
         self._active_fixed_components: set[Component] = set()
         self._update_list_cache: list[Component] = []
@@ -1162,14 +1181,50 @@ class Scene:
 
     def serialize(self) -> dict:
         data = {"name": self._name, "entities": {eid: e.serialize() for eid, e in self._entities.items()}}
+        if self._embed_all:
+            data["embed_all"] = True
+        if self._compress_resources:
+            data["compress_resources"] = True
         prof = self._get_profiler()
         if prof is not None:
             prof.set_value("scene_serialize", 0)
         return data
 
+    @property
+    def compress_resources(self) -> bool:
+        return self._compress_resources
+
+    @compress_resources.setter
+    def compress_resources(self, v: bool):
+        if self._compress_resources == bool(v):
+            return
+        self._compress_resources = bool(v)
+        self._render_version += 1
+
+    @property
+    def embed_all(self) -> bool:
+        return self._embed_all
+
+    @embed_all.setter
+    def embed_all(self, v: bool):
+        if self._embed_all == bool(v):
+            return
+        self._embed_all = bool(v)
+        self._render_version += 1
+
+    @property
+    def embedded_resources(self) -> dict:
+        return self._embedded_resources
+
+    @embedded_resources.setter
+    def embedded_resources(self, v: dict):
+        self._embedded_resources = v or {}
+
     @classmethod
     def deserialize(cls, data: dict, registry: ComponentRegistry) -> Scene:
         s = cls(data["name"])
+        s._embed_all = bool(data.get("embed_all", False))
+        s._compress_resources = bool(data.get("compress_resources", False))
         raw = data.get("entities", {})
         entities: dict[str, Entity] = {}
         parent_map: dict[str, Optional[str]] = {}

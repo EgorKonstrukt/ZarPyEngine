@@ -11,7 +11,11 @@ APP_VERSION_DISPLAY = f"v{APP_VERSION}"
 
 MAX_FIXED_STEPS = 5
 
-PATH_FIELDS = frozenset({"mesh_path", "material_path", "clip_path", "script_path"})
+PATH_FIELDS = frozenset({
+    "mesh_path", "material_path", "clip_path", "script_path", "texture_path",
+    "ply_path", "shader_path", "env_path", "svg_path", "font_path",
+    "video_path", "graph_path",
+})
 
 FRAME_HEADER_SIZE = 4
 

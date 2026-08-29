@@ -293,6 +293,18 @@ class HierarchyPanel(QDockWidget):
         collapse_btn.setToolTip("Collapse All")
         collapse_btn.clicked.connect(self._collapse_all)
         toolbar.addWidget(collapse_btn)
+        self._embed_all_btn = QPushButton(qta.icon("fa5s.archive", color="#d4d4d4"), "")
+        self._embed_all_btn.setCheckable(True)
+        self._embed_all_btn.setFixedSize(*scale_xy(24, 24))
+        self._embed_all_btn.setToolTip("Embed all entity resources into the scene file")
+        self._embed_all_btn.clicked.connect(self._toggle_embed_all)
+        toolbar.addWidget(self._embed_all_btn)
+        self._compress_btn = QPushButton(qta.icon("fa5s.file-archive", color="#d4d4d4"), "")
+        self._compress_btn.setCheckable(True)
+        self._compress_btn.setFixedSize(*scale_xy(24, 24))
+        self._compress_btn.setToolTip("Compress embedded resources")
+        self._compress_btn.toggled.connect(self._toggle_compress)
+        toolbar.addWidget(self._compress_btn)
         layout.addLayout(toolbar)
 
         self._scene_header = QWidget()
@@ -311,7 +323,12 @@ class HierarchyPanel(QDockWidget):
         layout.addWidget(self._scene_header)
 
         self._tree = HierarchyTree(self)
-        self._tree.setHeaderHidden(True)
+        self._tree.setHeaderLabels(["Name", "Save"])
+        header = self._tree.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._tree.setColumnWidth(1, scale(30))
+        header.setStretchLastSection(False)
         self._tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._show_context_menu)
@@ -340,6 +357,8 @@ class HierarchyPanel(QDockWidget):
         self._scene = scene
         self._selected_entity = None
         self._last_render_version = -1
+        self._embed_all_btn.setChecked(bool(getattr(scene, 'embed_all', False)))
+        self._compress_btn.setChecked(bool(getattr(scene, 'compress_resources', False)))
         self._update_scene_header()
         self._refresh()
     def _on_history_changed(self, cmd=None):
@@ -406,7 +425,9 @@ class HierarchyPanel(QDockWidget):
         item = QTreeWidgetItem(parent_item)
         item.setText(0, name)
         item.setData(0, Qt.ItemDataRole.UserRole, entity.id)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(1, Qt.CheckState.Checked if entity.embed_resources else Qt.CheckState.Unchecked)
+        item.setToolTip(1, "Embed entity resources into the scene file on save")
         icon_cls = None
         if len(entity._components) > 1:
             for c in entity.get_all_components():
@@ -500,11 +521,19 @@ class HierarchyPanel(QDockWidget):
             self.entity_double_clicked.emit(eid)
     def _on_item_changed(self, item: QTreeWidgetItem, col: int):
         eid = item.data(0, Qt.ItemDataRole.UserRole)
-        new_name = item.text(0)
         if not self._scene or not eid:
             return
         entity = self._scene.get_entity(eid)
-        if entity and entity.name != new_name:
+        if not entity:
+            return
+        if col == 1:
+            checked = item.checkState(1) == Qt.CheckState.Checked
+            if entity.embed_resources != checked:
+                entity.embed_resources = checked
+                self._scene.mark_dirty()
+            return
+        new_name = item.text(0)
+        if entity.name != new_name:
             entity.name = new_name
             self._scene.mark_dirty()
     def _on_search(self, text: str):
@@ -517,6 +546,18 @@ class HierarchyPanel(QDockWidget):
                 child.setExpanded(False)
                 collapse_items(child)
         collapse_items(self._tree.invisibleRootItem())
+    def _toggle_embed_all(self, checked: bool):
+        if not self._scene:
+            return
+        self._scene.embed_all = checked
+        self._scene.mark_dirty()
+        self._refresh()
+    def _toggle_compress(self, checked: bool):
+        if not self._scene:
+            return
+        self._scene.compress_resources = checked
+        self._scene.mark_dirty()
+        self._refresh()
     def _on_reparent(self, dragged_eid: str, target_eid: Optional[str]):
         if not self._scene:
             return
@@ -651,6 +692,11 @@ class HierarchyPanel(QDockWidget):
                 set_active = QAction("Toggle Active", self)
                 set_active.triggered.connect(lambda: self._toggle_active(entity))
                 menu.addAction(set_active)
+                embed_act = QAction("Embed Resources on Save", self)
+                embed_act.setCheckable(True)
+                embed_act.setChecked(entity.embed_resources)
+                embed_act.triggered.connect(lambda checked=False, e=entity: self._toggle_embed(e, checked))
+                menu.addAction(embed_act)
                 menu.addSeparator()
                 save_pref_act = QAction("Save as Prefab...", self)
                 save_pref_act.triggered.connect(lambda: self._save_prefab(entity))
@@ -1037,6 +1083,14 @@ class HierarchyPanel(QDockWidget):
             self._delete_entity(entity)
     def _toggle_active(self, entity: Entity):
         entity.active = not entity.active
+        if self._scene:
+            self._scene.mark_dirty()
+        self._refresh()
+        if self._selected_entity:
+            self._restore_selection(self._selected_entity.id)
+
+    def _toggle_embed(self, entity: Entity, checked: bool):
+        entity.embed_resources = checked
         if self._scene:
             self._scene.mark_dirty()
         self._refresh()

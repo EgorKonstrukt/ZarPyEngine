@@ -191,7 +191,9 @@ class BuildSettings:
 
     def _collect_assets_from_scene(self, data: dict, project_root: str, result: set[str]):
         """Extract all asset paths from a scene's serialized data."""
-        PATH_FIELDS = {"mesh_path", "material_path", "clip_path", "script_path", "texture_path"}
+        PATH_FIELDS = {"mesh_path", "material_path", "clip_path", "script_path", "texture_path",
+                       "ply_path", "shader_path", "env_path", "svg_path", "font_path",
+                       "video_path", "graph_path"}
         entities = data.get("entities", {})
         for eid, entity_data in entities.items():
             components = entity_data.get("components", [])

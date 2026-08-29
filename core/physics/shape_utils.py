@@ -41,9 +41,8 @@ def read_import_scale(mesh_path: str) -> float | None:
     """Read import scale from .mesh_path.import JSON file."""
     if not mesh_path:
         return None
-    import_path = mesh_path + ".import"
-    if not os.path.isabs(import_path):
-        import_path = os.path.normpath(os.path.join(_PROJECT_ROOT, import_path))
+    from core.assets.asset_importer import _resolve_mesh_import_path
+    import_path = _resolve_mesh_import_path(mesh_path)
     if os.path.exists(import_path):
         try:
             with open(import_path) as f:

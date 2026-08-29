@@ -497,8 +497,52 @@ def _align_skeleton_to_mesh(skel, verts_yp):
     skel["bone_offset_matrices"] = [np.linalg.inv(m) for m in new_bw]
 
 
+def _root_hint() -> Optional[str]:
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        return eng.project_root if eng and getattr(eng, "project_root", None) else None
+    except Exception:
+        return None
+
+
+def _resolve_mesh_import_path(path: str) -> str:
+    """Resolve ``<mesh>.import`` for absolute and project-relative mesh paths.
+
+    The inspector stores import settings next to the source mesh (absolute
+    ``<mesh>.import``), while scenes keep ``mesh_path`` relative to the
+    project root. Relative paths must resolve against that root, not the
+    process CWD, otherwise saved parameters are silently ignored.
+    """
+    direct = path + ".import"
+    if os.path.exists(direct):
+        return direct
+    root = _root_hint() or os.getcwd()
+    base = os.path.basename(path)
+    candidates = [os.path.join(root, path + ".import")]
+    for sub in ["", "assets/", "assets/models/", "models/"]:
+        candidates.append(os.path.join(root, sub, path + ".import"))
+        candidates.append(os.path.join(root, sub, base + ".import"))
+    for c in candidates:
+        if os.path.exists(c):
+            return os.path.normpath(c)
+    return direct
+
+
+def _import_meta_signature(path: str):
+    """(mtime_ns, size) of the resolved `<mesh>.import`, or None when absent."""
+    import_path = _resolve_mesh_import_path(path)
+    try:
+        if os.path.exists(import_path):
+            st = os.stat(import_path)
+            return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    return None
+
+
 def _read_mesh_import(path: str) -> dict:
-    import_path = path + ".import"
+    import_path = _resolve_mesh_import_path(path)
     settings = {
         "scale": 1.0,
         "center_pivot": False,
@@ -554,10 +598,11 @@ def _generate_planar_uvs(verts: np.ndarray) -> np.ndarray:
 
 
 def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
+    _sig = _import_meta_signature(path)
     with _mem_cache_lock:
         cached = _mem_cache.get(path)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == _sig:
+            return cached[1]
 
     eng = None
     try:
@@ -648,7 +693,7 @@ def load_mesh(path: str, import_settings: Optional[dict] = None) -> Optional[Mes
         if prof: prof.stop("load_mesh")
         if data is not None and len(data.vertices) > 0:
             with _mem_cache_lock:
-                _mem_cache[path] = data
+                _mem_cache[path] = (_sig, data)
         return data
     except Exception:
         if prof: prof.stop("load_mesh")
@@ -676,10 +721,11 @@ class MeshImportData:
 
 
 def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[MeshImportData]:
+    _sig = _import_meta_signature(path)
     with _mem_cache_lock:
         cached = _mem_cache.get(path)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == _sig:
+            return cached[1]
 
     eng = None
     try:
@@ -775,12 +821,13 @@ def load_obj(path: str, import_settings: Optional[dict] = None) -> Optional[Mesh
     if prof: prof.stop("load_obj")
     if data is not None and len(data.vertices) > 0:
         with _mem_cache_lock:
-            _mem_cache[path] = data
+            _mem_cache[path] = (_sig, data)
     return data
 
 
 def load_mesh_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
-    fut = _get_mesh_import_pool().submit(load_mesh, path)
+    _settings = _read_mesh_import(path)
+    fut = _get_mesh_import_pool().submit(load_mesh, path, _settings)
 
     def _done(f):
         try:
@@ -792,7 +839,8 @@ def load_mesh_async(path: str, callback: Callable[[Optional[MeshImportData]], No
 
 
 def load_obj_async(path: str, callback: Callable[[Optional[MeshImportData]], None]) -> None:
-    fut = _get_mesh_import_pool().submit(load_obj, path)
+    _settings = _read_mesh_import(path)
+    fut = _get_mesh_import_pool().submit(load_obj, path, _settings)
 
     def _done(f):
         try:
@@ -873,7 +921,8 @@ def load_mesh_future(path: str) -> Future:
         existing = _inflight.get(path)
         if existing is not None and not existing.done():
             return existing
-    fut = _get_mesh_import_pool().submit(load_mesh, path)
+    _settings = _read_mesh_import(path)
+    fut = _get_mesh_import_pool().submit(load_mesh, path, _settings)
     with _inflight_lock:
         _inflight[path] = fut
 
@@ -891,7 +940,8 @@ def load_obj_future(path: str) -> Future:
         existing = _inflight.get(path)
         if existing is not None and not existing.done():
             return existing
-    fut = _get_mesh_import_pool().submit(load_obj, path)
+    _settings = _read_mesh_import(path)
+    fut = _get_mesh_import_pool().submit(load_obj, path, _settings)
     with _inflight_lock:
         _inflight[path] = fut
 

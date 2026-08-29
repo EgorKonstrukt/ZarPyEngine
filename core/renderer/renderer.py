@@ -3188,7 +3188,7 @@ out vec4 frag_color;
                 meta = (
                     float(_s.get("scale", 1.0)),
                     bool(_s.get("center_pivot", False)),
-                    bool(_s.get("flip_uvs", False)),
+                    bool(_s.get("flip_uvs", True)),
                     float(_s.get("smooth_angle", 30.0)),
                     bool(_s.get("gen_normals", True)),
                     bool(_s.get("gen_uvs", True)),

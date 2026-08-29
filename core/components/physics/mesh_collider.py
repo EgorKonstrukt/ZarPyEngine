@@ -90,7 +90,8 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     except Exception:
         return None
     scale = 1.0
-    import_path = resolved + ".import"
+    from core.assets.asset_importer import _resolve_mesh_import_path
+    import_path = _resolve_mesh_import_path(resolved)
     if os.path.exists(import_path):
         try:
             with open(import_path) as f:

@@ -83,6 +83,8 @@ class EditorMainWindow(QMainWindow):
     def __init__(self, engine: Engine):
         super().__init__()
         self._engine = engine
+        from editor.scene_async import call_on_main
+        engine._gui_poster = call_on_main
         self._settings = QSettings("Zarin", "Editor")
         self._play_dock: Optional[QDockWidget] = None
         self._prefab_mode: bool = False
@@ -398,7 +400,7 @@ class EditorMainWindow(QMainWindow):
                 event.ignore()
                 return
             if reply == QMessageBox.StandardButton.Yes:
-                save_scene(self)
+                self._engine.save_scene()
         save_state(self)
         self._engine.shutdown()
         event.accept()
