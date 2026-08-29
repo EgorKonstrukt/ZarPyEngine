@@ -214,10 +214,10 @@ cdef inline void _look_rotation(double fx, double fy, double fz,
 
 cdef inline void _quat_to_local(const double* parent_wq, const double* world_q,
                                 double* out) noexcept nogil:
-    # world_q = local_q * parent_wq  =>  local_q = world_q * parent_wq^-1
+    # engine world = parent * local  =>  local = parent^-1 * world_q
     cdef double inv[4]
     _quat_conj(parent_wq, inv)
-    _quat_mul(world_q, inv, out)
+    _quat_mul(inv, world_q, out)
     _quat_norm_inplace(out)
 
 

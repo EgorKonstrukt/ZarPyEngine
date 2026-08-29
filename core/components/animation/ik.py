@@ -29,6 +29,21 @@ def _as_vec3(value):
         return None
 
 
+def _find_named_descendant(root, name):
+    """DFS for an entity named `name` anywhere below `root`."""
+    if root is None or not name:
+        return None
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        children = node._children
+        if children:
+            stack.extend(children)
+        if node is not root and node.name == name:
+            return node
+    return None
+
+
 class _IKBase(Component):
     _updates: bool = True
     _gizmo_icon_color: tuple[int, int, int] = (120, 200, 255)
@@ -150,11 +165,27 @@ class TwoBoneIK(_IKBase):
         root = self._resolve_bone(self.root_bone)
         if root is None:
             return []
-        mid = self._resolve_bone(self.mid_bone) if self.mid_bone else (root._children[0] if root._children else None)
+        mid = self._resolve_mid_or_tip(root, self.mid_bone)
+        if mid is None:
+            mid = root._children[0] if root._children else None
         tip = None
         if mid is not None:
-            tip = self._resolve_bone(self.tip_bone) if self.tip_bone else (mid._children[0] if mid._children else None)
+            tip = self._resolve_mid_or_tip(root, self.tip_bone)
+            if tip is None:
+                tip = mid._children[0] if mid._children else None
         return [root, mid, tip]
+
+    def _resolve_mid_or_tip(self, root, path):
+        """Mirror Cython _resolve_mid_or_tip: path walk, then descendant DFS."""
+        if not path:
+            return None
+        ent = self._entity
+        last = path.split("/")[-1]
+        node = self._resolve_bone(path) if ent is not None else None
+        if (node is not None and node is not ent and node.name == last
+                and last != (ent.name or "")):
+            return node
+        return _find_named_descendant(root, last) if root is not None else None
 
     def on_update(self, dt: float):
         try:
@@ -177,16 +208,22 @@ class TwoBoneIK(_IKBase):
             return
         pole = self._pole_world()
         bend = 1.0 if self.bend_positive else -1.0
-        res = _two_bone_solve_py(a, b, c, target, pole, self.stretch, bend)
-        b_new, qa, qb = res
-        parent_q = _parent_world_quat(bones[0])
-        wr_root = _world_quat(bones[0].transform)
-        wr_mid = _world_quat(bones[1].transform)
-        new_root = _quat_mul(qa, wr_root)
-        local_root = _quat_to_local(parent_q, new_root)
-        local_mid = _quat_to_local(new_root, _quat_mul(qb, wr_mid))
-        _apply_local_py(bones[0].transform, local_root, self.weight)
-        _apply_local_py(bones[1].transform, local_mid, self.weight)
+        b_new, _, _ = _two_bone_solve_py(a, b, c, target, pole, self.stretch, bend)
+        # deltas in the world frame, applied with the Cython _apply_world_delta
+        # formula local = local_cur * conj(world_cur) * qd * world_cur
+        qd_root = _quat_from_two_vecs(
+            (b.x - a.x, b.y - a.y, b.z - a.z),
+            (b_new[0] - a.x, b_new[1] - a.y, b_new[2] - a.z),
+        )
+        _apply_world_delta_py(bones[0].transform, qd_root, self.weight)
+        # mid delta must come from the CURRENT (post-root) tip direction
+        b = bones[1].transform.position
+        c = bones[2].transform.position
+        qd_mid = _quat_from_two_vecs(
+            (c.x - b.x, c.y - b.y, c.z - b.z),
+            (target.x - b_new[0], target.y - b_new[1], target.z - b_new[2]),
+        )
+        _apply_world_delta_py(bones[1].transform, qd_mid, self.weight)
 
     def serialize(self) -> dict:
         d = super().serialize()
@@ -454,15 +491,19 @@ def _world_quat(t):
     trace = m[0, 0] + m[1, 1] + m[2, 2]
     if trace > 0.0:
         s = 0.5 / math.sqrt(trace + 1.0)
-        return ((m[2, 1] - m[1, 2]) * s, (m[0, 2] - m[2, 0]) * s, (m[1, 0] - m[0, 1]) * s, 0.25 / s)
-    if m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        q = ((m[2, 1] - m[1, 2]) * s, (m[0, 2] - m[2, 0]) * s, (m[1, 0] - m[0, 1]) * s, 0.25 / s)
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
         s = 2.0 * math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
-        return ((m[2, 1] - m[1, 2]) / s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s, 0.25 * s)
-    if m[1, 1] > m[2, 2]:
+        q = ((m[2, 1] - m[1, 2]) / s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s, 0.25 * s)
+    elif m[1, 1] > m[2, 2]:
         s = 2.0 * math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
-        return ((m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s)
-    s = 2.0 * math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
-    return ((m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s, (m[1, 0] - m[0, 1]) / s)
+        q = ((m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s)
+    else:
+        s = 2.0 * math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
+        q = ((m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s, (m[1, 0] - m[0, 1]) / s)
+    # the engine stores the conjugated quaternion on the wire, so expose it
+    # in the same (semantic) basis the solvers and local_rotation use
+    return (-q[0], -q[1], -q[2], q[3])
 
 
 def _parent_world_quat(bone):
@@ -473,7 +514,8 @@ def _parent_world_quat(bone):
 
 
 def _quat_to_local(parent_wq, world_q):
-    q = _quat_mul(world_q, _quat_conj(parent_wq))
+    # engine world = parent * local  =>  local = parent^-1 * world_q
+    q = _quat_mul(_quat_conj(parent_wq), world_q)
     n = math.sqrt(sum(v * v for v in q))
     return tuple(v / n for v in q) if n > 1e-9 else (0.0, 0.0, 0.0, 1.0)
 
@@ -484,12 +526,27 @@ def _apply_local_py(t, q, weight):
     if weight < 0.999999:
         cur = t.local_rotation
         if cur is not None:
-            d = sum(cur[i] * q[i] for i in range(4))
+            cq = (cur._x, cur._y, cur._z, cur._w)
+            d = sum(cq[i] * q[i] for i in range(4))
             s1 = weight if d >= 0 else -weight
-            mixed = [cur[i] * (1.0 - weight) + q[i] * s1 for i in range(4)]
+            mixed = [cq[i] * (1.0 - weight) + q[i] * s1 for i in range(4)]
             n = math.sqrt(sum(v * v for v in mixed))
             q = tuple(v / n for v in mixed)
     t.local_rotation = Quat._make(q[0], q[1], q[2], q[3])
+
+
+def _apply_world_delta_py(t, qd, weight):
+    # local = local_cur * conj(world_cur) * qd * world_cur   (Cython parity)
+    cur = t.local_rotation
+    if cur is None:
+        return
+    ql = (cur._x, cur._y, cur._z, cur._w)
+    qw = _world_quat(t)
+    qwc = _quat_conj(qw)
+    tmp = _quat_mul(qwc, qd)
+    tmp2 = _quat_mul(tmp, qw)
+    new_local = _quat_mul(ql, tmp2)
+    _apply_local_py(t, new_local, weight)
 
 
 def np_points(vecs):
@@ -531,14 +588,17 @@ def _fabrik_positions_py(points, target, iterations, tolerance):
 
 
 def _apply_fabrik_py(bones, new_pts, pole, weight, bone_weights):
-    old = [b.transform.position for b in bones]
     n = len(bones)
+    # snapshot the original pose so that every local quat is expressed against
+    # the pre-solve world frames (mirrors the Cython solver's WQv buffer)
+    old_pos = [b.transform.position for b in bones]
+    old_wq = [_world_quat(b.transform) for b in bones]
     parent_wq = _parent_world_quat(bones[0])
     for i in range(n - 1):
         d0 = (
-            old[i + 1].x - old[i].x,
-            old[i + 1].y - old[i].y,
-            old[i + 1].z - old[i].z,
+            old_pos[i + 1].x - old_pos[i].x,
+            old_pos[i + 1].y - old_pos[i].y,
+            old_pos[i + 1].z - old_pos[i].z,
         )
         d1 = (
             new_pts[i + 1][0] - new_pts[i][0],
@@ -547,10 +607,7 @@ def _apply_fabrik_py(bones, new_pts, pole, weight, bone_weights):
         )
         d0 = _two_denorm(d0)
         d1 = _two_denorm(d1)
-        wr = _world_quat(bones[i].transform)
-        if pole is not None and i < n - 1:
-            pass
-        newwq = _quat_mul(_quat_from_two_vecs(d0, d1), wr)
+        newwq = _quat_mul(_quat_from_two_vecs(d0, d1), old_wq[i])
         local = _quat_to_local(parent_wq, newwq)
         w = weight
         if bone_weights and i < len(bone_weights):
