@@ -42,10 +42,13 @@ class GizmoPipeline:
                     pass
 
     def _collect_comp(self, comp):
+        insts = comp.gizmo_instances()
+        if insts:
+            for ip in insts:
+                self.add_instance(ip.shape_type, ip.transform_flat, ip.color)
         inst = comp.gizmo_instance_data()
         if inst is not None:
             self.add_instance(inst.shape_type, inst.transform_flat, inst.color)
-            return
         sig_fn = getattr(comp, "gizmo_cache_sig", None)
         if sig_fn is not None:
             sig = sig_fn()
@@ -84,15 +87,15 @@ class GizmoPipeline:
         return result
 
     def flush(self, time_s: float = 0.0):
-        self._render_via(Gizmos.draw_lines, time_s)
+        self._render_via(lambda s, e, c, mult=1.0: Gizmos.draw_lines(s, e, c), time_s)
 
     def flush_and_render(self, vp, vp_mat, time_s: float = 0.0, fw: int = None, fh: int = None):
         if fw is None or fh is None:
             fw, fh = vp._get_physical_dims()
         cam_pos = vp._cam.position if vp._cam else Vec3(0, 0, 0)
 
-        def render_func(s, e, c):
-            vp._renderer.render_gizmo_arrays(s, e, c, vp_mat, fw, fh, thickness_multiplier=1.0)
+        def render_func(s, e, c, mult=1.0):
+            vp._renderer.render_gizmo_arrays(s, e, c, vp_mat, fw, fh, thickness_multiplier=mult)
 
         self._render_via(render_func, time_s)
 
@@ -103,14 +106,18 @@ class GizmoPipeline:
 
     def _render_via(self, draw_fn, time_s: float = 0.0):
         t = time_s
-        s_list, e_list, c_list = [], [], []
-        glow_list = []
+        groups: dict[tuple, list] = {}
+        glow_groups: dict[tuple, list] = []
         for prim in self._batches:
             s, e, c = prim.starts, prim.ends, prim.colors
             n = s.shape[0]
             if n == 0:
                 continue
             style = prim.style or GizmoStyle.DEFAULT
+            lw = getattr(style, "line_width", 1.0) or 1.0
+            if lw <= 0.0:
+                lw = 1.0
+            key = int(round(lw * 1000.0))
 
             if style.pulsating:
                 pulse = style.pulse_min_alpha + (1 - style.pulse_min_alpha) * (0.5 + 0.5 * math.sin(t * style.pulse_speed))
@@ -128,23 +135,32 @@ class GizmoPipeline:
                 if s.shape[0] == 0:
                     continue
 
-            s_list.append(s); e_list.append(e); c_list.append(c)
+            group = groups.get(key)
+            if group is None:
+                group = groups[key] = ([], [], [])
+            group[0].append(s); group[1].append(e); group[2].append(c)
 
             if style.glow:
-                glow_list.append((s, e, c, style.glow_layers, style.glow_intensity))
+                glow_groups.append((key, s, e, c, style.glow_layers, style.glow_intensity))
 
-        if s_list:
+        if not groups and not glow_groups:
+            self._batches.clear()
+            return
+
+        for key, (s_list, e_list, c_list) in groups.items():
+            mult = key / 1000.0
             if len(s_list) == 1:
-                draw_fn(s_list[0], e_list[0], c_list[0])
+                draw_fn(s_list[0], e_list[0], c_list[0], mult)
             else:
-                draw_fn(np.concatenate(s_list), np.concatenate(e_list), np.concatenate(c_list))
+                draw_fn(np.concatenate(s_list), np.concatenate(e_list), np.concatenate(c_list), mult)
 
-        for s, e, c, layers, intensity in glow_list:
+        for key, s, e, c, layers, intensity in glow_groups:
+            mult = key / 1000.0
             for i in range(layers):
                 alpha = intensity * (1.0 - i / layers) / layers
                 gc = c.copy()
                 gc[:, 3] *= alpha
-                draw_fn(s, e, gc)
+                draw_fn(s, e, gc, mult)
 
         self._batches.clear()
 

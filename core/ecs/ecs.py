@@ -141,6 +141,9 @@ class Component:
     def gizmo_instance_data(self):
         return None
 
+    def gizmo_instances(self):
+        return None
+
     def gizmo_cache_sig(self):
         attrs = getattr(type(self), "_gizmo_cache_attrs", None)
         if not attrs:
@@ -177,11 +180,20 @@ class Component:
         if prims is not None:
             s, e, c = prims
             if s.shape[0] > 0:
-                return [GizmoPrimitive(s, e, c)]
+                return [GizmoPrimitive(s, e, c, self._gizmo_line_style())]
         lines = self.gizmo_lines()
         if lines:
             return [GizmoPrimitive.from_lines(lines)]
         return []
+
+    def _gizmo_line_style(self):
+        tw = getattr(self, "thickness", None)
+        if tw is None:
+            return GizmoStyle.DEFAULT
+        try:
+            return GizmoStyle(line_width=max(0.1, float(tw)))
+        except Exception:
+            return GizmoStyle.DEFAULT
 
     @classmethod
     def gizmo_collect(cls, pipe, scene):
@@ -190,10 +202,13 @@ class Component:
                 continue
             for comp in entity.get_components(cls):
                 try:
+                    insts = comp.gizmo_instances()
+                    if insts:
+                        for ip in insts:
+                            pipe.add_instance(ip.shape_type, ip.transform_flat, ip.color)
                     inst = comp.gizmo_instance_data()
                     if inst is not None:
                         pipe.add_instance(inst.shape_type, inst.transform_flat, inst.color)
-                        continue
                     for prim in comp.gizmo():
                         if prim.starts.shape[0] > 0:
                             pipe.add(prim)

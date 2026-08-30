@@ -538,15 +538,33 @@ def _build_dashed(g: GizmoData):
 @_register(GizmoType.BEZIER)
 def _build_bezier(g: GizmoData):
     pts = g.points
-    if not pts or len(pts) < 4:
+    if not pts or len(pts) < 2:
         return None
-    segs = g.segments
+    segs = max(int(g.segments), 1)
     p = np.array(pts, dtype=np.float32)
-    t = np.linspace(0, 1, segs + 1, dtype=np.float32)[:, None]
-    t2 = t*t; t3 = t2*t
-    mt = 1-t; mt2 = mt*mt; mt3 = mt2*mt
-    curve = mt3 * p[0] + 3*mt2*t * p[1] + 3*mt*t2 * p[2] + t3 * p[3]
-    return curve[:-1], curve[1:], _np_color(g.color, segs)
+    n = len(p)
+    if n == 2:
+        curve = np.linspace(p[0], p[1], segs + 1, dtype=np.float32)
+    else:
+        pieces = []
+        for i in range(n - 1):
+            p0 = p[max(i - 1, 0)]
+            p1 = p[i]
+            p2 = p[i + 1]
+            p3 = p[min(i + 2, n - 1)]
+            u = np.linspace(0, 1, segs + 1, dtype=np.float32)[:, None]
+            u2 = u * u; u3 = u2 * u
+            h0 = 2*u3 - 3*u2 + 1
+            h1 = -2*u3 + 3*u2
+            h2 = u3 - 2*u2 + u
+            h3 = u3 - u2
+            piece = h0*p1 + h1*p2 + 0.5*(h2*(p2 - p0) + h3*(p3 - p1))
+            if i == 0:
+                pieces.append(piece)
+            else:
+                pieces.append(piece[1:])
+        curve = np.concatenate(pieces, axis=0)
+    return curve[:-1], curve[1:], _np_color(g.color, curve.shape[0] - 1)
 
 
 @_register(GizmoType.TRIANGLE)

@@ -1321,7 +1321,7 @@ class ComponentWidget(QWidget):
         elif ef.field_type.value == "vec3":
             val_vec = val.get(ef.name, Vec3(0, 0, 0)) if isinstance(val, dict) else Vec3(0, 0, 0)
             w, sbs = make_vec3_row(ef.label or "", val_vec, lambda: None)
-            def on_change(idx=index, pn=prop_name, fn=ef.name, boxes=sbs):
+            def on_change(_, idx=index, pn=prop_name, fn=ef.name, boxes=sbs):
                 items = list(getattr(self._component, pn))
                 if idx < len(items) and isinstance(items[idx], dict):
                     items[idx][fn] = Vec3(boxes[0].value(), boxes[1].value(), boxes[2].value())
