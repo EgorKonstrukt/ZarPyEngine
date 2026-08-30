@@ -591,6 +591,15 @@ class PyBulletSolver(IPhysicsSolver):
         quat = p.getQuaternionFromEuler(rotation)
         p.resetBasePositionAndOrientation(body_id, position, quat, physicsClientId=cid)
 
+    def set_body_transform_quat(
+        self,
+        body_id: int,
+        position: tuple[float, float, float],
+        quat: tuple[float, float, float, float],
+    ):
+        cid = self._cid()
+        p.resetBasePositionAndOrientation(body_id, position, quat, physicsClientId=cid)
+
     def get_body_transform(
         self, body_id: int
     ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -598,6 +607,13 @@ class PyBulletSolver(IPhysicsSolver):
         pos, quat = p.getBasePositionAndOrientation(body_id, physicsClientId=cid)
         euler = p.getEulerFromQuaternion(quat)
         return (pos[0], pos[1], pos[2]), (euler[0], euler[1], euler[2])
+
+    def get_body_transform_quat(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        cid = self._cid()
+        pos, quat = p.getBasePositionAndOrientation(body_id, physicsClientId=cid)
+        return (pos[0], pos[1], pos[2]), (quat[0], quat[1], quat[2], quat[3])
 
     def apply_force(
         self, body_id: int, force: tuple[float, float, float], local: bool = False

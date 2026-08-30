@@ -298,16 +298,19 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
             continue
         if fl & 4:
             pos = (float(edata[slot, 0]), float(edata[slot, 1]), float(edata[slot, 2]))
-            rot = (float(edata[slot, 3]), float(edata[slot, 4]), float(edata[slot, 5]))
-            solver.set_body_transform(bid, pos, rot)
+            quat = (float(edata[slot, 3]), float(edata[slot, 4]), float(edata[slot, 5]), float(edata[slot, 6]))
+            try:
+                solver.set_body_transform_quat(bid, pos, quat)
+            except Exception:
+                solver.set_body_transform(bid, pos, (0,0,0))
         else:
             if fl & 2:
                 try:
                     solver.activate(bid)
                 except Exception:
                     pass
-                vel = (float(edata[slot, 6]), float(edata[slot, 7]), float(edata[slot, 8]))
-                ang_vel = (float(edata[slot, 9]), float(edata[slot, 10]), float(edata[slot, 11]))
+                vel = (float(edata[slot, 7]), float(edata[slot, 8]), float(edata[slot, 9]))
+                ang_vel = (float(edata[slot, 10]), float(edata[slot, 11]), float(edata[slot, 12]))
                 solver.set_velocities(bid, linear=vel, angular=ang_vel)
                 flags_arr[slot] = fl & 0xFD
             fx = float(fdata[slot, 0]); fy = float(fdata[slot, 1]); fz = float(fdata[slot, 2])
@@ -334,12 +337,22 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
                 solver.set_velocities(bid, linear=(vel[0], vel[1], 0.0))
             if ang_vel[0] or ang_vel[1] or ang_vel[2]:
                 solver.set_velocities(bid, angular=(0.0, 0.0, ang_vel[2]))
-        pos, rot = solver.get_body_transform(bid)
+        try:
+            pos, quat = solver.get_body_transform_quat(bid)
+        except Exception:
+            pos, rot = solver.get_body_transform(bid)
+            import math
+            rx, ry, rz = rot
+            hx, hy, hz = rx*0.5, ry*0.5, rz*0.5
+            sx, cx = math.sin(hx), math.cos(hx)
+            sy, cy = math.sin(hy), math.cos(hy)
+            sz, cz = math.sin(hz), math.cos(hz)
+            quat = (sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz, cx*cy*cz + sx*sy*sz)
         vel, ang_vel = solver.get_velocities(bid)
         rdata[slot, 0] = pos[0]; rdata[slot, 1] = pos[1]; rdata[slot, 2] = pos[2]
-        rdata[slot, 3] = rot[0]; rdata[slot, 4] = rot[1]; rdata[slot, 5] = rot[2]
-        rdata[slot, 6] = vel[0]; rdata[slot, 7] = vel[1]; rdata[slot, 8] = vel[2]
-        rdata[slot, 9] = ang_vel[0]; rdata[slot, 10] = ang_vel[1]; rdata[slot, 11] = ang_vel[2]
+        rdata[slot, 3] = quat[0]; rdata[slot, 4] = quat[1]; rdata[slot, 5] = quat[2]; rdata[slot, 6] = quat[3]
+        rdata[slot, 7] = vel[0]; rdata[slot, 8] = vel[1]; rdata[slot, 9] = vel[2]
+        rdata[slot, 10] = ang_vel[0]; rdata[slot, 11] = ang_vel[1]; rdata[slot, 12] = ang_vel[2]
 
     shared.set_result_version(result_ver + 1)
 

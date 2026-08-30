@@ -11,21 +11,18 @@ import uuid
 
 MAX_ENTITIES = 4096
 
-# layout: uint64 version, uint64 result_version, int32 num_entities, pad5,
-#         uint8 flags[MAX_ENTITIES], int32 body_map[MAX_ENTITIES],
-#         float32 entity_data[MAX_ENTITIES][12],
-#         float32 force_data[MAX_ENTITIES][6],
-#         float32 result_data[MAX_ENTITIES][12]
-
 _DTYPE_FLAGS = np.uint8
 _DTYPE_BODY = np.int32
 _DTYPE_F32 = np.float32
 
+_EDATA_COLS = 14
+_RDATA_COLS = 14
+
 _SZ_FLAGS = MAX_ENTITIES
 _SZ_BODY_MAP = MAX_ENTITIES * _DTYPE_BODY().itemsize
-_SZ_EDATA = MAX_ENTITIES * 12 * _DTYPE_F32().itemsize
+_SZ_EDATA = MAX_ENTITIES * _EDATA_COLS * _DTYPE_F32().itemsize
 _SZ_FDATA = MAX_ENTITIES * 6 * _DTYPE_F32().itemsize
-_SZ_RDATA = MAX_ENTITIES * 12 * _DTYPE_F32().itemsize
+_SZ_RDATA = MAX_ENTITIES * _RDATA_COLS * _DTYPE_F32().itemsize
 
 _OFF_RESULT_VER = 0
 _OFF_NUM = 8
@@ -67,11 +64,11 @@ class SharedPhysicsBuffer:
         off = _OFF_BODY_MAP
         self._body_map_nd = np.ndarray((MAX_ENTITIES,), dtype=_DTYPE_BODY, buffer=b[off:off+_SZ_BODY_MAP])
         off = _OFF_EDATA
-        self._edata_nd = np.ndarray((MAX_ENTITIES, 12), dtype=_DTYPE_F32, buffer=b[off:off+_SZ_EDATA])
+        self._edata_nd = np.ndarray((MAX_ENTITIES, _EDATA_COLS), dtype=_DTYPE_F32, buffer=b[off:off+_SZ_EDATA])
         off = _OFF_FDATA
         self._fdata_nd = np.ndarray((MAX_ENTITIES, 6), dtype=_DTYPE_F32, buffer=b[off:off+_SZ_FDATA])
         off = _OFF_RDATA
-        self._rdata_nd = np.ndarray((MAX_ENTITIES, 12), dtype=_DTYPE_F32, buffer=b[off:off+_SZ_RDATA])
+        self._rdata_nd = np.ndarray((MAX_ENTITIES, _RDATA_COLS), dtype=_DTYPE_F32, buffer=b[off:off+_SZ_RDATA])
 
     def close(self):
         if self._shm:
@@ -133,21 +130,34 @@ class SharedPhysicsBuffer:
     def get_body_id(self, slot: int) -> int:
         return int(self._body_map_nd[slot])
 
-    # --- entity_data arrays (float32) ---
     def write_entity_data(self, slot: int, pos, rot, vel, ang_vel):
         row = self._edata_nd[slot]
         row[0:3] = pos
-        row[3:6] = rot
-        row[6:9] = vel
-        row[9:12] = ang_vel
+        if len(rot) == 4:
+            row[3:7] = rot
+            row[7:10] = vel
+            row[10:13] = ang_vel
+        else:
+            import math
+            rx, ry, rz = rot
+            hx, hy, hz = rx * 0.5, ry * 0.5, rz * 0.5
+            sx, cx = math.sin(hx), math.cos(hx)
+            sy, cy = math.sin(hy), math.cos(hy)
+            sz, cz = math.sin(hz), math.cos(hz)
+            row[3] = sx * cy * cz - cx * sy * sz
+            row[4] = cx * sy * cz + sx * cy * sz
+            row[5] = cx * cy * sz - sx * sy * cz
+            row[6] = cx * cy * cz + sx * sy * sz
+            row[7:10] = vel
+            row[10:13] = ang_vel
 
     def read_entity_data(self, slot: int):
         row = self._edata_nd[slot]
         return (
             (float(row[0]), float(row[1]), float(row[2])),
-            (float(row[3]), float(row[4]), float(row[5])),
-            (float(row[6]), float(row[7]), float(row[8])),
-            (float(row[9]), float(row[10]), float(row[11])),
+            (float(row[3]), float(row[4]), float(row[5]), float(row[6])),
+            (float(row[7]), float(row[8]), float(row[9])),
+            (float(row[10]), float(row[11]), float(row[12])),
         )
 
     # --- force_data ---
@@ -163,19 +173,32 @@ class SharedPhysicsBuffer:
             (float(row[3]), float(row[4]), float(row[5])),
         )
 
-    # --- result_data ---
     def write_result(self, slot: int, pos, rot, vel, ang_vel):
         row = self._rdata_nd[slot]
         row[0:3] = pos
-        row[3:6] = rot
-        row[6:9] = vel
-        row[9:12] = ang_vel
+        if len(rot) == 4:
+            row[3:7] = rot
+            row[7:10] = vel
+            row[10:13] = ang_vel
+        else:
+            import math
+            rx, ry, rz = rot
+            hx, hy, hz = rx * 0.5, ry * 0.5, rz * 0.5
+            sx, cx = math.sin(hx), math.cos(hx)
+            sy, cy = math.sin(hy), math.cos(hy)
+            sz, cz = math.sin(hz), math.cos(hz)
+            row[3] = sx * cy * cz - cx * sy * sz
+            row[4] = cx * sy * cz + sx * cy * sz
+            row[5] = cx * cy * sz - sx * sy * cz
+            row[6] = cx * cy * cz + sx * sy * sz
+            row[7:10] = vel
+            row[10:13] = ang_vel
 
     def read_result(self, slot: int):
         row = self._rdata_nd[slot]
         return (
             (float(row[0]), float(row[1]), float(row[2])),
-            (float(row[3]), float(row[4]), float(row[5])),
-            (float(row[6]), float(row[7]), float(row[8])),
-            (float(row[9]), float(row[10]), float(row[11])),
+            (float(row[3]), float(row[4]), float(row[5]), float(row[6])),
+            (float(row[7]), float(row[8]), float(row[9])),
+            (float(row[10]), float(row[11]), float(row[12])),
         )

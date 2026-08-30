@@ -69,6 +69,59 @@ class IPhysicsSolver(ABC):
     ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
         ...
 
+    def set_body_transform_quat(
+        self,
+        body_id: int,
+        position: tuple[float, float, float],
+        quat: tuple[float, float, float, float],
+    ):
+        import math
+        qx, qy, qz, qw = quat
+        sinr_cosp = 2 * (qw * qx + qy * qz)
+        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        sinp = 2 * (qw * qy - qz * qx)
+        if abs(sinp) >= 1:
+            pitch = math.copysign(math.pi / 2, sinp)
+        else:
+            pitch = math.asin(max(-1.0, min(1.0, sinp)))
+        siny_cosp = 2 * (qw * qz + qx * qy)
+        cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        self.set_body_transform(body_id, position, (roll, pitch, yaw))
+
+    def get_body_transform_quat(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        import math
+        pos, euler = self.get_body_transform(body_id)
+        rx, ry, rz = euler
+        hx, hy, hz = rx * 0.5, ry * 0.5, rz * 0.5
+        sx, cx = math.sin(hx), math.cos(hx)
+        sy, cy = math.sin(hy), math.cos(hy)
+        sz, cz = math.sin(hz), math.cos(hz)
+        qx = sx * cy * cz - cx * sy * sz
+        qy = cx * sy * cz + sx * cy * sz
+        qz = cx * cy * sz - sx * sy * cz
+        qw = cx * cy * cz + sx * sy * sz
+        return pos, (qx, qy, qz, qw)
+
+    def set_velocities(
+        self,
+        body_id: int,
+        linear: tuple[float, float, float] | None = None,
+        angular: tuple[float, float, float] | None = None,
+    ):
+        if linear is not None:
+            self.set_velocity(body_id, linear)
+        if angular is not None:
+            self.set_angular_velocity(body_id, angular)
+
+    def get_velocities(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        return self.get_velocity(body_id), self.get_angular_velocity(body_id)
+
     @abstractmethod
     def apply_force(
         self, body_id: int, force: tuple[float, float, float], local: bool = False

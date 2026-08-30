@@ -527,12 +527,13 @@ class PhysicsPlugin(PluginBase):
             if rb2d:
                 nx = float(_rdata[slot, 0])
                 ny = float(_rdata[slot, 1])
-                hz_raw = float(_rdata[slot, 5])
-                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(hz_raw - 2.0 * math.asin(max(-1.0, min(1.0, tr._local_rot._z)))) < 1e-4:
+                nqz = float(_rdata[slot, 5])
+                nqw = float(_rdata[slot, 6])
+                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(tr._local_rot._z - nqz) < 1e-4 and abs(tr._local_rot._w - nqw) < 1e-4:
                     if not getattr(rb2d, "_velocity_dirty", False):
-                        rb2d._velocity._x = float(_rdata[slot, 6])
-                        rb2d._velocity._y = float(_rdata[slot, 7])
-                        rb2d._angular_velocity = float(_rdata[slot, 11])
+                        rb2d._velocity._x = float(_rdata[slot, 7])
+                        rb2d._velocity._y = float(_rdata[slot, 8])
+                        rb2d._angular_velocity = float(_rdata[slot, 12])
                     rb2d._force_accum._x = 0.0
                     rb2d._force_accum._y = 0.0
                     rb2d._torque_accum = 0.0
@@ -540,19 +541,18 @@ class PhysicsPlugin(PluginBase):
                 tr._local_pos._x = nx
                 tr._local_pos._y = ny
                 tr._local_pos._z = 0.0
-                hz = hz_raw * 0.5
                 tr._local_rot._x = 0.0
                 tr._local_rot._y = 0.0
-                tr._local_rot._z = math.sin(hz)
-                tr._local_rot._w = math.cos(hz)
+                tr._local_rot._z = nqz
+                tr._local_rot._w = nqw
                 tr._dirty = True
                 scn = entity._scene
                 if scn is not None:
                     scn._dirty_roots.add(tr)
                 if not getattr(rb2d, "_velocity_dirty", False):
-                    rb2d._velocity._x = float(_rdata[slot, 6])
-                    rb2d._velocity._y = float(_rdata[slot, 7])
-                    rb2d._angular_velocity = float(_rdata[slot, 11])
+                    rb2d._velocity._x = float(_rdata[slot, 7])
+                    rb2d._velocity._y = float(_rdata[slot, 8])
+                    rb2d._angular_velocity = float(_rdata[slot, 12])
                 rb2d._force_accum._x = 0.0
                 rb2d._force_accum._y = 0.0
                 rb2d._torque_accum = 0.0
@@ -560,63 +560,44 @@ class PhysicsPlugin(PluginBase):
                 nx = float(_rdata[slot, 0])
                 ny = float(_rdata[slot, 1])
                 nz = float(_rdata[slot, 2])
-                r0 = float(_rdata[slot, 3])
-                r1 = float(_rdata[slot, 4])
-                r2 = float(_rdata[slot, 5])
-                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(tr._local_pos._z - nz) < 1e-5:
-                    qx, qy, qz, qw = tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w
-                    sr2 = math.sin(r0 * 0.5)
-                    cr2 = math.cos(r0 * 0.5)
-                    sp2 = math.sin(r1 * 0.5)
-                    cp2 = math.cos(r1 * 0.5)
-                    sy2 = math.sin(r2 * 0.5)
-                    cy2 = math.cos(r2 * 0.5)
-                    nrx = sr2 * cp2 * cy2 - cr2 * sp2 * sy2
-                    nry = cr2 * sp2 * cy2 + sr2 * cp2 * sy2
-                    nrz = cr2 * cp2 * sy2 - sr2 * sp2 * cy2
-                    nrw = cr2 * cp2 * cy2 + sr2 * sp2 * sy2
-                    if abs(qx - nrx) < 1e-4 and abs(qy - nry) < 1e-4 and abs(qz - nrz) < 1e-4 and abs(qw - nrw) < 1e-4:
-                        if not getattr(rb, "_velocity_dirty", False):
-                            rb._velocity._x = float(_rdata[slot, 6])
-                            rb._velocity._y = float(_rdata[slot, 7])
-                            rb._velocity._z = float(_rdata[slot, 8])
-                            rb._angular_velocity._x = float(_rdata[slot, 9])
-                            rb._angular_velocity._y = float(_rdata[slot, 10])
-                            rb._angular_velocity._z = float(_rdata[slot, 11])
-                        continue
-                    tr._local_rot._x = nrx
-                    tr._local_rot._y = nry
-                    tr._local_rot._z = nrz
-                    tr._local_rot._w = nrw
-                else:
-                    sr, cr = math.sin(r0 * 0.5), math.cos(r0 * 0.5)
-                    sp, cp = math.sin(r1 * 0.5), math.cos(r1 * 0.5)
-                    sy, cy = math.sin(r2 * 0.5), math.cos(r2 * 0.5)
-                    tr._local_rot._x = sr * cp * cy - cr * sp * sy
-                    tr._local_rot._y = cr * sp * cy + sr * cp * sy
-                    tr._local_rot._z = cr * cp * sy - sr * sp * cy
-                    tr._local_rot._w = cr * cp * cy + sr * sp * sy
+                nqx = float(_rdata[slot, 3])
+                nqy = float(_rdata[slot, 4])
+                nqz = float(_rdata[slot, 5])
+                nqw = float(_rdata[slot, 6])
+                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(tr._local_pos._z - nz) < 1e-5 and abs(tr._local_rot._x - nqx) < 1e-4 and abs(tr._local_rot._y - nqy) < 1e-4 and abs(tr._local_rot._z - nqz) < 1e-4 and abs(tr._local_rot._w - nqw) < 1e-4:
+                    if not getattr(rb, "_velocity_dirty", False):
+                        rb._velocity._x = float(_rdata[slot, 7])
+                        rb._velocity._y = float(_rdata[slot, 8])
+                        rb._velocity._z = float(_rdata[slot, 9])
+                        rb._angular_velocity._x = float(_rdata[slot, 10])
+                        rb._angular_velocity._y = float(_rdata[slot, 11])
+                        rb._angular_velocity._z = float(_rdata[slot, 12])
+                    continue
                 tr._local_pos._x = nx
                 tr._local_pos._y = ny
                 tr._local_pos._z = nz
+                tr._local_rot._x = nqx
+                tr._local_rot._y = nqy
+                tr._local_rot._z = nqz
+                tr._local_rot._w = nqw
                 tr._dirty = True
                 scn = entity._scene
                 if scn is not None:
                     scn._dirty_roots.add(tr)
                 if not getattr(rb, "_velocity_dirty", False):
-                    rb._velocity._x = float(_rdata[slot, 6])
-                    rb._velocity._y = float(_rdata[slot, 7])
-                    rb._velocity._z = float(_rdata[slot, 8])
-                    rb._angular_velocity._x = float(_rdata[slot, 9])
-                    rb._angular_velocity._y = float(_rdata[slot, 10])
-                    rb._angular_velocity._z = float(_rdata[slot, 11])
+                    rb._velocity._x = float(_rdata[slot, 7])
+                    rb._velocity._y = float(_rdata[slot, 8])
+                    rb._velocity._z = float(_rdata[slot, 9])
+                    rb._angular_velocity._x = float(_rdata[slot, 10])
+                    rb._angular_velocity._y = float(_rdata[slot, 11])
+                    rb._angular_velocity._z = float(_rdata[slot, 12])
 
     def _write_inputs_python(self, shared, cache) -> int:
         _flags = shared._flags_nd
         _edata = shared._edata_nd
         _fdata = shared._fdata_nd
         slots, pos_x, pos_y, pos_z = [], [], [], []
-        rot_x, rot_y, rot_z = [], [], []
+        qx_l, qy_l, qz_l, qw_l = [], [], [], []
         vel_x, vel_y, vel_z = [], [], []
         av_x, av_y, av_z = [], [], []
         f_x, f_y, f_z = [], [], []
@@ -634,16 +615,18 @@ class PhysicsPlugin(PluginBase):
                     pos_x.append(lp._x)
                     pos_y.append(lp._y)
                     pos_z.append(0.0)
-                    rot_x.append(0.0)
-                    rot_y.append(0.0)
-                    rot_z.append(2.0 * math.asin(max(-1.0, min(1.0, q._z))))
+                    qx_l.append(0.0)
+                    qy_l.append(0.0)
+                    qz_l.append(q._z)
+                    qw_l.append(q._w)
                 else:
                     pos_x.append(0.0)
                     pos_y.append(0.0)
                     pos_z.append(0.0)
-                    rot_x.append(0.0)
-                    rot_y.append(0.0)
-                    rot_z.append(0.0)
+                    qx_l.append(0.0)
+                    qy_l.append(0.0)
+                    qz_l.append(0.0)
+                    qw_l.append(0.0)
                 vel_x.append(rb2d._velocity._x)
                 vel_y.append(rb2d._velocity._y)
                 vel_z.append(0.0)
@@ -667,17 +650,18 @@ class PhysicsPlugin(PluginBase):
                     pos_x.append(lp._x)
                     pos_y.append(lp._y)
                     pos_z.append(lp._z)
-                    qx, qy, qz, qw = q._x, q._y, q._z, q._w
-                    rot_x.append(math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)))
-                    rot_y.append(math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))))
-                    rot_z.append(math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
+                    qx_l.append(q._x)
+                    qy_l.append(q._y)
+                    qz_l.append(q._z)
+                    qw_l.append(q._w)
                 else:
                     pos_x.append(0.0)
                     pos_y.append(0.0)
                     pos_z.append(0.0)
-                    rot_x.append(0.0)
-                    rot_y.append(0.0)
-                    rot_z.append(0.0)
+                    qx_l.append(0.0)
+                    qy_l.append(0.0)
+                    qz_l.append(0.0)
+                    qw_l.append(0.0)
                 vel_x.append(rb._velocity._x)
                 vel_y.append(rb._velocity._y)
                 vel_z.append(rb._velocity._z)
@@ -709,15 +693,16 @@ class PhysicsPlugin(PluginBase):
             _edata[slots, 0] = pos_x
             _edata[slots, 1] = pos_y
             _edata[slots, 2] = pos_z
-            _edata[slots, 3] = rot_x
-            _edata[slots, 4] = rot_y
-            _edata[slots, 5] = rot_z
-            _edata[slots, 6] = vel_x
-            _edata[slots, 7] = vel_y
-            _edata[slots, 8] = vel_z
-            _edata[slots, 9] = av_x
-            _edata[slots, 10] = av_y
-            _edata[slots, 11] = av_z
+            _edata[slots, 3] = qx_l
+            _edata[slots, 4] = qy_l
+            _edata[slots, 5] = qz_l
+            _edata[slots, 6] = qw_l
+            _edata[slots, 7] = vel_x
+            _edata[slots, 8] = vel_y
+            _edata[slots, 9] = vel_z
+            _edata[slots, 10] = av_x
+            _edata[slots, 11] = av_y
+            _edata[slots, 12] = av_z
             _fdata[slots, 0] = f_x
             _fdata[slots, 1] = f_y
             _fdata[slots, 2] = f_z

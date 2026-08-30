@@ -753,6 +753,43 @@ class PhysXSolver(IPhysicsSolver):
         spec["position"] = position
         spec["rotation"] = rotation
 
+    def set_body_transform_quat(
+        self,
+        body_id: int,
+        position: tuple[float, float, float],
+        quat: tuple[float, float, float, float],
+    ):
+        spec = self._body_specs.get(body_id)
+        if not spec:
+            return
+        if self._is_dynamic(body_id) and self._pose_tb is not None:
+            idx = self._get_body_idx(body_id)
+            if idx is not None and self._pose_buf is not None:
+                qx, qy, qz, qw = quat
+                self._pose_buf[idx, 0] = position[0]
+                self._pose_buf[idx, 1] = position[1]
+                self._pose_buf[idx, 2] = position[2]
+                self._pose_buf[idx, 3] = qx
+                self._pose_buf[idx, 4] = qy
+                self._pose_buf[idx, 5] = qz
+                self._pose_buf[idx, 6] = qw
+                self._pose_tb.write(self._pose_buf)
+        spec["position"] = position
+        import math
+        qx, qy, qz, qw = quat
+        sinr_cosp = 2 * (qw * qx + qy * qz)
+        cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        sinp = 2 * (qw * qy - qz * qx)
+        if abs(sinp) >= 1:
+            pitch = math.copysign(math.pi / 2, sinp)
+        else:
+            pitch = math.asin(max(-1.0, min(1.0, sinp)))
+        siny_cosp = 2 * (qw * qz + qx * qy)
+        cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        spec["rotation"] = (roll, pitch, yaw)
+
     def get_body_transform(
         self, body_id: int
     ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -774,6 +811,38 @@ class PhysXSolver(IPhysicsSolver):
         if spec:
             return spec["position"], spec["rotation"]
         return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
+
+    def get_body_transform_quat(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        if self._is_dynamic(body_id) and self._pose_tb is not None:
+            idx = self._get_body_idx(body_id)
+            if idx is not None:
+                try:
+                    if self._pose_buf is None:
+                        self._pose_buf = np.zeros(self._pose_tb.shape, dtype=np.float32)
+                    self._pose_tb.read(self._pose_buf)
+                    if idx < len(self._pose_buf):
+                        p = self._pose_buf[idx]
+                        pos = (float(p[0]), float(p[1]), float(p[2]))
+                        quat = (float(p[3]), float(p[4]), float(p[5]), float(p[6]))
+                        return pos, quat
+                except Exception:
+                    pass
+        spec = self._body_specs.get(body_id)
+        if spec:
+            import math
+            rx, ry, rz = spec["rotation"]
+            hx, hy, hz = rx * 0.5, ry * 0.5, rz * 0.5
+            sx, cx = math.sin(hx), math.cos(hx)
+            sy, cy = math.sin(hy), math.cos(hy)
+            sz, cz = math.sin(hz), math.cos(hz)
+            qx = sx * cy * cz - cx * sy * sz
+            qy = cx * sy * cz + sx * cy * sz
+            qz = cx * cy * sz - sx * sy * cz
+            qw = cx * cy * cz + sx * sy * sz
+            return spec["position"], (qx, qy, qz, qw)
+        return (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)
 
     # ------------------------------------------------------------------
     # Forces

@@ -527,6 +527,17 @@ class CulverinSolver(IPhysicsSolver):
         rot_q = euler_to_quat(rotation[0], rotation[1], rotation[2])
         self._world.set_transform(handle, position, rot_q)
 
+    def set_body_transform_quat(
+        self,
+        body_id: int,
+        position: tuple[float, float, float],
+        quat: tuple[float, float, float, float],
+    ):
+        handle = self._id_to_handle.get(body_id)
+        if handle is None or self._world is None:
+            return
+        self._world.set_transform(handle, position, quat)
+
     def get_body_transform(
         self, body_id: int
     ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -539,6 +550,18 @@ class CulverinSolver(IPhysicsSolver):
             return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
         euler = _quat_to_euler((rot[0], rot[1], rot[2], rot[3]))
         return (pos, euler)
+
+    def get_body_transform_quat(
+        self, body_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        handle = self._id_to_handle.get(body_id)
+        if handle is None or self._world is None:
+            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        pos = self._world.get_position(handle)
+        rot = self._world.get_rotation(handle)
+        if pos is None or rot is None:
+            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        return (pos, (rot[0], rot[1], rot[2], rot[3]))
 
     def apply_force(
         self, body_id: int, force: tuple[float, float, float], local: bool = False
