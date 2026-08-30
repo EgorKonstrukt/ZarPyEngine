@@ -124,17 +124,7 @@ def register(registry, engine):
         src = s.get_entity(entity_id)
         if src is None:
             return {"error": "Entity not found"}
-        import json, copy
-        from core.ecs.ecs import Entity, ComponentRegistry
-        data = json.loads(json.dumps(src.serialize(), default=str))
-        data["id"] = str(__import__("uuid").uuid4())
-        data["parent"] = src.parent.id if src.parent else None
-        if new_name:
-            data["name"] = new_name
-        dup = Entity.deserialize(data, ComponentRegistry)
-        s.add_entity(dup)
-        if src.parent:
-            dup.set_parent(src.parent)
+        dup = s.duplicate_entity(src, new_name=new_name)
         return {"id": dup.id, "name": dup.name, "message": f"Duplicated '{src.name}' as '{dup.name}'"}
 
     @registry.tool(

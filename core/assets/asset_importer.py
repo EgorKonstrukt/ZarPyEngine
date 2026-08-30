@@ -8,12 +8,10 @@ from __future__ import annotations
 import sys
 import os
 import json
-
+import hashlib
 import ctypes
 import threading
 from asyncio import Future
-import time
-
 import numpy as np
 from typing import Optional, Callable
 from core.ecs.pool import asset as _get_asset_pool
@@ -530,12 +528,17 @@ def _resolve_mesh_import_path(path: str) -> str:
 
 
 def _import_meta_signature(path: str):
-    """(mtime_ns, size) of the resolved `<mesh>.import`, or None when absent."""
+    """(size, content hash) of the resolved `<mesh>.import`, or None when absent.
+
+    Content hashing (instead of mtime) keeps the cache valid when the file is
+    copied to another machine with timestamps preserved.
+    """
     import_path = _resolve_mesh_import_path(path)
     try:
         if os.path.exists(import_path):
-            st = os.stat(import_path)
-            return (st.st_mtime_ns, st.st_size)
+            with open(import_path, "rb") as f:
+                raw = f.read()
+            return (len(raw), hashlib.sha1(raw).hexdigest()[:16])
     except OSError:
         pass
     return None
@@ -558,6 +561,8 @@ def _read_mesh_import(path: str) -> dict:
             for _k in settings:
                 if _k in _data:
                     settings[_k] = _data[_k]
+            if isinstance(_data.get("materials"), list):
+                settings["materials"] = [m for m in _data["materials"] if isinstance(m, str)]
         except Exception:
             pass
     return settings

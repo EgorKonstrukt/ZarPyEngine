@@ -1438,15 +1438,18 @@ class SceneViewport(QOpenGLWidget):
             data = copy.deepcopy(e.serialize())
             if is_top:
                 data["parent"] = None
-            t = e.transform
-            if t:
-                world_pos, world_rot, world_scale = t.world_matrix.decompose()
-                for comp_data in data.get("components", []):
-                    if comp_data.get("_key") == "Transform":
-                        comp_data["local_position"] = world_pos.to_list()
-                        comp_data["local_rotation"] = world_rot.to_list()
-                        comp_data["local_scale"] = world_scale.to_list()
-                        break
+            # Preserve LOCAL transforms for the subtree (skeleton pose must survive
+            # copy/paste verbatim); only the copied root keeps its world position.
+            if is_top:
+                t = e.transform
+                if t:
+                    world_pos, world_rot, world_scale = t.world_matrix.decompose()
+                    for comp_data in data.get("components", []):
+                        if comp_data.get("_key") == "Transform":
+                            comp_data["local_position"] = world_pos.to_list()
+                            comp_data["local_rotation"] = world_rot.to_list()
+                            comp_data["local_scale"] = world_scale.to_list()
+                            break
             self._entity_clipboard.append(data)
 
     def _paste_entities(self):

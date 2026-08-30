@@ -436,19 +436,18 @@ def _drop_model_asset(mw, path: str, world_pos):
     name = os.path.splitext(os.path.basename(path))[0]
     root = mw._engine.project_root
     try:
-        rel = os.path.relpath(path, root)
-        mesh_path = rel.replace("\\", "/") if not rel.startswith("..") else os.path.abspath(path)
+        mesh_path = os.path.relpath(path, root).replace("\\", "/")
     except ValueError:
         mesh_path = os.path.abspath(path)
 
     from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity_async
     create_skinned_mesh_entity_async(
         mw._engine.scene, path, name, mesh_path, world_pos,
-        callback=lambda ent, is_skinned: _on_model_loaded(mw, name, mesh_path, world_pos, ent, is_skinned)
+        callback=lambda ent, is_skinned: _on_model_loaded(mw, name, mesh_path, path, world_pos, ent, is_skinned)
     )
 
 
-def _on_model_loaded(mw, name, mesh_path, world_pos, ent, is_skinned):
+def _on_model_loaded(mw, name, mesh_path, asset_path, world_pos, ent, is_skinned):
     if not is_skinned:
         from core.components import Transform, MeshFilter, MeshRenderer
         e = mw._engine.scene.create_entity(name)
@@ -462,6 +461,7 @@ def _on_model_loaded(mw, name, mesh_path, world_pos, ent, is_skinned):
         e.add_component(mf)
         e.add_component(MeshRenderer())
         ent = e
+    _apply_import_materials(ent, asset_path)
     mw._hierarchy.refresh()
     if ent:
         on_entity_selected(mw, ent)
@@ -481,8 +481,7 @@ def _drop_generic_asset(mw, path: str, world_pos):
 def _rel_path(mw, path: str) -> str:
     try:
         root = mw._engine.project_root
-        rel = os.path.relpath(path, root)
-        return rel.replace("\\", "/") if not rel.startswith("..") else ""
+        return os.path.relpath(path, root).replace("\\", "/")
     except ValueError:
         return ""
 
@@ -855,19 +854,18 @@ def on_import_model(mw, path: str):
     name = os.path.splitext(os.path.basename(path))[0]
     root = mw._engine.project_root
     try:
-        rel = os.path.relpath(path, root)
-        mesh_path = rel.replace("\\", "/") if not rel.startswith("..") else os.path.abspath(path)
+        mesh_path = os.path.relpath(path, root).replace("\\", "/")
     except ValueError:
         mesh_path = os.path.abspath(path)
 
     from core.components.rendering.skeleton.skinned_factory import create_skinned_mesh_entity_async
     create_skinned_mesh_entity_async(
         mw._engine.scene, path, name, mesh_path,
-        callback=lambda ent, is_skinned: _on_import_model_loaded(mw, name, mesh_path, ent, is_skinned)
+        callback=lambda ent, is_skinned: _on_import_model_loaded(mw, name, mesh_path, path, ent, is_skinned)
     )
 
 
-def _on_import_model_loaded(mw, name, mesh_path, ent, is_skinned):
+def _on_import_model_loaded(mw, name, mesh_path, asset_path, ent, is_skinned):
     if not is_skinned:
         from core.components import Transform, MeshFilter, MeshRenderer
         ent = mw._engine.scene.create_entity(name)
@@ -877,9 +875,29 @@ def _on_import_model_loaded(mw, name, mesh_path, ent, is_skinned):
         mf.mesh_path = mesh_path
         ent.add_component(mf)
         ent.add_component(MeshRenderer())
+    _apply_import_materials(ent, asset_path)
     mw._hierarchy.refresh()
     if ent:
         on_entity_selected(mw, ent)
+
+
+def _apply_import_materials(ent, asset_path: str):
+    if ent is None:
+        return
+    try:
+        from core.assets.asset_importer import _read_mesh_import
+        mats = [p for p in _read_mesh_import(asset_path).get("materials", []) if p]
+        if not mats:
+            return
+        comp = None
+        for candidate in list(ent._components.values()):
+            if type(candidate).__name__ in ("MeshRenderer", "SkinnedMeshRenderer"):
+                comp = candidate
+                break
+        if comp is not None:
+            comp.materials = [{"path": p} for p in mats]
+    except Exception:
+        pass
 
 
 def open_scene_by_path(mw, path: str):

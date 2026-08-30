@@ -957,19 +957,7 @@ class HierarchyPanel(QDockWidget):
     def _duplicate_entity(self, entity: Entity):
         if not self._scene:
             return
-        import copy, uuid
-        data = copy.deepcopy(entity.serialize())
-        data["id"] = str(uuid.uuid4())
-        data["name"] = entity.name
-        data["parent"] = None
-        for comp_data in data.get("components", []):
-            pass
-        from core.ecs.ecs import Entity as Ent
-        from core.engine.engine import Engine
-        new_e = Ent.deserialize(data, Engine.instance()._component_registry)
-        self._scene.add_entity(new_e)
-        if entity.parent:
-            new_e.set_parent(entity.parent)
+        new_e = self._scene.duplicate_entity(entity)
         self._collab_sync_create(new_e)
         self._refresh()
         self._selected_entity = new_e
@@ -1056,15 +1044,18 @@ class HierarchyPanel(QDockWidget):
             data = copy.deepcopy(e.serialize())
             if is_top:
                 data["parent"] = None
-            t = e.transform
-            if t:
-                world_pos, world_rot, world_scale = t.world_matrix.decompose()
-                for comp_data in data.get("components", []):
-                    if comp_data.get("_key") == "Transform":
-                        comp_data["local_position"] = world_pos.to_list()
-                        comp_data["local_rotation"] = world_rot.to_list()
-                        comp_data["local_scale"] = world_scale.to_list()
-                        break
+            # Preserve LOCAL transforms for the subtree (skeleton pose must survive
+            # copy/paste verbatim); only the copied root keeps its world position.
+            if is_top:
+                t = e.transform
+                if t:
+                    world_pos, world_rot, world_scale = t.world_matrix.decompose()
+                    for comp_data in data.get("components", []):
+                        if comp_data.get("_key") == "Transform":
+                            comp_data["local_position"] = world_pos.to_list()
+                            comp_data["local_rotation"] = world_rot.to_list()
+                            comp_data["local_scale"] = world_scale.to_list()
+                            break
             clipboard.append(data)
         mw = self.parent()
         viewport = getattr(mw, '_viewport', None)

@@ -1275,7 +1275,7 @@ class ComponentWidget(QWidget):
             for opt in options:
                 combo.addItem(opt)
             try: combo.setCurrentText(current)
-            except: pass
+            except Exception: pass
             def on_change(t, idx=index, pn=prop_name, fn=ef.name):
                 nv = self._enum_value(enum_cls, t)
                 items = list(getattr(self._component, pn))
@@ -1473,7 +1473,7 @@ class ComponentWidget(QWidget):
             for opt in options:
                 combo.addItem(opt)
             try: combo.setCurrentText(current)
-            except: pass
+            except Exception: pass
             def _on_enum_changed(v, n=prop_name):
                 nv = self._enum_value(enum_cls, v)
                 comp.set_field_value(n, nv)

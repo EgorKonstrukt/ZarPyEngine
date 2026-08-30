@@ -705,6 +705,7 @@ class Scene:
         self._scene_prof: Any = None
         self._embed_all: bool = False
         self._compress_resources: bool = False
+        self._compress_level = None
         self._embedded_resources: dict = {}
         self._active_update_components: set[Component] = set()
         self._active_fixed_components: set[Component] = set()
@@ -926,6 +927,89 @@ class Scene:
         self._entities_cache_valid = False
         self._roots_cache_valid = False
         self._spatial_dirty = True
+
+    def duplicate_entity(self, entity: Entity, new_name: str = "") -> Entity:
+        """Duplicate an entity together with its whole descendant subtree.
+
+        Skinned-mesh objects keep working after duplication: every entity id is
+        remapped (all new uuids) and each copied Armature component is rebound
+        to the copied bone entities instead of pointing at the source skeleton.
+        The copied root keeps the same local transform and same parent as the
+        source.
+        """
+        if entity._scene is not self:
+            entity = self.get_entity(entity.id) or entity
+        import copy as _copy
+
+        def walk(e: Entity) -> list:
+            data = _copy.deepcopy(e.serialize())
+            data["id"] = str(uuid.uuid4())
+            data["parent"] = None
+            nodes = [(e, data)]
+            for ch in list(e._children):
+                nodes.extend(walk(ch))
+            return nodes
+
+        nodes = walk(entity)
+        id_map = {src.id: data["id"] for src, data in nodes}
+        new_entities: list[Entity] = []
+        for src, data in nodes:
+            data["parent"] = None
+            new_e = Entity.deserialize(data, ComponentRegistry)
+            self.add_entity(new_e)
+            new_entities.append(new_e)
+        roots = [new_entities[0]]
+        new_by_id = {src.id: e for (src, _), e in zip(nodes, new_entities)}
+        for (src, _data), new_e in zip(nodes, new_entities):
+            if src.parent is None:
+                continue
+            if src.parent.id in new_by_id:
+                new_e.set_parent(new_by_id[src.parent.id], preserve_world=False)
+            else:
+                new_e.set_parent(src.parent, preserve_world=False)
+        self._rebind_armatures(new_entities, id_map)
+        if new_name:
+            roots[0].name = new_name
+        return roots[0]
+
+    def _rebind_armatures(self, entities: list, id_map: dict) -> None:
+        """Point every copied Armature's bone_entity_ids at the freshly created bone entities."""
+        for e in entities:
+            arm = e.get_component_by_name("Armature")
+            if arm is not None and getattr(arm, "bone_entity_ids", None):
+                arm.bone_entity_ids = [id_map.get(bid, bid) for bid in arm.bone_entity_ids]
+
+    def paste_entities(self, clipboard_data: list, registry) -> list:
+        """Deserialize serialized entities (a copied subtree) into this scene.
+
+        Remaps every entity id to a fresh uuid, restores inner parent links,
+        and rebinds Armature components to the pasted bone entities so skinned
+        meshes keep working instead of being tied to the source skeleton.
+        Returns the list of spawned entity objects.
+        """
+        import copy as _copy
+        id_map: dict = {}
+        spawned: list = []
+        for data in clipboard_data:
+            d = _copy.deepcopy(data)
+            old_id = d["id"]
+            new_id = str(uuid.uuid4())
+            d["id"] = new_id
+            id_map[old_id] = new_id
+            e = Entity.deserialize(d, registry)
+            self.add_entity(e)
+            spawned.append(e)
+        all_by_id = {e.id: e for e in spawned}
+        for data in clipboard_data:
+            parent_id = data.get("parent")
+            if not parent_id or parent_id not in id_map:
+                continue
+            child = all_by_id.get(id_map[data["id"]])
+            new_parent = all_by_id.get(id_map[parent_id])
+            if child and new_parent:
+                child.set_parent(new_parent, preserve_world=False)
+        self._rebind_armatures(spawned, id_map)
+        return spawned
 
     def get_entity(self, eid: str) -> Optional[Entity]:
         return self._entities.get(eid)
@@ -1185,6 +1269,8 @@ class Scene:
             data["embed_all"] = True
         if self._compress_resources:
             data["compress_resources"] = True
+        if self._compress_level is not None:
+            data["compress_level"] = self._compress_level
         prof = self._get_profiler()
         if prof is not None:
             prof.set_value("scene_serialize", 0)
@@ -1200,6 +1286,14 @@ class Scene:
             return
         self._compress_resources = bool(v)
         self._render_version += 1
+
+    @property
+    def compress_level(self):
+        return self._compress_level
+
+    @compress_level.setter
+    def compress_level(self, v):
+        self._compress_level = int(v) if isinstance(v, bool) else v
 
     @property
     def embed_all(self) -> bool:
@@ -1225,6 +1319,7 @@ class Scene:
         s = cls(data["name"])
         s._embed_all = bool(data.get("embed_all", False))
         s._compress_resources = bool(data.get("compress_resources", False))
+        s._compress_level = data.get("compress_level")
         raw = data.get("entities", {})
         entities: dict[str, Entity] = {}
         parent_map: dict[str, Optional[str]] = {}

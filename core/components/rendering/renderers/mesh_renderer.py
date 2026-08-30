@@ -41,7 +41,9 @@ class MeshRenderer(Component):
 
     def serialize(self) -> dict:
         d = super().serialize()
-        d.update({"materials": self.materials, "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows, "dynamic_reflections": self.dynamic_reflections})
+        d.update({"materials": [dict(m) if isinstance(m, dict) else m for m in self.materials],
+                  "cast_shadows": self.cast_shadows, "receive_shadows": self.receive_shadows,
+                  "dynamic_reflections": self.dynamic_reflections})
         return d
 
     @classmethod

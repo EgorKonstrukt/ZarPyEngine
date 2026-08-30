@@ -286,34 +286,12 @@ class PasteEntitiesCommand(Command):
     def spawned_ids(self) -> list[str]:
         return list(self._spawned_ids)
     def execute(self):
-        import copy, uuid
-        from core.ecs.ecs import Entity
-        id_map: dict[str, str] = {}
         self._spawned_ids.clear()
         self._entity_datas.clear()
         self._entity_id = None
-        for data in self._clipboard_data:
-            d = copy.deepcopy(data)
-            old_id = d["id"]
-            new_id = str(uuid.uuid4())
-            d["id"] = new_id
-            id_map[old_id] = new_id
-            e = Entity.deserialize(d, self._registry)
-            self._scene.add_entity(e)
+        for e in self._scene.paste_entities(self._clipboard_data, self._registry):
             self._spawned_ids.append(e.id)
-        for data in self._clipboard_data:
-            parent_id = data.get("parent")
-            if parent_id and parent_id in id_map:
-                child_id = id_map[data["id"]]
-                new_parent_id = id_map[parent_id]
-                child = self._scene.get_entity(child_id)
-                new_parent = self._scene.get_entity(new_parent_id)
-                if child and new_parent:
-                    child.set_parent(new_parent)
-        for eid in self._spawned_ids:
-            e = self._scene.get_entity(eid)
-            if e:
-                self._entity_datas.append(e.serialize())
+            self._entity_datas.append(e.serialize())
         if self._spawned_ids:
             self._entity_id = self._spawned_ids[0]
     def undo(self):
@@ -322,22 +300,7 @@ class PasteEntitiesCommand(Command):
             if e:
                 self._scene.remove_entity(eid)
     def redo(self):
-        from core.ecs.ecs import Entity
-        self._spawned_ids.clear()
-        for d in self._entity_datas:
-            e = Entity.deserialize(d, self._registry)
-            self._scene.add_entity(e)
-            self._spawned_ids.append(e.id)
-        for d in self._entity_datas:
-            parent_id = d.get("parent")
-            if parent_id:
-                child_id = d["id"]
-                child = self._scene.get_entity(child_id)
-                parent = self._scene.get_entity(parent_id)
-                if child and parent:
-                    child.set_parent(parent, preserve_world=False)
-        if self._spawned_ids:
-            self._entity_id = self._spawned_ids[0]
+        self.execute()
     @property
     def description(self):
         n = len(self._clipboard_data)

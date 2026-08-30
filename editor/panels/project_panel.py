@@ -2332,7 +2332,20 @@ class NewScript(Component):
             f.write(template)
         self._refresh()
 
+    def _resolve_resource_path(self, path: str) -> str:
+        if not path:
+            return ""
+        if os.path.exists(path) or os.path.isabs(path):
+            return path
+        root = self._engine.project_root if self._engine else None
+        if root:
+            cand = os.path.normpath(os.path.join(root, path))
+            if os.path.exists(cand):
+                return cand
+        return path
+
     def open_resource(self, path: str):
+        path = self._resolve_resource_path(path)
         if os.path.isdir(path):
             return
         ext = os.path.splitext(path)[1].lower()
@@ -2350,7 +2363,7 @@ class NewScript(Component):
             self._open_path_with_default_app(path)
 
     def reveal_resource(self, path: str):
-        norm = os.path.normpath(path)
+        norm = os.path.normpath(self._resolve_resource_path(path))
         if not os.path.exists(norm):
             return
         self._sync_tree_selection(os.path.dirname(norm))
@@ -2363,7 +2376,7 @@ class NewScript(Component):
             self._flash_item(item)
 
     def flash_resource(self, path: str):
-        norm = os.path.normpath(path)
+        norm = os.path.normpath(self._resolve_resource_path(path))
         if not os.path.exists(norm):
             return
         self._sync_tree_selection(os.path.dirname(norm))

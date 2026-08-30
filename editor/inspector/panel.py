@@ -361,36 +361,52 @@ class InspectorPanel(QDockWidget):
         scale_sb.setRange(0.001, 1000.0)
         scale_sb.setSingleStep(0.1)
         scale_sb.setValue(settings.get("scale", 1.0))
-        scale_sb.valueChanged.connect(lambda v: self._save_import_setting("scale", v))
+        scale_sb.valueChanged.connect(lambda v: (self._save_import_setting("scale", v),
+                                                 self._schedule_preview_reload()))
         self._build_labeled_field("Scale Factor", scale_sb)
         pivot_cb = QCheckBox()
         pivot_cb.setChecked(settings.get("center_pivot", False))
-        pivot_cb.toggled.connect(lambda v: self._save_import_setting("center_pivot", v))
+        pivot_cb.toggled.connect(lambda v: (self._save_import_setting("center_pivot", v),
+                                            self._schedule_preview_reload()))
         self._build_labeled_field("Center Pivot", pivot_cb)
         flip_uv_cb = QCheckBox()
         flip_uv_cb.setChecked(settings.get("flip_uvs", True))
-        flip_uv_cb.toggled.connect(lambda v: self._save_import_setting("flip_uvs", v))
+        flip_uv_cb.toggled.connect(lambda v: (self._save_import_setting("flip_uvs", v),
+                                              self._schedule_preview_reload()))
         self._build_labeled_field("Flip UVs", flip_uv_cb)
         smooth_sb = QDoubleSpinBox()
         smooth_sb.setRange(0.0, 180.0)
         smooth_sb.setSingleStep(1.0)
         smooth_sb.setDecimals(1)
         smooth_sb.setValue(settings.get("smooth_angle", 30.0))
-        smooth_sb.valueChanged.connect(lambda v: self._save_import_setting("smooth_angle", v))
+        smooth_sb.valueChanged.connect(lambda v: (self._save_import_setting("smooth_angle", v),
+                                                  self._schedule_preview_reload()))
         self._build_labeled_field("Smooth Angle", smooth_sb)
         gen_nrm = QCheckBox()
         gen_nrm.setChecked(settings.get("gen_normals", True))
-        gen_nrm.toggled.connect(lambda v: self._save_import_setting("gen_normals", v))
+        gen_nrm.toggled.connect(lambda v: (self._save_import_setting("gen_normals", v),
+                                           self._schedule_preview_reload()))
         self._build_labeled_field("Generate Normals", gen_nrm)
         gen_uv = QCheckBox()
         gen_uv.setChecked(settings.get("gen_uvs", True))
-        gen_uv.toggled.connect(lambda v: self._save_import_setting("gen_uvs", v))
+        gen_uv.toggled.connect(lambda v: (self._save_import_setting("gen_uvs", v),
+                                          self._schedule_preview_reload()))
         self._build_labeled_field("Generate UVs", gen_uv)
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
         self._add_asset_widget(sep2)
         self._build_material_wizard_section(settings)
         self._reload_mesh_preview()
+
+    def _schedule_preview_reload(self):
+        from PyQt6.QtCore import QTimer
+        timer = getattr(self, "_import_preview_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._reload_mesh_preview)
+            self._import_preview_timer = timer
+        timer.start(150)
 
     def _reload_mesh_preview(self):
         preview = getattr(self, "_mesh_preview", None)
@@ -563,13 +579,22 @@ class InspectorPanel(QDockWidget):
         mats = settings.get("materials", [])
         while len(mats) <= index:
             mats.append("")
-        mats[index] = path
+        mats[index] = self._relativize_asset_path(path)
         settings["materials"] = mats
         try:
             with open(cache_path, "w") as f:
                 json.dump(settings, f, indent=2)
         except Exception:
             pass
+
+    def _relativize_asset_path(self, path: str) -> str:
+        if not path:
+            return ""
+        root = self._engine.project_root if self._engine else os.getcwd()
+        try:
+            return os.path.relpath(path, root).replace("\\", "/")
+        except ValueError:
+            return path
 
     def _build_texture_import_settings(self):
         from core.assets.texture_import_settings import DEFAULT_SETTINGS
@@ -579,7 +604,7 @@ class InspectorPanel(QDockWidget):
             try:
                 with open(cache_path) as f:
                     settings.update(json.load(f))
-            except: pass
+            except Exception: pass
         type_cb = QComboBox()
         type_cb.addItems(["albedo", "normal", "metallic", "roughness", "ao", "emission", "sprite"])
         type_cb.setCurrentText(settings.get("type", "albedo"))
@@ -627,7 +652,7 @@ class InspectorPanel(QDockWidget):
             try:
                 with open(cache_path) as f:
                     settings = json.load(f)
-            except: pass
+            except Exception: pass
         qual_sb = QSpinBox()
         qual_sb.setRange(0, 100)
         qual_sb.setValue(settings.get("quality", 80))
@@ -646,12 +671,12 @@ class InspectorPanel(QDockWidget):
             try:
                 with open(cache_path) as f:
                     settings = json.load(f)
-            except: pass
+            except Exception: pass
         settings[key] = value
         try:
             with open(cache_path, "w") as f:
                 json.dump(settings, f, indent=2)
-        except: pass
+        except Exception: pass
         ext = os.path.splitext(self._asset_path)[1].lower()
         if ext in (".obj", ".fbx", ".stl", ".usdz", ".gltf", ".glb"):
             if getattr(self, "_mesh_preview", None) is not None:
@@ -1248,22 +1273,22 @@ class InspectorPanel(QDockWidget):
             ctype = type(cw._component).__name__
             if ctype == "Transform":
                 try: cw.refresh_transform()
-                except: pass
+                except Exception: pass
             else:
                 fields = getattr(type(cw._component), "_inspector_fields", lambda: [])()
                 for f in fields:
                     if f.field_type.value == "vec2":
                         try: cw.refresh_vec2_field(f.name)
-                        except: pass
+                        except Exception: pass
                     elif f.field_type.value == "vec3":
                         try: cw.refresh_vec3_field(f.name)
-                        except: pass
+                        except Exception: pass
                     elif f.field_type.value == "vec4":
                         try: cw.refresh_vec4_field(f.name)
-                        except: pass
+                        except Exception: pass
                     elif f.field_type.value in ("vec2_slider", "vec3_slider"):
                         try: cw.refresh_vec2_field(f.name) if f.field_type.value == "vec2_slider" else cw.refresh_vec3_field(f.name)
-                        except: pass
+                        except Exception: pass
 
     def _on_active_changed(self, checked: bool):
         if self._updating or not self._entity: return
@@ -1410,8 +1435,7 @@ class InspectorPanel(QDockWidget):
         if found:
             root = self._engine.project_root
             try:
-                rel = os.path.relpath(script_path, root)
-                found[-1].script_path = rel.replace("\\", "/") if not rel.startswith("..") else os.path.abspath(script_path)
+                found[-1].script_path = os.path.relpath(script_path, root).replace("\\", "/")
             except ValueError:
                 found[-1].script_path = os.path.abspath(script_path)
             self._rebuild()

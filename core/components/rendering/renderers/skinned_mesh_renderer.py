@@ -52,7 +52,7 @@ class SkinnedMeshRenderer(Component):
         d.update({
             "mesh_path": self.mesh_path,
             "mesh_name": self.mesh_name,
-            "materials": self.materials,
+            "materials": [dict(m) if isinstance(m, dict) else m for m in self.materials],
             "cast_shadows": self.cast_shadows,
             "receive_shadows": self.receive_shadows,
             "update_when_offscreen": self.update_when_offscreen,

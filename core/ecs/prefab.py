@@ -118,6 +118,7 @@ class Prefab:
         for root in roots:
             root.pop("prefab_guid", None)
             root.pop("prefab_source_id", None)
+        self._relativize_roots_for_save(roots)
         out = {
             "guid": self.guid,
             "name": self.name,
@@ -143,6 +144,43 @@ class Prefab:
             result.append(data)
         return result
 
+    @staticmethod
+    def _relativize_roots_for_save(roots: list[dict]):
+        root = None
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+            root = eng.project_root if eng and getattr(eng, "project_root", None) else None
+        except Exception:
+            pass
+        if not root:
+            return
+
+        def walk(items):
+            for item in items:
+                for comp in item.get("components", []):
+                    Engine._relativize_component_paths(comp, root)
+                walk(item.get("children", []))
+        walk(roots)
+
+    def _resolve_roots_for_load(self):
+        root = None
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+            root = eng.project_root if eng and getattr(eng, "project_root", None) else None
+        except Exception:
+            pass
+        if not root:
+            return
+
+        def walk(items):
+            for item in items:
+                for comp in item.get("components", []):
+                    Engine._resolve_component_paths(comp, root)
+                walk(item.get("children", []))
+        walk(self.roots_data)
+
     @classmethod
     def load(cls, path: str) -> Optional[Prefab]:
         try:
@@ -157,6 +195,7 @@ class Prefab:
                 p.roots_data = [data["entity"]]
             elif "entities" in data:
                 p.roots_data = list(data["entities"].values())
+            p._resolve_roots_for_load()
             return p
         except Exception as e:
             Logger.error(f"Failed to load prefab '{path}': {e}", exc=e)

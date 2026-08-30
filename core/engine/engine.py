@@ -129,12 +129,18 @@ class Engine:
             return "project"
     def _compress_level(self) -> int:
         try:
-            val = get_global_config().get("engine.embedded_compression_level", "balanced")
-            if isinstance(val, bool) or not isinstance(val, int):
-                return {"fast": 1, "balanced": 6, "max": 9}.get(str(val).lower(), 6)
-            return max(0, min(9, val))
+            scene_level = getattr(self._scene, "compress_level", None)
+            if scene_level is not None:
+                return self._resolve_compress_level(scene_level)
+            return self._resolve_compress_level(
+                get_global_config().get("engine.embedded_compression_level", "balanced"))
         except Exception:
             return 6
+    @staticmethod
+    def _resolve_compress_level(val) -> int:
+        if isinstance(val, bool) or not isinstance(val, int):
+            return {"fast": 1, "balanced": 6, "max": 9}.get(str(val).lower(), 6)
+        return max(0, min(9, val))
     def _defer_gui(self, fn):
         poster = getattr(self, "_gui_poster", None)
         if poster is not None:
@@ -169,7 +175,7 @@ class Engine:
         task_start(task_id, f"Saving scene {os.path.basename(save_path)}...", fraction=0.0, total=1.0)
         snapshot = scene.serialize()
         if scene.embedded_resources:
-            snapshot["embedded_resources"] = scene.embedded_resources
+            snapshot["embedded_resources"] = dict(scene.embedded_resources)
         existing = scene.embedded_resources
         def _worker():
             ok = True
@@ -246,18 +252,44 @@ class Engine:
         entities = data.get("entities", {})
         for eid, edata in entities.items():
             for comp in edata.get("components", []):
-                for key, val in comp.items():
-                    if key in _PATH_FIELDS and val and isinstance(val, str):
-                        comp[key] = self._resolve_path(val, root)
+                self._resolve_component_paths(comp, root)
     def relativize_scene_paths(self, data: dict):
         """Convert absolute paths to project-relative in scene JSON data."""
         root = self.project_root
         entities = data.get("entities", {})
         for eid, edata in entities.items():
             for comp in edata.get("components", []):
-                for key, val in comp.items():
-                    if key in _PATH_FIELDS and val and isinstance(val, str):
-                        comp[key] = self._relativize_path(val, root)
+                self._relativize_component_paths(comp, root)
+    @staticmethod
+    def _resolve_component_paths(comp: dict, root: str):
+        for key, val in comp.items():
+            if key in _PATH_FIELDS and val and isinstance(val, str):
+                comp[key] = Engine._resolve_path(val, root)
+        mats = Engine._copy_materials(comp.get("materials"))
+        if mats is not None:
+            for mat in mats.values() if isinstance(mats, dict) else mats:
+                if isinstance(mat, dict) and "path" in mat:
+                    mat["path"] = Engine._resolve_path(mat["path"], root)
+            comp["materials"] = mats
+    @staticmethod
+    def _relativize_component_paths(comp: dict, root: str):
+        for key, val in comp.items():
+            if key in _PATH_FIELDS and val and isinstance(val, str):
+                comp[key] = Engine._relativize_path(val, root)
+        mats = Engine._copy_materials(comp.get("materials"))
+        if mats is not None:
+            for mat in mats.values() if isinstance(mats, dict) else mats:
+                if isinstance(mat, dict) and "path" in mat:
+                    mat["path"] = Engine._relativize_path(mat["path"], root)
+            comp["materials"] = mats
+    @staticmethod
+    def _copy_materials(mats):
+        """Detach materials entries so path rewriting never mutates live components."""
+        if isinstance(mats, list):
+            return [dict(e) if isinstance(e, dict) else e for e in mats]
+        if isinstance(mats, dict):
+            return {k: dict(e) if isinstance(e, dict) else e for k, e in mats.items()}
+        return None
     @staticmethod
     def _resolve_path(val: str, root: str) -> str:
         if not val or os.path.exists(val):
@@ -281,13 +313,12 @@ class Engine:
     def _relativize_path(val: str, root: str) -> str:
         if not val:
             return ""
+        if not os.path.isabs(val):
+            return val.replace("\\", "/")
         try:
-            rel = os.path.relpath(val, root)
-            if not rel.startswith(".."):
-                return rel.replace("\\", "/")
+            return os.path.relpath(val, root).replace("\\", "/")
         except ValueError:
-            pass
-        return val
+            return val
     def initialize(self):
         import core.components
 
@@ -362,10 +393,11 @@ class Engine:
         if not save_path:
             Logger.warning("No path for scene save.")
             return
+        level = self._compress_level()
         task_start("scene:save", f"Saving scene {os.path.basename(save_path)}...")
         try:
             data = self._scene.serialize()
-            _embed_scene_resources(data, self.project_root, self._scene.embedded_resources)
+            _embed_scene_resources(data, self.project_root, self._scene.embedded_resources, compress_level=level)
             self._scene.embedded_resources = data.get("embedded_resources", {})
             self.relativize_scene_paths(data)
             os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
