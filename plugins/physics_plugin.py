@@ -55,6 +55,9 @@ class PhysicsPlugin(PluginBase):
         )
         self._step_caches: dict[int, tuple] = {}
         self._cache_version: int = 0
+        self._collision_listener_sig: tuple = None
+        self._has_collision_cache: bool = False
+        self._collision_cache_valid: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -245,6 +248,8 @@ class PhysicsPlugin(PluginBase):
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
         self._step_caches.clear()
+        self._collision_listener_sig = None
+        self._collision_cache_valid = False
 
     def on_project_opened(self):
         settings = self._get_physics_settings()
@@ -284,6 +289,8 @@ class PhysicsPlugin(PluginBase):
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
         self._step_caches.clear()
+        self._collision_listener_sig = None
+        self._collision_cache_valid = False
         self._reset_entity_velocities(scene)
         if self._simulation_mode == "per_layer_process":
             for proc in self._layer_processes.values():
@@ -317,6 +324,8 @@ class PhysicsPlugin(PluginBase):
         self._scanned_entity_ids.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
+        self._collision_listener_sig = None
+        self._collision_cache_valid = False
         if self._engine is None:
             Logger.info("[PhysicsPlugin] on_play_start: engine is None, returning")
             return
@@ -515,46 +524,92 @@ class PhysicsPlugin(PluginBase):
             fl = int(_flags[slot])
             if not (fl & 1) or (fl & 4):
                 continue
-            row = _rdata[slot].tolist()
             if rb2d:
-                tr._local_pos._x = row[0]
-                tr._local_pos._y = row[1]
+                nx = float(_rdata[slot, 0])
+                ny = float(_rdata[slot, 1])
+                hz_raw = float(_rdata[slot, 5])
+                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(hz_raw - 2.0 * math.asin(max(-1.0, min(1.0, tr._local_rot._z)))) < 1e-4:
+                    if not getattr(rb2d, "_velocity_dirty", False):
+                        rb2d._velocity._x = float(_rdata[slot, 6])
+                        rb2d._velocity._y = float(_rdata[slot, 7])
+                        rb2d._angular_velocity = float(_rdata[slot, 11])
+                    rb2d._force_accum._x = 0.0
+                    rb2d._force_accum._y = 0.0
+                    rb2d._torque_accum = 0.0
+                    continue
+                tr._local_pos._x = nx
+                tr._local_pos._y = ny
                 tr._local_pos._z = 0.0
-                hz = row[5] * 0.5
+                hz = hz_raw * 0.5
                 tr._local_rot._x = 0.0
                 tr._local_rot._y = 0.0
                 tr._local_rot._z = math.sin(hz)
                 tr._local_rot._w = math.cos(hz)
                 tr._dirty = True
+                scn = entity._scene
+                if scn is not None:
+                    scn._dirty_roots.add(tr)
                 if not getattr(rb2d, "_velocity_dirty", False):
-                    rb2d._velocity._x = row[6]
-                    rb2d._velocity._y = row[7]
-                    rb2d._angular_velocity = row[11]
+                    rb2d._velocity._x = float(_rdata[slot, 6])
+                    rb2d._velocity._y = float(_rdata[slot, 7])
+                    rb2d._angular_velocity = float(_rdata[slot, 11])
                 rb2d._force_accum._x = 0.0
                 rb2d._force_accum._y = 0.0
                 rb2d._torque_accum = 0.0
             elif rb:
-                tr._local_pos._x = row[0]
-                tr._local_pos._y = row[1]
-                tr._local_pos._z = row[2]
-                r0 = row[3]
-                r1 = row[4]
-                r2 = row[5]
-                sr, cr = math.sin(r0 * 0.5), math.cos(r0 * 0.5)
-                sp, cp = math.sin(r1 * 0.5), math.cos(r1 * 0.5)
-                sy, cy = math.sin(r2 * 0.5), math.cos(r2 * 0.5)
-                tr._local_rot._x = sr * cp * cy - cr * sp * sy
-                tr._local_rot._y = cr * sp * cy + sr * cp * sy
-                tr._local_rot._z = cr * cp * sy - sr * sp * cy
-                tr._local_rot._w = cr * cp * cy + sr * sp * sy
+                nx = float(_rdata[slot, 0])
+                ny = float(_rdata[slot, 1])
+                nz = float(_rdata[slot, 2])
+                r0 = float(_rdata[slot, 3])
+                r1 = float(_rdata[slot, 4])
+                r2 = float(_rdata[slot, 5])
+                if abs(tr._local_pos._x - nx) < 1e-5 and abs(tr._local_pos._y - ny) < 1e-5 and abs(tr._local_pos._z - nz) < 1e-5:
+                    qx, qy, qz, qw = tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w
+                    sr2 = math.sin(r0 * 0.5)
+                    cr2 = math.cos(r0 * 0.5)
+                    sp2 = math.sin(r1 * 0.5)
+                    cp2 = math.cos(r1 * 0.5)
+                    sy2 = math.sin(r2 * 0.5)
+                    cy2 = math.cos(r2 * 0.5)
+                    nrx = sr2 * cp2 * cy2 - cr2 * sp2 * sy2
+                    nry = cr2 * sp2 * cy2 + sr2 * cp2 * sy2
+                    nrz = cr2 * cp2 * sy2 - sr2 * sp2 * cy2
+                    nrw = cr2 * cp2 * cy2 + sr2 * sp2 * sy2
+                    if abs(qx - nrx) < 1e-4 and abs(qy - nry) < 1e-4 and abs(qz - nrz) < 1e-4 and abs(qw - nrw) < 1e-4:
+                        if not getattr(rb, "_velocity_dirty", False):
+                            rb._velocity._x = float(_rdata[slot, 6])
+                            rb._velocity._y = float(_rdata[slot, 7])
+                            rb._velocity._z = float(_rdata[slot, 8])
+                            rb._angular_velocity._x = float(_rdata[slot, 9])
+                            rb._angular_velocity._y = float(_rdata[slot, 10])
+                            rb._angular_velocity._z = float(_rdata[slot, 11])
+                        continue
+                    tr._local_rot._x = nrx
+                    tr._local_rot._y = nry
+                    tr._local_rot._z = nrz
+                    tr._local_rot._w = nrw
+                else:
+                    sr, cr = math.sin(r0 * 0.5), math.cos(r0 * 0.5)
+                    sp, cp = math.sin(r1 * 0.5), math.cos(r1 * 0.5)
+                    sy, cy = math.sin(r2 * 0.5), math.cos(r2 * 0.5)
+                    tr._local_rot._x = sr * cp * cy - cr * sp * sy
+                    tr._local_rot._y = cr * sp * cy + sr * cp * sy
+                    tr._local_rot._z = cr * cp * sy - sr * sp * cy
+                    tr._local_rot._w = cr * cp * cy + sr * sp * sy
+                tr._local_pos._x = nx
+                tr._local_pos._y = ny
+                tr._local_pos._z = nz
                 tr._dirty = True
+                scn = entity._scene
+                if scn is not None:
+                    scn._dirty_roots.add(tr)
                 if not getattr(rb, "_velocity_dirty", False):
-                    rb._velocity._x = row[6]
-                    rb._velocity._y = row[7]
-                    rb._velocity._z = row[8]
-                    rb._angular_velocity._x = row[9]
-                    rb._angular_velocity._y = row[10]
-                    rb._angular_velocity._z = row[11]
+                    rb._velocity._x = float(_rdata[slot, 6])
+                    rb._velocity._y = float(_rdata[slot, 7])
+                    rb._velocity._z = float(_rdata[slot, 8])
+                    rb._angular_velocity._x = float(_rdata[slot, 9])
+                    rb._angular_velocity._y = float(_rdata[slot, 10])
+                    rb._angular_velocity._z = float(_rdata[slot, 11])
 
     def _write_inputs_python(self, shared, cache) -> int:
         _flags = shared._flags_nd
@@ -573,14 +628,22 @@ class PhysicsPlugin(PluginBase):
                 continue
             lp = tr._local_pos
             slots.append(slot)
-            pos_x.append(lp._x)
-            pos_y.append(lp._y)
             if rb2d:
-                q = tr._local_rot
-                pos_z.append(0.0)
-                rot_x.append(0.0)
-                rot_y.append(0.0)
-                rot_z.append(2.0 * math.asin(max(-1.0, min(1.0, q._z))))
+                if rb2d.is_kinematic:
+                    q = tr._local_rot
+                    pos_x.append(lp._x)
+                    pos_y.append(lp._y)
+                    pos_z.append(0.0)
+                    rot_x.append(0.0)
+                    rot_y.append(0.0)
+                    rot_z.append(2.0 * math.asin(max(-1.0, min(1.0, q._z))))
+                else:
+                    pos_x.append(0.0)
+                    pos_y.append(0.0)
+                    pos_z.append(0.0)
+                    rot_x.append(0.0)
+                    rot_y.append(0.0)
+                    rot_z.append(0.0)
                 vel_x.append(rb2d._velocity._x)
                 vel_y.append(rb2d._velocity._y)
                 vel_z.append(0.0)
@@ -599,12 +662,22 @@ class PhysicsPlugin(PluginBase):
                 else:
                     flv.append(11 if rb2d.consume_velocity_dirty() else 9)
             elif rb:
-                q = tr._local_rot
-                pos_z.append(lp._z)
-                qx, qy, qz, qw = q._x, q._y, q._z, q._w
-                rot_x.append(math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)))
-                rot_y.append(math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))))
-                rot_z.append(math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
+                if rb.is_kinematic:
+                    q = tr._local_rot
+                    pos_x.append(lp._x)
+                    pos_y.append(lp._y)
+                    pos_z.append(lp._z)
+                    qx, qy, qz, qw = q._x, q._y, q._z, q._w
+                    rot_x.append(math.atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)))
+                    rot_y.append(math.asin(max(-1.0, min(1.0, 2.0 * (qw * qy - qz * qx)))))
+                    rot_z.append(math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
+                else:
+                    pos_x.append(0.0)
+                    pos_y.append(0.0)
+                    pos_z.append(0.0)
+                    rot_x.append(0.0)
+                    rot_y.append(0.0)
+                    rot_z.append(0.0)
                 vel_x.append(rb._velocity._x)
                 vel_y.append(rb._velocity._y)
                 vel_z.append(rb._velocity._z)
@@ -686,12 +759,22 @@ class PhysicsPlugin(PluginBase):
             else:
                 self._read_results_python(shared, _cache)
 
-        # 3) Accumulate collision events from all pending results
-        events_accum = []
-        for r in pending_results:
-            events_accum.extend(r.get("collision_events", []))
+        if not self._has_collision_listeners(scene):
+            for r in pending_results:
+                if r.get("collision_events"):
+                    self._prev_frame_contacts.clear()
+                    break
+            events_accum = []
+        else:
+            events_accum = []
+            for r in pending_results:
+                ev = r.get("collision_events", [])
+                if ev:
+                    if len(events_accum) + len(ev) > 2048:
+                        events_accum.extend(ev[: max(0, 2048 - len(events_accum))])
+                    else:
+                        events_accum.extend(ev)
 
-        # 4) Write input data to shared memory
         _write = _COMPILED_SYNC_WRITE
         if _write is not None:
             max_slot = _write(shared, _cache)
@@ -699,7 +782,8 @@ class PhysicsPlugin(PluginBase):
             max_slot = self._write_inputs_python(shared, _cache)
         shared.set_num_entities(max_slot + 1 if max_slot >= 0 else 0)
 
-        proc.send({"type": "step", "dt": dt})
+        need_coll = self._has_collision_listeners(scene)
+        proc.send({"type": "step", "dt": dt, "need_collisions": need_coll})
         return events_accum
 
     def step(self, dt: float):
@@ -730,32 +814,66 @@ class PhysicsPlugin(PluginBase):
                 self._process_collisions(scene, events)
         prof.stop("physics_collect_results")
 
+    def _has_collision_listeners(self, scene) -> bool:
+        if scene is None:
+            return False
+        sig = (len(scene._entities), sum(len(e._components) for e in scene._entities.values()))
+        if sig != self._collision_listener_sig:
+            self._collision_listener_sig = sig
+            self._collision_cache_valid = False
+        if self._collision_cache_valid:
+            return self._has_collision_cache
+        self._collision_cache_valid = True
+        self._has_collision_cache = False
+        for ent in scene._entities.values():
+            for comp in ent._components.values():
+                if type(comp).__name__ == "ScriptComponent":
+                    inst = getattr(comp, "_py_instance", None)
+                    if inst is None:
+                        continue
+                    if hasattr(inst, "on_collision_enter") or hasattr(inst, "on_collision_stay") or hasattr(inst, "on_collision_exit"):
+                        self._has_collision_cache = True
+                        return True
+                elif hasattr(comp, "on_collision_enter"):
+                    self._has_collision_cache = True
+                    return True
+        return False
+
     def _process_collisions(self, scene, events: list):
         if not events:
             return
+        if len(events) > 2048:
+            events = events[:2048]
         entities = scene._entities
         current: set = set()
         forces: dict = {}
         for ev in events:
             ea, eb = ev.get("entity_a", ""), ev.get("entity_b", "")
             if ea and eb:
-                pair = frozenset((ea, eb))
-                current.add(pair)
-                force = float(ev.get("force", 0.0) or 0.0)
-                forces[pair] = max(forces.get(pair, 0.0), force)
-        entered = current - self._prev_frame_contacts
-        exited = self._prev_frame_contacts - current
-        stayed = current & self._prev_frame_contacts
+                if ea > eb:
+                    ea, eb = eb, ea
+                pair = (ea, eb)
+                if pair not in current:
+                    current.add(pair)
+                    forces[pair] = float(ev.get("force", 0.0) or 0.0)
+                else:
+                    f = float(ev.get("force", 0.0) or 0.0)
+                    if f > forces[pair]:
+                        forces[pair] = f
+        prev = self._prev_frame_contacts
+        entered = current - prev
+        exited = prev - current
+        stayed = current & prev
         for pair in entered:
-            e0, e1 = tuple(pair)
+            e0, e1 = pair
             self._dispatch_collision(entities, e0, e1, "on_collision_enter", forces.get(pair, 0.0))
             self._dispatch_collision(entities, e1, e0, "on_collision_enter", forces.get(pair, 0.0))
         for pair in exited:
-            e0, e1 = tuple(pair)
+            e0, e1 = pair
             self._dispatch_collision(entities, e0, e1, "on_collision_exit", forces.get(pair, 0.0))
             self._dispatch_collision(entities, e1, e0, "on_collision_exit", forces.get(pair, 0.0))
         for pair in stayed:
-            e0, e1 = tuple(pair)
+            e0, e1 = pair
             self._dispatch_collision(entities, e0, e1, "on_collision_stay", forces.get(pair, 0.0))
             self._dispatch_collision(entities, e1, e0, "on_collision_stay", forces.get(pair, 0.0))
         self._prev_frame_contacts = current

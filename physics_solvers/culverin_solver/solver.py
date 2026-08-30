@@ -193,7 +193,7 @@ class CulverinSolver(IPhysicsSolver):
             self._max_physics_jobs = opts.get("culverin_max_physics_jobs", 0)
             self._max_physics_barriers = opts.get("culverin_max_physics_barriers", 0)
             self._enable_ccd = opts.get("culverin_enable_ccd", False)
-            self._enable_sleeping = opts.get("culverin_enable_sleeping", False)
+            self._enable_sleeping = opts.get("culverin_enable_sleeping", True)
 
             if self._num_threads == 0:
                 self._max_physics_jobs = 0

@@ -102,7 +102,7 @@ class PhysicsProcess:
                 return r
             if time.monotonic() >= deadline:
                 return None
-            time.sleep(0.0005)
+            time.sleep(0.001)
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.is_alive()
@@ -172,7 +172,7 @@ def _physics_loop(
     running = True
     while running:
         try:
-            cmd = cmd_queue.get(timeout=0.004)
+            cmd = cmd_queue.get(timeout=0.05)
         except queue.Empty:
             continue
         except (EOFError, OSError):
@@ -182,6 +182,18 @@ def _physics_loop(
 
         try:
             if t == "step":
+                dt = float(cmd.get("dt", 0.02))
+                while True:
+                    try:
+                        nxt = cmd_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if nxt.get("type") == "step":
+                        dt += float(nxt.get("dt", 0.02))
+                    else:
+                        cmd_queue.put(nxt)
+                        break
+                cmd["dt"] = dt
                 _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body)
 
             elif t == "load_bodies":
@@ -273,73 +285,81 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
     dt = cmd["dt"]
     num = shared.get_num_entities()
     result_ver = shared.get_result_version()
-
+    flags_arr = shared._flags_nd
+    edata = shared._edata_nd
+    fdata = shared._fdata_nd
+    rdata = shared._rdata_nd
     for slot in range(num):
-        flags = shared.get_flags(slot)
-        if not (flags & 1):
+        fl = int(flags_arr[slot])
+        if not (fl & 1):
             continue
         bid = _slot_to_body.get(slot, -1)
         if bid < 0:
             continue
-
-        is_kinematic = bool(flags & 4)
-        if is_kinematic:
-            pos, rot, _, _ = shared.read_entity_data(slot)
+        if fl & 4:
+            pos = (float(edata[slot, 0]), float(edata[slot, 1]), float(edata[slot, 2]))
+            rot = (float(edata[slot, 3]), float(edata[slot, 4]), float(edata[slot, 5]))
             solver.set_body_transform(bid, pos, rot)
         else:
-            if flags & 2:
+            if fl & 2:
                 try:
                     solver.activate(bid)
                 except Exception:
                     pass
-                _, _, vel, ang_vel = shared.read_entity_data(slot)
+                vel = (float(edata[slot, 6]), float(edata[slot, 7]), float(edata[slot, 8]))
+                ang_vel = (float(edata[slot, 9]), float(edata[slot, 10]), float(edata[slot, 11]))
                 solver.set_velocities(bid, linear=vel, angular=ang_vel)
-                shared.set_dirty(slot, False)
-            force, torque = shared.read_force_data(slot)
-            if force[0] or force[1] or force[2]:
-                solver.apply_force(bid, force)
-            if torque[0] or torque[1] or torque[2]:
-                solver.apply_torque(bid, torque)
+                flags_arr[slot] = fl & 0xFD
+            fx = float(fdata[slot, 0]); fy = float(fdata[slot, 1]); fz = float(fdata[slot, 2])
+            if fx or fy or fz:
+                solver.apply_force(bid, (fx, fy, fz))
+            tx = float(fdata[slot, 3]); ty = float(fdata[slot, 4]); tz = float(fdata[slot, 5])
+            if tx or ty or tz:
+                solver.apply_torque(bid, (tx, ty, tz))
 
     solver.step_simulation(dt)
 
     for slot in range(num):
-        flags = shared.get_flags(slot)
-        if not (flags & 1):
+        fl = int(flags_arr[slot])
+        if not (fl & 1):
             continue
         bid = _slot_to_body.get(slot, -1)
         if bid < 0:
             continue
-        if flags & 4:
+        if fl & 4:
             continue
-
-        is_2d = bool(flags & 8)
-        if is_2d:
+        if fl & 8:
             vel, ang_vel = solver.get_velocities(bid)
             if vel[0] or vel[1] or vel[2]:
                 solver.set_velocities(bid, linear=(vel[0], vel[1], 0.0))
             if ang_vel[0] or ang_vel[1] or ang_vel[2]:
                 solver.set_velocities(bid, angular=(0.0, 0.0, ang_vel[2]))
-
         pos, rot = solver.get_body_transform(bid)
         vel, ang_vel = solver.get_velocities(bid)
-        shared.write_result(slot, pos, rot, vel, ang_vel)
+        rdata[slot, 0] = pos[0]; rdata[slot, 1] = pos[1]; rdata[slot, 2] = pos[2]
+        rdata[slot, 3] = rot[0]; rdata[slot, 4] = rot[1]; rdata[slot, 5] = rot[2]
+        rdata[slot, 6] = vel[0]; rdata[slot, 7] = vel[1]; rdata[slot, 8] = vel[2]
+        rdata[slot, 9] = ang_vel[0]; rdata[slot, 10] = ang_vel[1]; rdata[slot, 11] = ang_vel[2]
 
     shared.set_result_version(result_ver + 1)
 
-    raw_events = solver.get_collision_events() if hasattr(solver, 'get_collision_events') else []
-    events = []
-    for ev in raw_events:
-        ba, bb = ev.get("body_a", -1), ev.get("body_b", -1)
-        events.append({
-            "body_a": ba,
-            "body_b": bb,
-            "entity_a": physics_scene._body_to_entity.get(ba, ""),
-            "entity_b": physics_scene._body_to_entity.get(bb, ""),
-            "position": ev.get("position", (0, 0, 0)),
-            "normal": ev.get("normal", (0, 0, 0)),
-            "distance": ev.get("distance", 0.0),
-            "force": ev.get("force", 0.0),
-        })
+    need_coll = bool(cmd.get("need_collisions", True))
+    if need_coll:
+        raw_events = solver.get_collision_events() if hasattr(solver, 'get_collision_events') else []
+        events = []
+        for ev in raw_events:
+            ba, bb = ev.get("body_a", -1), ev.get("body_b", -1)
+            events.append({
+                "body_a": ba,
+                "body_b": bb,
+                "entity_a": physics_scene._body_to_entity.get(ba, ""),
+                "entity_b": physics_scene._body_to_entity.get(bb, ""),
+                "position": ev.get("position", (0, 0, 0)),
+                "normal": ev.get("normal", (0, 0, 0)),
+                "distance": ev.get("distance", 0.0),
+                "force": ev.get("force", 0.0),
+            })
+    else:
+        events = []
 
     result_queue.put({"type": "step_result", "collision_events": events, "version": result_ver + 1})

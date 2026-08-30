@@ -358,7 +358,7 @@ def get_project_config(project_path: str) -> Config:
                 "culverin_num_threads": 0,
                 "culverin_penetration_slop": 0.02,
                 "culverin_enable_ccd": False,
-                "culverin_enable_sleeping": False,
+                "culverin_enable_sleeping": True,
                 "layer_names": ["Default","TransparentFX","Ignore Raycast","Water","UI","Player","Enemy","Projectile","Trigger","Ground","Layer10","Layer11","Layer12","Layer13","Layer14","Layer15"],
                 "collision_matrix": [65535,65535,0,65535,16,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535]
             },

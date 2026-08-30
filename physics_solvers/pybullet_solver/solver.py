@@ -140,7 +140,11 @@ class PyBulletSolver(IPhysicsSolver):
 
             try:
                 p.setPhysicsEngineParameter(
-                    enableSleeping=0,
+                    enableSleeping=1 if self._enable_sleeping else 0,
+                    physicsClientId=self._client,
+                )
+                p.setPhysicsEngineParameter(
+                    enableFileCaching=0,
                     physicsClientId=self._client,
                 )
             except Exception:
