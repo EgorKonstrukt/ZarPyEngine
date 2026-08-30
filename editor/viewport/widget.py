@@ -296,21 +296,28 @@ class SceneViewport(QOpenGLWidget):
             self._toolbar.setVisible(want)
 
     def _apply_config(self):
-        if not self._vsync_enabled:
-            self._render_timer.start(1)
-        else:
+        if self._vsync_enabled:
             self._render_timer.stop()
+        else:
+            self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
+            tgt = int(self._target_fps) if self._target_fps else 0
+            if tgt <= 0:
+                self._render_timer.setInterval(0)
+            elif tgt == 60:
+                self._render_timer.setInterval(0)
+            else:
+                tgt = max(1, min(360, tgt))
+                self._render_timer.setInterval(max(1, int(1000.0 / tgt)))
+            if self.isVisible():
+                self._render_timer.start()
+
 
     def _on_overlay_config_changed(self, key: str, value):
         pass
 
     def _on_render_tick(self):
-        if getattr(self, '_in_render_tick', False):
-            return
         if not self._vsync_enabled and self.isVisible():
-            self._in_render_tick = True
-            self.repaint()
-            self._in_render_tick = False
+            self.update()
 
     def _toggle_stats(self, checked: bool):
         self._stats_enabled = checked
@@ -446,8 +453,7 @@ class SceneViewport(QOpenGLWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self._vsync_enabled:
-            self._render_timer.start(1)
+        self._apply_config()
         self._collab_timer.start()
         self.update()
 
@@ -604,8 +610,8 @@ class SceneViewport(QOpenGLWidget):
             pass
 
     def initializeGL(self):
-        gc.disable()
         try:
+            gc.enable()
             self._ctx = moderngl.create_context(standalone=False)
             try:
                 self._ctx.gc_mode = "context_gc"
@@ -691,6 +697,8 @@ class SceneViewport(QOpenGLWidget):
         _p0 = time.perf_counter()
         _paint_gap = _p0 - getattr(self, '_last_paint_enter', _p0)
         self._last_paint_enter = _p0
+        if _paint_gap > 0.05:
+            _paint_gap = 0.05
         self._paint_dt = _paint_gap
         eng = self._engine
         prof = eng._profiler
@@ -715,11 +723,17 @@ class SceneViewport(QOpenGLWidget):
                     step = max(2, int(get_global_config().get("rendering.play_viewport_throttle_step", 2)))
                     self._throttle_count = getattr(self, '_throttle_count', 0) + 1
                     if self._throttle_count % step:
+                        if self._vsync_enabled and self.isVisible():
+                            self.update()
                         return
         eng = self._engine
         if not self._in_update:
             dt = now - self._last_frame_time
             self._last_frame_time = now
+            if dt > 0.05:
+                dt = 0.05
+            elif dt < 0.0:
+                dt = 0.0
             self._last_dt = dt
             if self._im:
                 self._im.new_frame()
@@ -798,21 +812,32 @@ class SceneViewport(QOpenGLWidget):
                 t1 = time.perf_counter()
                 if in_frame:
                     prof.start("gizmos")
-                with eng._scene_lock:
-                    if self._gizmo_visible:
-                        render_component_gizmos(self, vp_mat)
-                    render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
-                    if not eng.play_mode:
-                        try:
-                            render_component_icons_gl(self)
-                        except Exception:
-                            pass
-                    self._render_api_gizmos()
-                    if not eng.play_mode:
-                        try:
-                            render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
-                        except Exception:
-                            pass
+                _sel = list(self._selected_entities)
+                _gizmo_snapshot = None
+                _acquired = eng._scene_lock.acquire(timeout=0.004)
+                try:
+                    if _acquired:
+                        if self._gizmo_visible:
+                            render_component_gizmos(self, vp_mat)
+                        render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
+                        if not eng.play_mode:
+                            try:
+                                render_component_icons_gl(self)
+                            except Exception:
+                                pass
+                        self._render_api_gizmos()
+                        if not eng.play_mode:
+                            try:
+                                render_remote_collaborator_gizmos(self, vp_mat, cam_pos, fw, fh)
+                            except Exception:
+                                pass
+                    else:
+                        if self._gizmo_visible:
+                            render_component_gizmos(self, vp_mat)
+                        render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
+                finally:
+                    if _acquired:
+                        eng._scene_lock.release()
                 if in_frame:
                     prof.stop("gizmos")
                 if self._debug_lines:
@@ -859,12 +884,7 @@ class SceneViewport(QOpenGLWidget):
         self._last_paint_full_ms = _paint_dur
         eng.set_profiler_data("paint_full_ms", _paint_dur)
         eng.set_profiler_data("paint_gap_ms", _paint_gap * 1000.0)
-        self._gc_frame_counter += 1
-        if self._gc_frame_counter >= 5000:
-            self._gc_frame_counter = 0
-            import gc
-            gc.collect(generation=0)
-        if self._vsync_enabled:
+        if self._vsync_enabled and self.isVisible():
             self.update()
 
     def update_scene(self):

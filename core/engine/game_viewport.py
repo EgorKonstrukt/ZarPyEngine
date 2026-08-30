@@ -87,13 +87,19 @@ class GameViewport(QOpenGLWidget):
     def _apply_config(self):
         if not self._vsync_enabled:
             self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-            self._timer.setInterval(1)
+            tgt = int(self._target_fps) if self._target_fps else 0
+            if tgt <= 0 or tgt == 60:
+                self._timer.setInterval(0)
+            else:
+                tgt = max(1, min(360, tgt))
+                self._timer.setInterval(max(1, int(1000.0 / tgt)))
         else:
-            fps = self._target_fps
-            if fps <= 0 or fps > 240:
-                fps = 240
-            self._timer.setInterval(max(1, int(1000.0 / fps)))
-        self._timer.start()
+            self._timer.setTimerType(Qt.TimerType.CoarseTimer)
+            tgt = int(self._target_fps) if self._target_fps else 60
+            tgt = max(1, min(360, tgt))
+            self._timer.setInterval(max(1, int(1000.0 / tgt)))
+        if self.isVisible() or not self._vsync_enabled:
+            self._timer.start()
 
     def initializeGL(self):
         try:
@@ -129,6 +135,10 @@ class GameViewport(QOpenGLWidget):
         now = time.perf_counter()
         if self._last_paint_time > 0:
             self._paint_dt = now - self._last_paint_time
+            if self._paint_dt > 0.05:
+                self._paint_dt = 0.05
+            elif self._paint_dt < 0.0:
+                self._paint_dt = 0.0
             self._fps_accum += self._paint_dt
             self._fps_frames += 1
             if self._fps_accum >= 0.5:

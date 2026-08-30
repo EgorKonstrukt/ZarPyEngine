@@ -31,8 +31,8 @@ class _HwMonitorWorker(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._timer = QTimer(self)
-        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._timer.setInterval(500)
+        self._timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._timer.setInterval(1000)
         self._timer.timeout.connect(self._poll)
 
     def start(self):

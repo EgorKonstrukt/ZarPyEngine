@@ -177,11 +177,33 @@ class ShadowRenderer:
             self._area_shadow_resolution = area_shadow_resolution
             changed = True
         if changed:
-            self._create_csm_resources()
-            self._create_point_shadow_resources()
-            self._create_spot_shadow_resources()
+            try:
+                self._create_csm_resources()
+            except Exception:
+                pass
+            try:
+                self._create_point_shadow_resources()
+            except Exception:
+                pass
+            try:
+                self._create_spot_shadow_resources()
+            except Exception:
+                pass
 
+    def _ensure_context(self):
+        try:
+            from core.engine.engine import Engine
+            eng = Engine.instance()
+            vp = getattr(eng, "viewport", None) if eng else None
+            if vp is not None and hasattr(vp, "makeCurrent"):
+                try:
+                    vp.makeCurrent()
+                except Exception:
+                    pass
+        except Exception:
+            pass
     def _create_csm_resources(self):
+        self._ensure_context()
         for sm in self._shadow_maps:
             try:
                 sm.release()
@@ -198,14 +220,30 @@ class ShadowRenderer:
         for i in range(self._cascade_count):
             res = self._cascade_resolutions[i] if i < len(self._cascade_resolutions) else base
             res = min(res, base)
-            tex = self._ctx.depth_texture((res, res))
+            try:
+                tex = self._ctx.depth_texture((res, res))
+            except Exception:
+                try:
+                    import time
+                    time.sleep(0.01)
+                    tex = self._ctx.depth_texture((res, res))
+                except Exception:
+                    continue
             tex.repeat_x = False
             tex.repeat_y = False
-            fbo = self._ctx.framebuffer(depth_attachment=tex)
+            try:
+                fbo = self._ctx.framebuffer(depth_attachment=tex)
+            except Exception:
+                try:
+                    tex.release()
+                except Exception:
+                    pass
+                continue
             self._shadow_maps.append(tex)
             self._shadow_fbos.append(fbo)
 
     def _create_point_shadow_resources(self):
+        self._ensure_context()
         for sm in self._point_shadow_maps:
             try:
                 sm.release()
@@ -220,14 +258,25 @@ class ShadowRenderer:
         self._point_shadow_fbos = []
         res = self._point_shadow_resolution
         for _ in range(MAX_POINT_SHADOWS * 6):
-            tex = self._ctx.depth_texture((res, res))
+            try:
+                tex = self._ctx.depth_texture((res, res))
+            except Exception:
+                continue
             tex.repeat_x = False
             tex.repeat_y = False
-            fbo = self._ctx.framebuffer(depth_attachment=tex)
+            try:
+                fbo = self._ctx.framebuffer(depth_attachment=tex)
+            except Exception:
+                try:
+                    tex.release()
+                except Exception:
+                    pass
+                continue
             self._point_shadow_maps.append(tex)
             self._point_shadow_fbos.append(fbo)
 
     def _create_spot_shadow_resources(self):
+        self._ensure_context()
         for sm in self._spot_shadow_maps:
             try:
                 sm.release()
@@ -242,29 +291,60 @@ class ShadowRenderer:
         self._spot_shadow_fbos = []
         res = self._shadow_resolution
         for _ in range(MAX_SPOT_SHADOWS):
-            tex = self._ctx.depth_texture((res, res))
+            try:
+                tex = self._ctx.depth_texture((res, res))
+            except Exception:
+                continue
             tex.repeat_x = False
             tex.repeat_y = False
-            fbo = self._ctx.framebuffer(depth_attachment=tex)
+            try:
+                fbo = self._ctx.framebuffer(depth_attachment=tex)
+            except Exception:
+                try:
+                    tex.release()
+                except Exception:
+                    pass
+                continue
             self._spot_shadow_maps.append(tex)
             self._spot_shadow_fbos.append(fbo)
 
     def _create_projector_shadow_resources(self):
+        self._ensure_context()
         res = self._shadow_resolution
         for _ in range(2):
-            tex = self._ctx.depth_texture((res, res))
+            try:
+                tex = self._ctx.depth_texture((res, res))
+            except Exception:
+                continue
             tex.repeat_x = False
             tex.repeat_y = False
-            self._projector_shadow_maps.append(tex)
-            self._projector_shadow_fbos.append(self._ctx.framebuffer(depth_attachment=tex))
+            try:
+                self._projector_shadow_maps.append(tex)
+                self._projector_shadow_fbos.append(self._ctx.framebuffer(depth_attachment=tex))
+            except Exception:
+                try:
+                    tex.release()
+                except Exception:
+                    pass
+                continue
 
     def _create_area_shadow_resources(self):
+        self._ensure_context()
         res = self._area_shadow_resolution
-        tex = self._ctx.depth_texture((res, res))
+        try:
+            tex = self._ctx.depth_texture((res, res))
+        except Exception:
+            return
         tex.repeat_x = False
         tex.repeat_y = False
-        self._area_shadow_map = tex
-        self._area_shadow_fbo = self._ctx.framebuffer(depth_attachment=self._area_shadow_map)
+        try:
+            self._area_shadow_map = tex
+            self._area_shadow_fbo = self._ctx.framebuffer(depth_attachment=self._area_shadow_map)
+        except Exception:
+            try:
+                tex.release()
+            except Exception:
+                pass
 
     def _build_renderable_shadow(self, scene) -> list[tuple[MeshData, Mat4]]:
         result = []
@@ -994,8 +1074,7 @@ class ShadowRenderer:
 
     def set_uniforms(self, prog):
         has_csm = self._cascade_splits[self._cascade_count - 1] > 0.0
-        if has_csm and "u_cascade_count" in prog:
-            prog["u_cascade_count"].value = self._cascade_count
+        if has_csm and "u_cascade_count" in prog and len(self._shadow_maps) >= self._cascade_count:
             if "u_light_space_matrices" in prog:
                 cm = self._cascade_matrices_buf
                 for ci in range(self._cascade_count):

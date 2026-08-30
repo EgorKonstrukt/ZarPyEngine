@@ -927,11 +927,23 @@ def on_global_config_changed(mw, key: str, value):
         f.setPointSizeF(base_size * value / 100.0)
         QApplication.setFont(f)
         return
-    mw._viewport.load_config(cfg)
-    mw._viewport.camera.load_config(cfg)
-    mw._viewport.gizmo.load_config(cfg)
+    try:
+        mw._viewport.load_config(cfg)
+    except Exception:
+        pass
+    try:
+        mw._viewport.camera.load_config(cfg)
+    except Exception:
+        pass
+    try:
+        mw._viewport.gizmo.load_config(cfg)
+    except Exception:
+        pass
     if mw._viewport.renderer:
-        mw._viewport.renderer.load_config(cfg)
+        try:
+            mw._viewport.renderer.load_config(cfg)
+        except Exception:
+            pass
     mw._hierarchy.load_config(cfg)
     mw._inspector.load_config(cfg)
     mw._console.load_config(cfg)
