@@ -43,6 +43,8 @@ class Transform(Component):
             scene = ent._scene
             if scene is not None:
                 scene._dirty_roots.add(self)
+                scene._spatial_dirty_entities.add(ent._id)
+                scene._spatial_dirty = True
             children = ent._children
             for child in children:
                 tt = child._transform_type

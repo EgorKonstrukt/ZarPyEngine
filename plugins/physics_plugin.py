@@ -549,6 +549,8 @@ class PhysicsPlugin(PluginBase):
                 scn = entity._scene
                 if scn is not None:
                     scn._dirty_roots.add(tr)
+                    scn._spatial_dirty_entities.add(entity.id)
+                    scn._spatial_dirty = True
                 if not getattr(rb2d, "_velocity_dirty", False):
                     rb2d._velocity._x = float(_rdata[slot, 7])
                     rb2d._velocity._y = float(_rdata[slot, 8])
@@ -584,6 +586,8 @@ class PhysicsPlugin(PluginBase):
                 scn = entity._scene
                 if scn is not None:
                     scn._dirty_roots.add(tr)
+                    scn._spatial_dirty_entities.add(entity.id)
+                    scn._spatial_dirty = True
                 if not getattr(rb, "_velocity_dirty", False):
                     rb._velocity._x = float(_rdata[slot, 7])
                     rb._velocity._y = float(_rdata[slot, 8])

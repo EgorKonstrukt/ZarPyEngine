@@ -42,22 +42,28 @@ class GameWorker(QThread):
         while not self._stop_event.is_set():
             now = time.perf_counter()
 
-            # Stage 1: flush transforms, calc dt
-            with engine._scene_lock:
-                dt = engine.tick_begin()
-            # Lock released вЂ” renderer can read transforms
+            if engine._scene_lock.acquire(blocking=False):
+                try:
+                    dt = engine.tick_begin()
+                finally:
+                    engine._scene_lock.release()
+            else:
+                dt = engine._fixed_dt
 
-            # Stage 2: fixed update steps (physics, at capped rate)
             for _ in range(_MAX_FIXED_STEPS):
-                with engine._scene_lock:
+                if not engine._scene_lock.acquire(blocking=False):
+                    break
+                try:
                     if not engine.tick_fixed_step():
                         break
-                # Lock released between each fixed step
-            # Lock released вЂ” renderer can read physics results
+                finally:
+                    engine._scene_lock.release()
 
-            # Stage 3: script update (at full update_rate)
-            with engine._scene_lock:
-                engine.tick_update(dt)
+            if engine._scene_lock.acquire(blocking=False):
+                try:
+                    engine.tick_update(dt)
+                finally:
+                    engine._scene_lock.release()
             # Lock released вЂ” renderer can read script results
 
             next_update += update_dt

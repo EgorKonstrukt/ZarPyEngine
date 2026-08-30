@@ -170,6 +170,8 @@ def sync_read_to_ecs(object shared, list cache):
             scn = entity._scene
             if scn is not None:
                 scn._dirty_roots.add(tr)
+                scn._spatial_dirty_entities.add(entity.id)
+                scn._spatial_dirty = True
             if not rb2d._velocity_dirty:
                 vel2 = rb2d._velocity
                 vel2._x = rdata[slot, 7]
@@ -204,6 +206,8 @@ def sync_read_to_ecs(object shared, list cache):
             scn = entity._scene
             if scn is not None:
                 scn._dirty_roots.add(tr)
+                scn._spatial_dirty_entities.add(entity.id)
+                scn._spatial_dirty = True
             if not rb._velocity_dirty:
                 vel3 = rb._velocity
                 vel3._x = rdata[slot, 7]

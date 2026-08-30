@@ -11,6 +11,14 @@ from dataclasses import dataclass, field
 from typing import Any, Type, TypeVar, Optional
 import numpy as np
 from core.spatial import Octree, AABB
+try:
+    from core._constraint_update import batch_update_constraints as _batch_constraints
+except ImportError:
+    _batch_constraints = None
+try:
+    from core._ik import batch_update_ik as _batch_ik
+except ImportError:
+    _batch_ik = None
 
 try:
     from core._scene_query import fast_get_entities_with_component as _fast_get
@@ -39,10 +47,32 @@ def _get_engine():
 class Component:
     _entity: Optional[Entity] = None
     _key: str = ""
-    enabled: bool = True
+    _enabled: bool = True
     _allow_multiple: bool = False
     _updates: bool = False
     _fixed_updates: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, v: bool):
+        if self._enabled == v:
+            return
+        self._enabled = bool(v)
+        ent = self._entity
+        if ent is not None and ent._scene is not None:
+            sc = ent._scene
+            sc._invalidate_update_cache()
+            if self._enabled:
+                if self._updates:
+                    sc._active_update_components.add(self)
+                if self._fixed_updates:
+                    sc._active_fixed_components.add(self)
+            else:
+                sc._active_update_components.discard(self)
+                sc._active_fixed_components.discard(self)
     _gizmo_icon_color: tuple[int, int, int] = (140, 60, 200)
     _gizmo_icon_label: str = "?"
     _gizmo_icon_path: Optional[str] = None
@@ -81,6 +111,10 @@ class Component:
         if ent is None:
             self._transform = None
             return None
+        tr = ent._transform
+        if tr is not None:
+            self._transform = tr
+            return tr
         t_type = ent._transform_type
         if t_type is None:
             t_type = ent._get_transform_type()
@@ -176,7 +210,7 @@ class Component:
     @classmethod
     def deserialize(cls, data: dict) -> Component:
         inst = cls()
-        inst.enabled = data.get("enabled", True)
+        inst._enabled = bool(data.get("enabled", True))
         inst._entity = None
         return inst
 
@@ -238,7 +272,7 @@ class Entity:
         '_update_list', '_fixed_update_list',
         '_active', '_parent', '_children', '_tags', '_layer',
         '_scene', '_prefab_guid', '_prefab_source_id',
-        '_transform_type', '_embed_resources',
+        '_transform_type', '_transform', '_embed_resources',
     )
 
     def __init__(self, name: str = "Entity", eid: Optional[str] = None,
@@ -259,6 +293,7 @@ class Entity:
         self._prefab_guid: Optional[str] = prefab_guid
         self._prefab_source_id: Optional[str] = None
         self._transform_type: Optional[type] = None
+        self._transform: Optional[Component] = None
         self._embed_resources: bool = False
 
     def _get_transform_type(self):
@@ -276,17 +311,24 @@ class Entity:
 
     @property
     def transform(self):
+        tr = self._transform
+        if tr is not None:
+            return tr
         tt = self._transform_type
         if tt is not None:
             clist = self._type_map.get(tt)
             if clist:
+                self._transform = clist[0]
                 return clist[0]
         tm = self._type_map
         for t in tm:
             if t.__name__ == _TRANSFORM_NAME:
                 self._transform_type = t
                 clist = tm.get(t)
-                return clist[0] if clist else None
+                if clist:
+                    self._transform = clist[0]
+                    return clist[0]
+                return None
         return None
 
     @property
@@ -312,9 +354,14 @@ class Entity:
             if v:
                 sc._active_update_components.update(c for c in self._update_list if c.enabled)
                 sc._active_fixed_components.update(c for c in self._fixed_update_list if c.enabled)
+                sc._spatial_dirty = True
+                sc._spatial_dirty_entities.add(self._id)
             else:
                 sc._active_update_components.difference_update(self._update_list)
                 sc._active_fixed_components.difference_update(self._fixed_update_list)
+                sc._spatial.remove(self._id)
+                sc._spatial_dirty_entities.discard(self._id)
+                sc._spatial_known_entities.discard(self._id)
         cb = (lambda c: c.on_enable()) if v else (lambda c: c.on_disable())
         comps = self._components
         for c in comps.values():
@@ -442,6 +489,7 @@ class Entity:
             sc._invalidate_update_cache()
         if comp_type.__name__ == _TRANSFORM_NAME:
             self._transform_type = comp_type
+            self._transform = comp
             for c in comps.values():
                 c._transform = _UNSET
             if sc is not None and getattr(comp, "_dirty", False):
@@ -462,6 +510,7 @@ class Entity:
             self._type_name_map.pop(cls.__name__, None)
             if cls.__name__ == "Transform":
                 self._transform_type = None
+                self._transform = None
                 self._invalidate_transform_cache()
         sc = self._scene
         if comp._updates:
@@ -478,6 +527,7 @@ class Entity:
             base = cls.__name__
             if base == "Transform":
                 self._transform_type = None
+                self._transform = None
             idx = sc._component_indices.get(base)
             if idx:
                 idx.discard(self._id)
@@ -510,6 +560,7 @@ class Entity:
             self._type_name_map.pop(cls.__name__, None)
         if base == "Transform":
             self._transform_type = None
+            self._transform = None
             self._invalidate_transform_cache()
         if sc:
             idx = sc._component_indices.get(base)
@@ -532,6 +583,7 @@ class Entity:
                 self._type_name_map.pop(comp_type.__name__, None)
                 if comp_type.__name__ == "Transform":
                     self._transform_type = None
+                    self._transform = None
                     self._invalidate_transform_cache()
         sc = self._scene
         if comp._updates:
@@ -548,6 +600,7 @@ class Entity:
         if sc:
             if base == "Transform":
                 self._transform_type = None
+                self._transform = None
             idx = sc._component_indices.get(base)
             if idx:
                 idx.discard(self._id)
@@ -713,11 +766,17 @@ class Scene:
         self._fixed_list_cache: list[Component] = []
         self._update_cache_valid: bool = False
         self._fixed_cache_valid: bool = False
+        self._update_constraints_cache: list[Component] = []
+        self._update_iks_cache: list[Component] = []
+        self._update_others_cache: list[Component] = []
+        self._update_partition_valid: bool = False
         self._dirty_roots: set = set()
         self._depth_cache: dict[str, int] = {}
         self._component_entity_frame_cache: dict = {}
         self._spatial: Octree = Octree(world_size=1000.0)
         self._spatial_dirty: bool = True
+        self._spatial_dirty_entities: set[str] = set()
+        self._spatial_known_entities: set[str] = set()
         self._roots_cache: list[Entity] = []
         self._roots_cache_valid: bool = False
 
@@ -742,6 +801,7 @@ class Scene:
         self._entities_cache_valid = False
         self._roots_cache_valid = False
         self._spatial_dirty = True
+        self._spatial_dirty_entities.update(entities.keys())
         self._invalidate_update_cache()
         self._dirty = True
         self._render_version += 1
@@ -749,6 +809,7 @@ class Scene:
     def _invalidate_update_cache(self):
         self._update_cache_valid = False
         self._fixed_cache_valid = False
+        self._update_partition_valid = False
 
     def _get_update_list(self) -> list[Component]:
         if not self._update_cache_valid:
@@ -761,6 +822,32 @@ class Scene:
             self._fixed_list_cache = [c for c in self._active_fixed_components if c.enabled]
             self._fixed_cache_valid = True
         return self._fixed_list_cache
+
+    def _get_partitioned_update(self):
+        if self._update_partition_valid:
+            return self._update_constraints_cache, self._update_iks_cache, self._update_others_cache
+        lst = self._get_update_list()
+        CT = self._CONSTRAINT_TYPES
+        IK = self._IK_TYPES
+        cons = []
+        iks = []
+        others = []
+        ac = cons.append
+        ai = iks.append
+        ao = others.append
+        for c in lst:
+            tn = type(c).__name__
+            if tn in CT:
+                ac(c)
+            elif tn in IK:
+                ai(c)
+            else:
+                ao(c)
+        self._update_constraints_cache = cons
+        self._update_iks_cache = iks
+        self._update_others_cache = others
+        self._update_partition_valid = True
+        return cons, iks, others
 
     @property
     def _engine(self):
@@ -812,6 +899,28 @@ class Scene:
         dr = self._dirty_roots
         if not dr:
             return 0
+        needs_bfs = False
+        for root in dr:
+            ent = root._entity
+            if ent is None:
+                continue
+            if ent._parent is not None or ent._children:
+                needs_bfs = True
+                break
+        if not needs_bfs:
+            collected = [r for r in dr if r._dirty and r._entity is not None]
+            if not collected:
+                dr.clear()
+                return 0
+            try:
+                from core._ecs_batch import batch_update_flat
+                batch_update_flat(collected)
+            except ImportError:
+                from core.components.transform import Transform
+                Transform.batch_update_world_matrices(collected)
+            dr.clear()
+            self._depth_cache.clear()
+            return len(collected)
         collected = []
         visited = set()
         q = deque()
@@ -872,6 +981,7 @@ class Scene:
         self._entities_cache_valid = False
         self._roots_cache_valid = False
         self._spatial_dirty = True
+        self._spatial_dirty_entities.add(e.id)
         return e
 
     def add_entity(self, e: Entity):
@@ -901,11 +1011,16 @@ class Scene:
         self._entities_cache_valid = False
         self._roots_cache_valid = False
         self._spatial_dirty = True
+        self._spatial_dirty_entities.add(eid)
+        self._spatial_known_entities.discard(eid)
 
     def remove_entity(self, eid: str):
         e = self._entities.pop(eid, None)
         if not e:
             return
+        self._spatial.remove(eid)
+        self._spatial_dirty_entities.discard(eid)
+        self._spatial_known_entities.discard(eid)
         for child in list(e._children):
             self.remove_entity(child._id)
         auc = self._active_update_components
@@ -1050,56 +1165,77 @@ class Scene:
             cc[cache_tag] = result
         return result
 
+    def _insert_spatial_single(self, e):
+        from core.maths.math3d import Vec3
+        import numpy as np
+        from core.components.rendering.renderers.mesh_filter import MeshFilter
+        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+        tr = e.transform
+        if not tr:
+            return
+        mf = e.get_component(MeshFilter)
+        mr = e.get_component(MeshRenderer)
+        if mf and mr and mr.enabled:
+            try:
+                from core.engine.engine import Engine
+                eng = Engine.instance()
+                if eng:
+                    r = getattr(eng, '_renderer', None)
+                    if r is None:
+                        vp = getattr(eng, 'viewport', None)
+                        if vp:
+                            r = getattr(vp, '_renderer', None)
+                    if r:
+                        name = mf.mesh_name or "cube"
+                        mesh = r._meshes.get(name)
+                        if mesh is None and mf.mesh_path:
+                            mesh = r._meshes.get(mf.mesh_path)
+                        if mesh is not None and len(mesh.vertices) > 0:
+                            ax, ay, az = mesh.aabb_min
+                            bx, by, bz = mesh.aabb_max
+                            corners = np.array([
+                                [ax, ay, az, 1], [bx, ay, az, 1],
+                                [bx, by, az, 1], [ax, by, az, 1],
+                                [ax, ay, bz, 1], [bx, ay, bz, 1],
+                                [bx, by, bz, 1], [ax, by, bz, 1],
+                            ], dtype=np.float32)
+                            pts = corners @ tr.world_matrix._d
+                            bmin = pts[:, :3].min(axis=0)
+                            bmax = pts[:, :3].max(axis=0)
+                            aabb = AABB(Vec3(float(bmin[0]), float(bmin[1]), float(bmin[2])),
+                                        Vec3(float(bmax[0]), float(bmax[1]), float(bmax[2])))
+                            self._spatial.insert(e.id, aabb)
+                            return
+            except Exception:
+                pass
+        pos = tr.position
+        self._spatial.insert(e.id, AABB.from_center_size(pos, Vec3(5.0, 5.0, 5.0)))
+
     def rebuild_spatial(self):
+        if not self._spatial_dirty:
+            return
+        dirty = self._spatial_dirty_entities
+        if dirty and len(dirty) < len(self._entities) * 0.6:
+            for eid in list(dirty):
+                self._spatial.remove(eid)
+                e = self._entities.get(eid)
+                if e is None or not e.active:
+                    continue
+                self._insert_spatial_single(e)
+            dirty.clear()
+            if not dirty:
+                self._spatial_dirty = False
+            return
         from core.maths.math3d import Vec3
         import numpy as np
         self._spatial.clear()
-        from core.components.transform import Transform
-        from core.components.rendering.renderers.mesh_filter import MeshFilter
-        from core.components.rendering.renderers.mesh_renderer import MeshRenderer
+        self._spatial_known_entities.clear()
         for e in self._ensure_entities_cache():
             if not e.active:
                 continue
-            tr = e.transform
-            if not tr:
-                continue
-            mf = e.get_component(MeshFilter)
-            mr = e.get_component(MeshRenderer)
-            if mf and mr and mr.enabled:
-                try:
-                    from core.engine.engine import Engine
-                    eng = Engine.instance()
-                    if eng:
-                        r = getattr(eng, '_renderer', None)
-                        if r is None:
-                            vp = getattr(eng, 'viewport', None)
-                            if vp:
-                                r = getattr(vp, '_renderer', None)
-                        if r:
-                            name = mf.mesh_name or "cube"
-                            mesh = r._meshes.get(name)
-                            if mesh is None and mf.mesh_path:
-                                mesh = r._meshes.get(mf.mesh_path)
-                            if mesh is not None and len(mesh.vertices) > 0:
-                                ax, ay, az = mesh.aabb_min
-                                bx, by, bz = mesh.aabb_max
-                                corners = np.array([
-                                    [ax, ay, az, 1], [bx, ay, az, 1],
-                                    [bx, by, az, 1], [ax, by, az, 1],
-                                    [ax, ay, bz, 1], [bx, ay, bz, 1],
-                                    [bx, by, bz, 1], [ax, by, bz, 1],
-                                ], dtype=np.float32)
-                                pts = corners @ tr.world_matrix._d
-                                bmin = pts[:, :3].min(axis=0)
-                                bmax = pts[:, :3].max(axis=0)
-                                aabb = AABB(Vec3(float(bmin[0]), float(bmin[1]), float(bmin[2])),
-                                            Vec3(float(bmax[0]), float(bmax[1]), float(bmax[2])))
-                                self._spatial.insert(e.id, aabb)
-                                continue
-                except Exception:
-                    pass
-            pos = tr.position
-            self._spatial.insert(e.id, AABB.from_center_size(pos, Vec3(5.0, 5.0, 5.0)))
+            self._insert_spatial_single(e)
+            self._spatial_known_entities.add(e.id)
+        dirty.clear()
         self._spatial_dirty = False
 
     def spatial_query(self, aabb: AABB) -> list[str]:
@@ -1152,76 +1288,58 @@ class Scene:
             return
         prof.start("scene_update")
         log_error = None
-        update_list = self._get_update_list()
-        n = len(update_list)
-        if n == 0:
+        constraints, iks, others = self._get_partitioned_update()
+        if not constraints and not iks and not others:
             prof.stop("scene_update")
             return
-        CT = self._CONSTRAINT_TYPES
-        IK = self._IK_TYPES
-        try:
-            from core._constraint_update import batch_update_constraints
-            constraints = []
-            iks = []
-            others = []
-            append_c = constraints.append
-            append_o = others.append
-            append_ik = iks.append
-            for c in update_list:
-                tn = type(c).__name__
-                if tn in CT:
-                    append_c(c)
-                elif tn in IK:
-                    append_ik(c)
-                else:
-                    append_o(c)
-            if constraints:
+        if constraints:
+            if _batch_constraints is not None:
                 try:
-                    batch_update_constraints(constraints, dt)
+                    _batch_constraints(constraints, dt)
                 except Exception as ex:
                     if log_error is None:
                         from core.foundation.logger import Logger
                         log_error = Logger.error
                     log_error(f"Constraint batch update error: {ex}")
-            for c in others:
+            else:
+                for c in constraints:
+                    try:
+                        c.on_update(dt)
+                    except Exception as ex:
+                        if log_error is None:
+                            from core.foundation.logger import Logger
+                            log_error = Logger.error
+                        ent = c._entity
+                        log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+        for c in others:
+            try:
+                c.on_update(dt)
+            except Exception as ex:
+                if log_error is None:
+                    from core.foundation.logger import Logger
+                    log_error = Logger.error
+                ent = c._entity
+                log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
+        if iks:
+            if _batch_ik is not None:
                 try:
-                    c.on_update(dt)
+                    _batch_ik(iks, dt)
                 except Exception as ex:
                     if log_error is None:
                         from core.foundation.logger import Logger
                         log_error = Logger.error
-                    ent = c._entity
-                    log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
-            if iks:
-                # IK runs AFTER pose application (Animation / Animator).
-                try:
-                    from core._ik import batch_update_ik
-                    batch_update_ik(iks, dt)
-                except ImportError:
+                    log_error(f"IK batch update error: {ex}")
                     for c in iks:
                         try:
                             c.on_update(dt)
-                        except Exception as ex:
+                        except Exception as ex2:
                             if log_error is None:
                                 from core.foundation.logger import Logger
                                 log_error = Logger.error
                             ent = c._entity
-                            log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
-        except ImportError:
-            for c in update_list:
-                try:
-                    if type(c).__name__ in IK:
-                        # still let the component solve: it batches itself
-                        continue
-                    c.on_update(dt)
-                except Exception as ex:
-                    if log_error is None:
-                        from core.foundation.logger import Logger
-                        log_error = Logger.error
-                    ent = c._entity
-                    log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex}")
-            for c in update_list:
-                if type(c).__name__ in IK:
+                            log_error(f"Update error in {ent._name if ent else '?'}/{type(c).__name__}: {ex2}")
+            else:
+                for c in iks:
                     try:
                         c.on_update(dt)
                     except Exception as ex:

@@ -256,6 +256,29 @@ def write_world_matrices(list transforms, np.ndarray[DTYPE_t, ndim=3] world_mats
         t._world_target = None
         t._dirty = False
 
+def batch_update_flat(list transforms):
+    cdef int n = len(transforms)
+    if n == 0:
+        return
+    cdef int i, j, k
+    cdef object t
+    cdef Vec3 p, s
+    cdef Quat q
+    cdef DTYPE_t local[4][4]
+    cdef np.ndarray[DTYPE_t, ndim=2] wmd
+    for i in range(n):
+        t = transforms[i]
+        p = t._local_pos
+        q = t._local_rot
+        s = t._local_scale
+        _local_matrix(p._x, p._y, p._z, q._x, q._y, q._z, q._w, s._x, s._y, s._z, local)
+        wmd = t._world_matrix._d
+        for j in range(4):
+            for k in range(4):
+                wmd[j, k] = local[j][k]
+        t._world_target = None
+        t._dirty = False
+
 def collect_dirty_transforms(list all_dirty):
     cdef int n = len(all_dirty)
     if n == 0:
