@@ -79,13 +79,15 @@ def _make_shadow_instanced_vao(ctx: moderngl.Context, prog: moderngl.Program,
 class ShadowRenderer:
     def __init__(self, ctx: moderngl.Context, shadow_prog: moderngl.Program,
                   shadow_resolution: int = 512, shadow_distance: float = 50.0,
-                  area_shadow_resolution: int = 512, cascade_count: int = 2):
+                  area_shadow_resolution: int = 512, cascade_count: int = 2,
+                  cascade_splits: list = None):
         self._ctx = ctx
         self._prog = shadow_prog
         self._shadow_resolution = shadow_resolution
         self._area_shadow_resolution = area_shadow_resolution
         self._shadow_distance = shadow_distance
         self._cascade_count = max(1, min(cascade_count, 4))
+        self._cascade_splits_norm: list[float] | None = cascade_splits
         self._shadow_maps: list[Any] = []
         self._shadow_fbos: list[Any] = []
         self._cascade_splits: list[float] = [0.0] * 4
@@ -159,7 +161,8 @@ class ShadowRenderer:
         self._create_csm_resources()
 
     def update_settings(self, shadow_resolution: int = None, shadow_distance: float = None,
-                        cascade_count: int = None, area_shadow_resolution: int = None):
+                        cascade_count: int = None, area_shadow_resolution: int = None,
+                        cascade_splits: list = None):
         changed = False
         if shadow_resolution is not None and shadow_resolution != self._shadow_resolution:
             self._shadow_resolution = shadow_resolution
@@ -168,6 +171,8 @@ class ShadowRenderer:
             changed = True
         if shadow_distance is not None and shadow_distance != self._shadow_distance:
             self._shadow_distance = shadow_distance
+        if cascade_splits is not None:
+            self._cascade_splits_norm = list(cascade_splits) if cascade_splits else None
         if cascade_count is not None:
             cc = max(1, min(cascade_count, 4))
             if cc != self._cascade_count:
@@ -699,6 +704,20 @@ class ShadowRenderer:
         self._spot_shadow_count = 0
         self._has_area_shadow = False
 
+    def _compute_cascade_splits(self, cam_near: float, cam_far: float) -> list[float]:
+        if not self._cascade_splits_norm:
+            return self._cascade_distances(cam_near, cam_far)
+        near_z = max(cam_near, 0.01)
+        far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
+        norm = self._cascade_splits_norm
+        splits = []
+        for i in range(self._cascade_count):
+            if i < len(norm):
+                splits.append(near_z + (far_z - near_z) * float(norm[i]))
+            else:
+                splits.append(far_z)
+        return splits
+
     def _cascade_distances(self, cam_near: float, cam_far: float) -> list[float]:
         near_z = max(cam_near, 0.01)
         far_z = max(near_z + 0.1, min(cam_far, self._shadow_distance))
@@ -728,7 +747,7 @@ class ShadowRenderer:
         light_dir = sun_transform.forward.normalized()
         ld_x, ld_y, ld_z = light_dir.x, light_dir.y, light_dir.z
         inv_view = np.linalg.inv(view_mat._d)
-        splits = self._cascade_distances(cam_near, cam_far)
+        splits = self._compute_cascade_splits(cam_near, cam_far)
         self._cascade_splits = splits
         near_z = max(cam_near, 0.01)
         prog = self._prog

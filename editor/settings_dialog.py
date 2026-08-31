@@ -216,6 +216,8 @@ FIELD_TOOLTIPS = {
     "rendering.render_pipeline": "Active render pipeline",
     "rendering.anti_aliasing": "Anti-aliasing mode",
     "rendering.shadow_distance": "Maximum shadow rendering distance",
+    "rendering.cascade_count": "Number of directional light shadow cascades (2 or 4)",
+    "rendering.cascade_splits": "Relative distance at which each cascade ends, as a fraction of shadow distance. Drag the handles to balance near shadow detail against far coverage.",
     "toolbar.grid": "Show grid in viewport",
     "toolbar.snap": "Enable snapping",
     "toolbar.snap_translate": "Translate snap increment",
@@ -247,6 +249,8 @@ _FIELD_RANGES = {
     "camera.speed_boost_ramp_time": (0.1, 10.0),
     "rendering.target_fps": (0, 360),
     "rendering.shadow_resolution": (256, 4096),
+    "rendering.shadow_distance": (1.0, 500.0),
+    "rendering.cascade_count": (2, 4),
     "rendering.show_grid": None,
     "rendering.grid_size": (0.1, 100.0),
     "rendering.grid_world_size": (10.0, 10000.0),
@@ -327,7 +331,6 @@ _FIELD_RANGES = {
     "audio.enable_spatialization": None,
     "audio.enable_reverb": None,
     "audio.enable_occlusion": None,
-    "rendering.shadow_distance": (1.0, 500.0),
     "toolbar.snap_translate": (0.001, 100.0),
     "toolbar.snap_rotate": (0.1, 360.0),
     "toolbar.snap_scale": (0.001, 100.0),
@@ -840,6 +843,16 @@ class SettingsDialog(QDialog):
             cb.setCurrentText(self._config.get(key, "editor"))
             cb.currentTextChanged.connect(lambda t, k=key: self._on_value_changed(k, t))
             return cb
+        if key == "rendering.cascade_splits":
+            from editor.cascade_split_widget import CascadeSplitWidget
+            cc = self._config.get("rendering.cascade_count", 4)
+            d = self._config.get("rendering.shadow_distance", 50.0)
+            splits = self._config.get(key, [0.05, 0.13, 0.3])
+            if not splits:
+                splits = [0.05, 0.13, 0.3]
+            w = CascadeSplitWidget(cascade_count=cc, shadow_distance=d, splits=splits)
+            w.splitsChanged.connect(lambda v, k=key: self._on_value_changed(k, v))
+            return w
         if isinstance(value, list):
             if len(value) in (3, 4) and all(isinstance(v, (int, float)) for v in value):
                 from editor.color_picker import ColorLineEdit
