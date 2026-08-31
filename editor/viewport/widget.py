@@ -1479,7 +1479,10 @@ class SceneViewport(QOpenGLWidget):
             get_history().execute(cmd)
             e = scene.get_entity(cmd._entity_id)
             if e:
-                e.add_component(Transform())
+                t = Transform()
+                if subtype == "directional":
+                    t.local_euler_angles = Vec3(-45, 45, 0)
+                e.add_component(t)
                 l = Light(); l.light_type = type_map[subtype]; e.add_component(l)
         elif obj_type == "camera":
             cmd = CreateEntityCommand(scene, "Camera")
@@ -1574,6 +1577,7 @@ class SceneViewport(QOpenGLWidget):
         self.entities_selected.emit(self._selected_entities)
         if top_entities:
             self.entity_selected.emit(top_entities[0])
+        self.update()
 
     def enterEvent(self, event):
         self._focused = True

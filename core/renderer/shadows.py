@@ -88,7 +88,7 @@ class ShadowRenderer:
         self._cascade_count = max(1, min(cascade_count, 4))
         self._shadow_maps: list[Any] = []
         self._shadow_fbos: list[Any] = []
-        self._cascade_splits: list[float] = [1000000.0] * 4
+        self._cascade_splits: list[float] = [0.0] * 4
         self._light_space_matrices: list[np.ndarray] = [np.eye(4, dtype=np.float32) for _ in range(4)]
         self._point_shadow_resolution: int = self._shadow_resolution
         self._point_shadow_maps: list[Any] = []
@@ -631,12 +631,7 @@ class ShadowRenderer:
         self._pending_scene = scene
         self._skinning_cache = skinning_cache
         if not renderable_shadow:
-            self._cascade_splits = [0.0] * 4
-            self._has_point_shadow = False
-            self._point_shadow_count = 0
-            self._has_spot_shadow = False
-            self._spot_shadow_count = 0
-            self._has_area_shadow = False
+            self.reset_shadow_state()
             return {}
         shadow_groups = self._build_shadow_groups(renderable_shadow)
         for l, lt in lights:
@@ -695,6 +690,14 @@ class ShadowRenderer:
         else:
             self._has_area_shadow = False
         return shadow_groups
+
+    def reset_shadow_state(self):
+        self._cascade_splits = [0.0] * 4
+        self._has_point_shadow = False
+        self._point_shadow_count = 0
+        self._has_spot_shadow = False
+        self._spot_shadow_count = 0
+        self._has_area_shadow = False
 
     def _cascade_distances(self, cam_near: float, cam_far: float) -> list[float]:
         near_z = max(cam_near, 0.01)

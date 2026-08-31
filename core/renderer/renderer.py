@@ -286,6 +286,8 @@ class Renderer:
         self._vec3_buf_c = np.zeros(3, dtype=np.float32)
         self._ambient_buf = np.zeros(3, dtype=np.float32)
         self._white3 = np.ones(3, dtype=np.float32)
+        self._view_proj_cache: dict[int, tuple[bytes, bytes, bytes]] = {}
+        self._lights_cache: dict[int, bytes] = {}
 
         self._pp_fbo_a: Optional[moderngl.Framebuffer] = None
         self._pp_fbo_b: Optional[moderngl.Framebuffer] = None
@@ -1858,7 +1860,7 @@ out vec4 frag_color;
                 and self._snap_scene is scene
                 and self._snap_struct_version == struct_version
                 and self._snap_mesh_gen == mesh_gen):
-            self._refresh_snapshot_world_matrices(scene, n_updated)
+            self._refresh_snapshot_world_matrices(scene)
             self._collect_interactors(self._snap_cache, scene)
             return self._snap_cache
         snap = _RenderSnapshot()
@@ -2140,7 +2142,7 @@ out vec4 frag_color;
         capped = sorted(interactors, key=lambda it: abs(it[1].y), reverse=False)[:64]
         snap.interactors = capped
 
-    def _refresh_snapshot_world_matrices(self, scene, n_updated: int):
+    def _refresh_snapshot_world_matrices(self, scene):
         snap = self._snap_cache
         if snap is None:
             return
@@ -2413,13 +2415,18 @@ out vec4 frag_color;
         if shared_cache is not None and 'shadow_groups' in shared_cache:
             shadow_groups = shared_cache['shadow_groups']
         else:
-            try:
-                shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene, skinning_cache=self._skinning_cache)
-                if snap.projectors:
-                    self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
-            except Exception as _sh_err:
-                import traceback as _tb
-                _tb.print_exc()
+            needs_shadow = (bool(snap.shadow_renderables) or bool(snap.skinned_shadow_renderables)
+                            or any(getattr(l, "cast_shadows", False) for l, _ in snap.lights))
+            if needs_shadow:
+                try:
+                    shadow_groups = self._shadows.render_shadow_pass(snap.shadow_renderables, snap.lights, cam_near, cam_far, cam_fov, aspect, view_mat, {}, skinned_entries=snap.skinned_shadow_renderables, scene=scene, skinning_cache=self._skinning_cache)
+                    if snap.projectors:
+                        self._shadows.render_projector_shadows(snap.projectors, snap.shadow_renderables, shadow_groups)
+                except Exception as _sh_err:
+                    import traceback as _tb
+                    _tb.print_exc()
+            else:
+                self._shadows.reset_shadow_state()
             if shared_cache is not None:
                 shared_cache['shadow_groups'] = shadow_groups
         if prof:

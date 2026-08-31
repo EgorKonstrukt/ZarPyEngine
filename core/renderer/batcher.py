@@ -134,7 +134,7 @@ class RenderBatcher:
     """Groups renderables by mesh+material+shader and renders instanced."""
 
     def __init__(self, ctx: moderngl.Context, default_prog: moderngl.Program,
-                 gpu_driven_min_instances: int = 8):
+                 gpu_driven_min_instances: int = 4):
         self._ctx = ctx
         self._default_prog = self._ensure_instancing_prog(default_prog)
         self._vao_cache: OrderedDict[tuple[int, int], moderngl.VertexArray] = OrderedDict()
@@ -153,6 +153,13 @@ class RenderBatcher:
         self._total_instances: int = 0
         self._frustum_planes_cache = None
         self._frustum_cache_key = None
+        self._groups_cache_key = None
+        self._groups_cache_val = None
+        self._last_view_f32 = None
+        self._last_proj_f32 = None
+        self._last_cam_pos = None
+        self._last_lights_key = None
+        self._uniform_cache: dict[int, bytes] = {}
 
     @staticmethod
     def _ensure_instancing_prog(prog: moderngl.Program) -> moderngl.Program:
@@ -195,16 +202,22 @@ class RenderBatcher:
         get_prog = shaders.get_or_compile
         default_prog = self._default_prog
         none_id = id(self._MAT_NONE)
+        mpath_cache: dict = {}
         for entry in renderables:
             ent, tr, mesh, mr = entry[0], entry[1], entry[2], entry[3]
             wm = entry[4] if len(entry) > 4 else tr.world_matrix
             sub_idx = entry[5] if len(entry) > 5 else -1
             mpath = mr.get_material_path(sub_idx)
-            mat = get_mat(mpath)
-            shader_path = mat.shader_path if mat is not None else ""
-            prog = get_prog(shader_path) if shader_path else None
-            if prog is None:
-                prog = default_prog
+            cached = mpath_cache.get(mpath)
+            if cached is None:
+                mat = get_mat(mpath)
+                shader_path = mat.shader_path if mat is not None else ""
+                prog = get_prog(shader_path) if shader_path else None
+                if prog is None:
+                    prog = default_prog
+                mpath_cache[mpath] = (mat, prog)
+            else:
+                mat, prog = cached
             mat_key = id(mat) if mat is not None else none_id
             key = (id(prog), mat_key, id(mesh), mr.receive_shadows, sub_idx, getattr(mr, 'dynamic_reflections', False))
             lst = groups.get(key)

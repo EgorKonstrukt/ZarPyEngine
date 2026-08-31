@@ -299,7 +299,11 @@ class MeshLoader:
             self._render_callback()
 
     def process_pending(self):
+        if not self._pending_mesh_queue:
+            return
         with self._async_lock:
+            if not self._pending_mesh_queue:
+                return
             pending = list(self._pending_mesh_queue)
             self._pending_mesh_queue.clear()
         processed = 0
