@@ -254,15 +254,26 @@ class SceneViewport(QOpenGLWidget):
         self._collab_throttle_gizmo: float = 0.0
         self._collab_last_gizmo_state: tuple[str, int, bool] = ("none", -1, False)
         self._collab_timer = QTimer(self)
-        self._collab_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._collab_timer.setInterval(66)
+        self._collab_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._collab_timer.setInterval(500)
         self._collab_timer.timeout.connect(self._collab_tick)
         self._pb_scale_gizmo: "PbScaleGizmo | None" = None
         self._in_update: bool = False
         self._last_status_update: float = 0.0
         self._cached_overlay_state: Optional[bool] = None
         self._last_overlay_update: float = 0.0
-        # GC deliberately disabled in initializeGL; see gc.disable() below
+        self._gc_timer = QTimer(self)
+        self._gc_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._gc_timer.setInterval(2000)
+        self._gc_timer.timeout.connect(self._do_gc)
+        self._gc_timer.start()
+        self._gc_gen: int = 0
+        self._frame_budget: float = 1.0 / 60.0
+        self._last_gc_time: float = time.perf_counter()
+        self._pace_timer = QTimer(self)
+        self._pace_timer.setSingleShot(True)
+        self._pace_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._pace_timer.timeout.connect(self.update)
         from editor.viewport.toolbar import setup_toolbar
         setup_toolbar(self)
         self._refresh_no_qt_overlay()
@@ -272,6 +283,7 @@ class SceneViewport(QOpenGLWidget):
         cfg = get_global_config()
         self._vsync_enabled = cfg.get("rendering.vsync", True)
         self._target_fps = cfg.get("rendering.target_fps", 60)
+        self._frame_budget = 1.0 / max(1, int(self._target_fps)) if self._target_fps else 1.0 / 60.0
         fmt = QSurfaceFormat()
         fmt.setDepthBufferSize(24)
         fmt.setVersion(4, 6)
@@ -302,18 +314,50 @@ class SceneViewport(QOpenGLWidget):
             self._render_timer.setTimerType(Qt.TimerType.PreciseTimer)
             tgt = int(self._target_fps) if self._target_fps else 0
             if tgt <= 0:
-                self._render_timer.setInterval(0)
-            elif tgt == 60:
-                self._render_timer.setInterval(0)
-            else:
-                tgt = max(1, min(360, tgt))
-                self._render_timer.setInterval(max(1, int(1000.0 / tgt)))
+                tgt = 60
+            tgt = max(1, min(360, tgt))
+            self._render_timer.setInterval(max(1, int(1000.0 / tgt)))
             if self.isVisible():
                 self._render_timer.start()
 
 
+    def _do_gc(self):
+        try:
+            if gc.isenabled():
+                return
+            self._gc_gen = (self._gc_gen + 1) % 20
+            if self._gc_gen == 0:
+                gc.collect(2)
+            elif self._gc_gen % 5 == 0:
+                gc.collect(1)
+            else:
+                gc.collect(0)
+        except Exception:
+            pass
+
     def _on_overlay_config_changed(self, key: str, value):
-        pass
+        if key in ("rendering.vsync", "rendering.target_fps"):
+            try:
+                from core.config.config import get_global_config
+                cfg = get_global_config()
+                self._vsync_enabled = cfg.get("rendering.vsync", True)
+                self._target_fps = cfg.get("rendering.target_fps", 60)
+                self._frame_budget = 1.0 / max(1, int(self._target_fps)) if self._target_fps else 1.0 / 60.0
+                fmt = self.format()
+                fmt.setSwapInterval(1 if self._vsync_enabled else 0)
+                self.setFormat(fmt)
+                self._apply_config()
+                try:
+                    import ctypes
+                    opengl32 = ctypes.windll.opengl32
+                    addr = opengl32.wglGetProcAddress(b"wglSwapIntervalEXT")
+                    if addr:
+                        func = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)(addr)
+                        func(0 if not self._vsync_enabled else 1)
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
     def _on_render_tick(self):
         if not self._vsync_enabled and self.isVisible():
@@ -611,7 +655,15 @@ class SceneViewport(QOpenGLWidget):
 
     def initializeGL(self):
         try:
-            gc.enable()
+            try:
+                gc.disable()
+                gc.set_threshold(50000, 1000, 1000)
+                try:
+                    gc.freeze()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             self._ctx = moderngl.create_context(standalone=False)
             try:
                 self._ctx.gc_mode = "context_gc"
@@ -769,8 +821,11 @@ class SceneViewport(QOpenGLWidget):
                             from editor.viewport.collaboration import send_collab_selection; send_collab_selection(self)
             if not eng.play_mode:
                 self._update_editor_particles(dt, self._selected_entities)
-                with eng._scene_lock:
-                    self._gizmos_api.update(dt)
+                if eng._scene_lock.acquire(blocking=False):
+                    try:
+                        self._gizmos_api.update(dt)
+                    finally:
+                        eng._scene_lock.release()
                 self._cam.update(dt)
             else:
                 self._cam.update(dt)
@@ -814,7 +869,7 @@ class SceneViewport(QOpenGLWidget):
                     prof.start("gizmos")
                 _sel = list(self._selected_entities)
                 _gizmo_snapshot = None
-                _acquired = eng._scene_lock.acquire(timeout=0.004)
+                _acquired = eng._scene_lock.acquire(blocking=False)
                 try:
                     if _acquired:
                         if self._gizmo_visible:
@@ -870,7 +925,7 @@ class SceneViewport(QOpenGLWidget):
                 self._last_overlay_ms = (time.perf_counter() - t2) * 1000.0
                 if not self._no_qt_overlay:
                     now_overlay = time.perf_counter()
-                    if now_overlay - self._last_overlay_update >= 0.1:
+                    if now_overlay - self._last_overlay_update >= 0.2:
                         self._last_overlay_update = now_overlay
                         self._overlay_widget.update()
             if self._audio_viz_enabled:
@@ -884,8 +939,30 @@ class SceneViewport(QOpenGLWidget):
         self._last_paint_full_ms = _paint_dur
         eng.set_profiler_data("paint_full_ms", _paint_dur)
         eng.set_profiler_data("paint_gap_ms", _paint_gap * 1000.0)
-        if self._vsync_enabled and self.isVisible():
-            self.update()
+        if self.isVisible():
+            if self._vsync_enabled:
+                if getattr(self, '_fps', 0.0) > (1.0 / getattr(self, '_frame_budget', 1.0/60.0) + 15.0):
+                    budget = getattr(self, '_frame_budget', 1.0 / 60.0)
+                    elapsed = time.perf_counter() - _p0
+                    remain = budget - elapsed
+                    if remain > 0.003:
+                        try:
+                            self._pace_timer.start(int(remain * 1000))
+                        except Exception:
+                            QTimer.singleShot(int(remain * 1000), self.update)
+                    elif remain > 0.0005:
+                        try:
+                            self._pace_timer.start(1)
+                        except Exception:
+                            QTimer.singleShot(1, self.update)
+                    else:
+                        self.update()
+                else:
+                    self.update()
+            elif self._render_timer.isActive():
+                pass
+            else:
+                self.update()
 
     def update_scene(self):
         self.update()

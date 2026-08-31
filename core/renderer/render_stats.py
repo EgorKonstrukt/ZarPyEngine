@@ -11,8 +11,15 @@ import subprocess
 import threading
 import time
 
+import numpy as _np
+
 from PyQt6.QtCore import QRect, Qt
-from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
+
+_STATS_FONT = QFont("Consolas", 9)
+_STATS_FONT.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+_STATS_FM_CACHE: tuple = (None, None)
+_RAM_CACHE = (0.0, 0.0)
 
 VALUE_COLORS = {
     "FPS": QColor(100, 220, 100),
@@ -98,15 +105,28 @@ def _short_gpu(name) -> str:
     return name or "?"
 
 
+_RAM_CACHE_VAL = 0.0
+_RAM_CACHE_T = 0.0
+
 def _get_ram_mb() -> float:
+    global _RAM_CACHE_VAL, _RAM_CACHE_T
+    now = time.time()
+    if now - _RAM_CACHE_T < 1.0 and _RAM_CACHE_VAL > 0:
+        return _RAM_CACHE_VAL
     try:
         import psutil as _psutil
-        return _psutil.Process().memory_info().rss / (1024 * 1024)
+        v = _psutil.Process().memory_info().rss / (1024 * 1024)
+        _RAM_CACHE_VAL = v
+        _RAM_CACHE_T = now
+        return v
     except Exception:
         pass
     try:
         import resource as _resource
-        return _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+        v = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
+        _RAM_CACHE_VAL = v
+        _RAM_CACHE_T = now
+        return v
     except Exception:
         pass
     try:
@@ -133,10 +153,13 @@ def _get_ram_mb() -> float:
         pmc.cb = _ctypes.sizeof(_PMC)
         h = _ctypes.c_void_p(-1)
         if _psapi.GetProcessMemoryInfo(h, _ctypes.byref(pmc), _ctypes.sizeof(pmc)):
-            return pmc.WorkingSetSize / (1024 * 1024)
+            v = pmc.WorkingSetSize / (1024 * 1024)
+            _RAM_CACHE_VAL = v
+            _RAM_CACHE_T = now
+            return v
     except Exception:
         pass
-    return 0.0
+    return _RAM_CACHE_VAL if _RAM_CACHE_VAL else 0.0
 
 
 def _query_vram_mb():
@@ -177,6 +200,7 @@ _expensive_t = 0.0
 _vram = (0.0, 0.0)
 _vram_t = 0.0
 _vram_busy = False
+_frame_metrics_cache: dict = {"key": None, "val": None}
 
 
 def _refresh_vram_async():
@@ -194,19 +218,25 @@ def _refresh_vram_async():
         _vram_t = time.time()
         _vram_busy = False
 
-    threading.Thread(target=worker, daemon=True).start()
+    try:
+        threading.Thread(target=worker, daemon=True).start()
+    except Exception:
+        _vram_busy = False
 
 
 def collect_expensive_stats() -> dict:
     global _expensive_t
     now = time.time()
-    if _expensive and (now - _expensive_t) < 5.0:
+    if _expensive and (now - _expensive_t) < 10.0:
         return _expensive
     _expensive_t = now
-    if (now - _vram_t) > 5.0:
+    if (now - _vram_t) > 10.0:
         _refresh_vram_async()
     vram_used, vram_total = _vram
-    gc0, gc1, gc2 = _gc.get_count()
+    try:
+        gc0, gc1, gc2 = _gc.get_count()
+    except Exception:
+        gc0 = gc1 = gc2 = 0
     dsp_load = 0.0
     active_sounds = 0
     total_sounds = 0
@@ -283,18 +313,35 @@ def compute_frame_metrics(frame_times_ms) -> dict:
             'p1_fps': 0.0, 'p01_fps': 0.0, 'frame_ms': 0.0, 'avg_ms': 0.0,
             'p1_ms': 0.0, 'p01_ms': 0.0,
         }
-    s = sorted(frame_times_ms)
-    n = len(s)
-    avg_ms = sum(s) / n
-    p1_c = max(1, int(n * 0.01))
-    p01_c = max(1, int(n * 0.001))
-    p1_ms = sum(s[-p1_c:]) / p1_c
-    p01_ms = sum(s[-p01_c:]) / p01_c
-    return {
+    n = len(frame_times_ms)
+    key = (n, frame_times_ms[-1] if n else 0, round(sum(frame_times_ms) * 0.1))
+    cached = _frame_metrics_cache.get("key")
+    if cached == key and _frame_metrics_cache.get("val") is not None:
+        return _frame_metrics_cache["val"]
+    try:
+        arr = _np.asarray(frame_times_ms, dtype=_np.float32)
+        s = _np.sort(arr)
+        avg_ms = float(_np.mean(s))
+        p1_c = max(1, int(n * 0.01))
+        p01_c = max(1, int(n * 0.001))
+        p1_ms = float(_np.mean(s[-p1_c:]))
+        p01_ms = float(_np.mean(s[-p01_c:]))
+        max_ms = float(s[0])
+        min_ms = float(s[-1])
+    except Exception:
+        s = sorted(frame_times_ms)
+        avg_ms = sum(s) / n
+        p1_c = max(1, int(n * 0.01))
+        p01_c = max(1, int(n * 0.001))
+        p1_ms = sum(s[-p1_c:]) / p1_c
+        p01_ms = sum(s[-p01_c:]) / p01_c
+        max_ms = s[0]
+        min_ms = s[-1]
+    val = {
         'fps': 1000.0 / max(avg_ms, 0.1),
         'avg_fps': 1000.0 / max(avg_ms, 0.1),
-        'max_fps': 1000.0 / max(s[0], 0.1),
-        'min_fps': 1000.0 / max(s[-1], 0.1),
+        'max_fps': 1000.0 / max(max_ms, 0.1),
+        'min_fps': 1000.0 / max(min_ms, 0.1),
         'p1_fps': 1000.0 / max(p1_ms, 0.1),
         'p01_fps': 1000.0 / max(p01_ms, 0.1),
         'frame_ms': frame_times_ms[-1],
@@ -302,6 +349,9 @@ def compute_frame_metrics(frame_times_ms) -> dict:
         'p1_ms': p1_ms,
         'p01_ms': p01_ms,
     }
+    _frame_metrics_cache["key"] = key
+    _frame_metrics_cache["val"] = val
+    return val
 
 
 def build_stats_rows(m: dict, st: dict, timings: dict) -> list:
@@ -379,7 +429,10 @@ def build_stats_rows(m: dict, st: dict, timings: dict) -> list:
 
 
 def draw_stats_panel(painter, rows: list, frame_times_ms, spike_log: list):
-    fm = QFontMetrics(painter.font())
+    fnt = painter.font()
+    if fnt.family() != _STATS_FONT.family() or fnt.pointSize() != _STATS_FONT.pointSize():
+        painter.setFont(_STATS_FONT)
+    fm = QFontMetrics(_STATS_FONT)
     padding = 6
     line_h = 15
     sections = []

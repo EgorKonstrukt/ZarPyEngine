@@ -22,14 +22,19 @@ from core.renderer.render_stats import (
     log_spike,
 )
 
+_STATS_FONT_O = QFont("Consolas", 9)
+_STATS_FONT_O.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+_STATS_FONT_S = QFont("Segoe UI", 9, QFont.Weight.Bold)
+_STATS_FONT_S.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+_STATS_FONT_TINY = QFont("Consolas", 7)
+_STATS_FONT_TINY.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+
 
 def draw_stats_overlay(vp, painter):
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-    font = QFont("Consolas", 9)
-    font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-    painter.setFont(font)
+    painter.setFont(_STATS_FONT_O)
 
     paint_dt = getattr(vp, '_paint_dt', 0.016)
     if not hasattr(vp, '_frame_times_ms'):
@@ -78,9 +83,7 @@ def draw_audio_viz_header(vp, painter):
         lx, ly = x / dpr, y / dpr
         lw = w / dpr
         painter.save()
-        font = QFont("Segoe UI", 9, QFont.Weight.Bold)
-        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-        painter.setFont(font)
+        painter.setFont(_STATS_FONT_S)
         fm = QFontMetrics(font)
         bar_w = 90
         pad = 6
@@ -146,10 +149,8 @@ def draw_audio_freq_labels(vp, painter):
         lmax = math.log10(nyquist)
         spec_bottom = ly + lh * 0.52
         painter.save()
-        font = QFont("Consolas", 7)
-        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
+        painter.setFont(_STATS_FONT_TINY)
+        fm = QFontMetrics(_STATS_FONT_TINY)
         ticks = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
         for f in ticks:
             if f < 20.0 or f > nyquist:
@@ -192,10 +193,8 @@ def draw_audio_db_labels(vp, painter):
         span = max(top_db - floor_db, 1e-3)
         spec_bottom = ly + lh * 0.52
         painter.save()
-        font = QFont("Consolas", 7)
-        font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
+        painter.setFont(_STATS_FONT_TINY)
+        fm = QFontMetrics(_STATS_FONT_TINY)
         db0 = int(math.floor(floor_db / 10.0) * 10.0)
         for db in range(db0, int(math.ceil(top_db)) + 1, 10):
             if db < floor_db - 0.01:
@@ -220,14 +219,15 @@ def draw_audio_db_labels(vp, painter):
         pass
 
 
+_DELTA_FONT = QFont("Segoe UI", 12, QFont.Weight.Bold)
+_DELTA_FONT.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+
 def draw_delta_label(vp, painter):
     dt = vp._gizmo.delta_text
     if not dt or not vp._gizmo.show_delta_label:
         return
     painter.save()
-    f = QFont("Segoe UI", 12, QFont.Weight.Bold)
-    f.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-    painter.setFont(f)
+    painter.setFont(_DELTA_FONT)
     mx, my = vp._last_mouse_pos
     fm = QFontMetrics(painter.font())
     tw = fm.horizontalAdvance(dt) + 16
@@ -318,15 +318,16 @@ def get_grid_label_positions(vp):
     return x_labels[:20], z_labels[:20]
 
 
+_GRID_FONT = QFont("Segoe UI", 9)
+_GRID_FONT.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
+
 def draw_grid_labels(vp, painter):
     x_labels, z_labels = get_grid_label_positions(vp)
     if not x_labels and not z_labels:
         return
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    font = QFont("Segoe UI", 9)
-    font.setStyleStrategy(QFont.StyleStrategy.ForceOutline)
-    painter.setFont(font)
+    painter.setFont(_GRID_FONT)
     margin = 4
     bg_color = QColor(30, 30, 30, 200)
     text_color = QColor(180, 180, 180)

@@ -271,6 +271,7 @@ class Renderer:
         self._import_meta_cache: dict[str, tuple] = {}
         self._import_meta_mtime: dict[str, float] = {}
         self._snap_cache: Optional[_RenderSnapshot] = None
+        self._snap_cache_reuse: Optional[_RenderSnapshot] = None
         self._snap_version: int = -1
         self._snap_struct_version: int = -1
         self._snap_mesh_gen: int = -1
@@ -2328,10 +2329,20 @@ out vec4 frag_color;
         if shared_cache is not None and 'snap' in shared_cache:
             snap = shared_cache['snap']
         else:
-            snap = _RenderSnapshot()
+            snap = getattr(self, '_snap_cache_reuse', None)
+            if snap is None:
+                snap = _RenderSnapshot()
             if scene:
-                with eng._scene_lock:
-                    snap = self._collect_snapshot(scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos)
+                if eng._scene_lock.acquire(blocking=False):
+                    try:
+                        snap = self._collect_snapshot(scene, cam_near, cam_far, cam_fov, view_mat, proj_mat, cam_pos)
+                        self._snap_cache_reuse = snap
+                    finally:
+                        eng._scene_lock.release()
+                elif self._snap_cache_reuse is not None:
+                    snap = self._snap_cache_reuse
+                else:
+                    snap = _RenderSnapshot()
             if shared_cache is not None:
                 shared_cache['snap'] = snap
         lights = snap.lights
@@ -2393,12 +2404,9 @@ out vec4 frag_color;
         self._mesh_loader.process_pending()
         if prof:
             prof.stop("mesh_async_load")
-        if shared_cache is not None and 'skinning' in shared_cache:
-            self._skinning_cache = shared_cache['skinning']
-        else:
-            self._skinning_cache.clear()
-            if shared_cache is not None:
-                shared_cache['skinning'] = self._skinning_cache
+        self._skinning_cache.clear()
+        if shared_cache is not None:
+            shared_cache['skinning'] = self._skinning_cache
         if prof:
             prof.start("render_shadow_pass")
         shadow_groups = {}

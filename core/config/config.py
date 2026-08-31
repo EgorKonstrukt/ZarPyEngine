@@ -171,10 +171,10 @@ def get_global_config() -> Config:
                 "speed_boost_ramp_time": 2.0
             },
             "profiler": {
-                "enabled": True,
+                "enabled": False,
                 "update_interval": 0.5,
                 "max_samples": 200,
-                "refresh_interval": 200
+                "refresh_interval": 500
             },
             "rendering": {
                 "vsync": True,
@@ -218,7 +218,7 @@ def get_global_config() -> Config:
                 "font_size": 10,
                 "font_family": "Segoe UI",
                 "max_blocks": 2000,
-                "refresh_interval": 100
+                "refresh_interval": 250
             },
             "terminal": {
                 "font_size": 10,
@@ -251,17 +251,17 @@ def get_global_config() -> Config:
                 "python_no_bytecode": False,
             },
             "hierarchy": {
-                "refresh_interval": 500
+                "refresh_interval": 2000
             },
             "inspector": {
-                "refresh_interval": 100
+                "refresh_interval": 250
             },
             "project": {
                 "thumb_size": 64,
                 "dual_pane": True
             },
             "plotter": {
-                "refresh_interval": 100,
+                "refresh_interval": 250,
                 "history_limit": 2000
             },
             "audio": {
