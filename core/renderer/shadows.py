@@ -1078,6 +1078,7 @@ class ShadowRenderer:
     def set_uniforms(self, prog):
         has_csm = self._cascade_splits[self._cascade_count - 1] > 0.0
         if has_csm and "u_cascade_count" in prog and len(self._shadow_maps) >= self._cascade_count:
+            prog["u_cascade_count"].value = self._cascade_count
             if "u_light_space_matrices" in prog:
                 cm = self._cascade_matrices_buf
                 for ci in range(self._cascade_count):
