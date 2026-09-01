@@ -179,10 +179,6 @@ def get_global_config() -> Config:
             "rendering": {
                 "vsync": True,
                 "target_fps": 60,
-                "shadow_resolution": 4096,
-                "shadow_distance": 50.0,
-                "cascade_count": 4,
-                "cascade_splits": [0.05, 0.13, 0.3],
                 "show_grid": True,
                 "grid_size": 10.0,
                 "grid_world_size": 2000.0,

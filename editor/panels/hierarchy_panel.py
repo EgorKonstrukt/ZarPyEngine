@@ -400,10 +400,21 @@ class HierarchyPanel(QDockWidget):
         filter_text = self._search.text().strip().lower()
         root_entities = self._scene.get_root_entities()
         live_ids = set(self._scene._entities.keys())
-        for entity in root_entities:
+        system_roots = [e for e in root_entities if e.system]
+        normal_roots = [e for e in root_entities if not e.system]
+        for entity in normal_roots:
             if entity.id not in live_ids:
                 continue
             self._add_entity_item(entity, self._tree.invisibleRootItem(), filter_text, live_ids)
+        if system_roots:
+            sys_item = QTreeWidgetItem(self._tree.invisibleRootItem())
+            sys_item.setText(0, "System")
+            sys_item.setFlags(sys_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            sys_item.setExpanded(True)
+            for entity in system_roots:
+                if entity.id not in live_ids:
+                    continue
+                self._add_entity_item(entity, sys_item, filter_text, live_ids)
         self._restore_expanded(old_expanded)
         if old_selection and old_selection in live_ids:
             self._restore_selection(old_selection)
@@ -692,6 +703,11 @@ class HierarchyPanel(QDockWidget):
                 set_active = QAction("Toggle Active", self)
                 set_active.triggered.connect(lambda: self._toggle_active(entity))
                 menu.addAction(set_active)
+                lock_act = QAction("Toggle Lock", self)
+                lock_act.setCheckable(True)
+                lock_act.setChecked(entity.locked)
+                lock_act.triggered.connect(lambda: self._toggle_lock(entity))
+                menu.addAction(lock_act)
                 embed_act = QAction("Embed Resources on Save", self)
                 embed_act.setCheckable(True)
                 embed_act.setChecked(entity.embed_resources)
@@ -993,6 +1009,8 @@ class HierarchyPanel(QDockWidget):
     def _delete_entity(self, entity: Entity):
         if not self._scene:
             return
+        if entity.locked or entity.system:
+            return
         from core.foundation.commands import DeleteEntityCommand, get_history
         was_selected = (self._selected_entity == entity)
         self._collab_sync_delete(entity.id)
@@ -1074,6 +1092,14 @@ class HierarchyPanel(QDockWidget):
             self._delete_entity(entity)
     def _toggle_active(self, entity: Entity):
         entity.active = not entity.active
+        if self._scene:
+            self._scene.mark_dirty()
+        self._refresh()
+        if self._selected_entity:
+            self._restore_selection(self._selected_entity.id)
+
+    def _toggle_lock(self, entity: Entity):
+        entity.locked = not entity.locked
         if self._scene:
             self._scene.mark_dirty()
         self._refresh()

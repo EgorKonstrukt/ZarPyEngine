@@ -287,7 +287,7 @@ class Entity:
         '_update_list', '_fixed_update_list',
         '_active', '_parent', '_children', '_tags', '_layer',
         '_scene', '_prefab_guid', '_prefab_source_id',
-        '_transform_type', '_transform', '_embed_resources',
+        '_transform_type', '_transform', '_embed_resources', '_locked', '_system',
     )
 
     def __init__(self, name: str = "Entity", eid: Optional[str] = None,
@@ -310,6 +310,8 @@ class Entity:
         self._transform_type: Optional[type] = None
         self._transform: Optional[Component] = None
         self._embed_resources: bool = False
+        self._locked: bool = False
+        self._system: bool = False
 
     def _get_transform_type(self):
         tt = self._transform_type
@@ -409,6 +411,18 @@ class Entity:
         sc = self._scene
         if sc:
             sc._render_version += 1
+
+    @property
+    def locked(self) -> bool: return self._locked
+
+    @locked.setter
+    def locked(self, v: bool): self._locked = bool(v)
+
+    @property
+    def system(self) -> bool: return self._system
+
+    @system.setter
+    def system(self, v: bool): self._system = bool(v)
 
     @property
     def prefab_guid(self) -> Optional[str]: return self._prefab_guid
@@ -686,6 +700,10 @@ class Entity:
             d["prefab_source_id"] = self._prefab_source_id
         if self._embed_resources:
             d["embed_resources"] = True
+        if self._locked:
+            d["locked"] = True
+        if self._system:
+            d["system"] = True
         return d
 
     @classmethod
@@ -697,6 +715,8 @@ class Entity:
         e._layer = data.get("layer", 0)
         e._prefab_source_id = data.get("prefab_source_id")
         e._embed_resources = bool(data.get("embed_resources", False))
+        e._locked = bool(data.get("locked", False))
+        e._system = bool(data.get("system", False))
         for cd in data.get("components", []):
             ctype = cd.get("type")
             comp_cls = registry.get(ctype)

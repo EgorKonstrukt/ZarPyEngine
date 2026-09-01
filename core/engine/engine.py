@@ -423,7 +423,24 @@ class Engine:
         Logger.info(f"New scene created: {name}")
         return self._scene
     def _add_default_scene_objects(self, scene):
-        pass
+        try:
+            from core.components.transform import Transform
+            from core.components.rendering.environment.directional_shadow import DirectionalShadow
+            from core.components.rendering.environment.point_shadow import PointShadow
+            from core.components.rendering.environment.spot_shadow import SpotShadow
+            from core.components.rendering.environment.area_shadow import AreaShadow
+            if next((s for s in DirectionalShadow._registry if s.entity and s.entity._scene is scene), None):
+                return
+            e = scene.create_entity("Shadow System")
+            e.add_component(Transform())
+            e.add_component(DirectionalShadow())
+            e.add_component(PointShadow())
+            e.add_component(SpotShadow())
+            e.add_component(AreaShadow())
+            e.system = True
+            e.locked = True
+        except Exception:
+            pass
     def start_play(self):
         if self._play_mode: return
         self._play_mode = True

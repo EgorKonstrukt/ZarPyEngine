@@ -38,6 +38,7 @@ class FieldType(Enum):
     KEYBINDING = "keybinding"
     VEC2_SLIDER = "vec2_slider"
     VEC3_SLIDER = "vec3_slider"
+    SPLIT_GRADIENT = "split_gradient"
 
 
 @dataclass

@@ -667,9 +667,14 @@ class ComponentWidget(QWidget):
                             fn = getattr(c, m, None)
                             if callable(fn) and fn(n, v):
                                 self._sync_int_field_values()
+                                self.refresh_split_gradient_fields()
                     sb.valueChanged.connect(_on_int_value)
                 else:
-                    sb.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
+                    _setter = self._undo_setter_all(comp_cls, prop_name)
+                    def _on_int_plain(v, s=_setter):
+                        s(v)
+                        self.refresh_split_gradient_fields()
+                    sb.valueChanged.connect(_on_int_plain)
                 self._add_field(field.label, sb, prop_name, field.toggle_field)
         elif field.field_type.value == "slider":
             row = QWidget()
@@ -1044,6 +1049,15 @@ class ComponentWidget(QWidget):
                     get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, new_gradient))
             grad_preview.clicked.connect(_open_gradient_editor)
             self._add_field(field.label, grad_preview, prop_name, field.toggle_field)
+        elif field.field_type.value == "split_gradient":
+            from editor.split_gradient_widget import SplitGradientWidget
+            max_val = field.max_val if field.max_val > -1e15 else 1.0
+            decimals = field.decimals if field.decimals >= 0 else 1
+            sgw = SplitGradientWidget(value=list(value) if value else [],
+                                      max_value=max_val, decimals=decimals)
+            comp_cls = type(c)
+            sgw.valueChanged.connect(self._undo_setter_all(comp_cls, prop_name))
+            self._add_field(field.label, sgw, prop_name, field.toggle_field)
         elif field.field_type.value == "resource_path":
             pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter(prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
@@ -1400,6 +1414,25 @@ class ComponentWidget(QWidget):
 
     def refresh_vec3_field(self, prop_name: str):
         pass
+
+    def refresh_split_gradient_fields(self):
+        c = self._component
+        for r in self._field_rows:
+            fm = r.get("field_meta")
+            if fm is None or fm.field_type.value != "split_gradient":
+                continue
+            pn = r.get("prop_name", "")
+            if not pn or not hasattr(c, pn):
+                continue
+            cell = r.get("field_widget")
+            child = getattr(cell, "_field_child", None) if cell is not None else None
+            if child is not None and hasattr(child, "setValue"):
+                child.blockSignals(True)
+                try:
+                    child.setValue(list(getattr(c, pn)) if getattr(c, pn) else [])
+                except Exception:
+                    pass
+                child.blockSignals(False)
 
     def _show_source(self, file_path: str, line_number: int, comp_type: str, prop_name: str):
         from editor.inspector.source_viewer import SourceViewerDialog

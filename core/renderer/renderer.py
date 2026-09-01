@@ -266,6 +266,11 @@ class Renderer:
         self._shadow_distance: float = 50.0
         self._cascade_count: int = 4
         self._cascade_splits_norm: Optional[list] = None
+        self._point_shadow_resolution: int = 512
+        self._area_shadow_resolution: int = 512
+        self._spot_shadow_resolution: int = 1024
+        self._shadow_enabled: bool = True
+        self._shadow_type_flags: dict = {'directional': True, 'point': True, 'spot': True, 'area': True}
         self._render_scale: float = 1.0
         self._line_width: float = 0.6667
         self._clear_color: list = [0.18, 0.18, 0.18]
@@ -376,20 +381,58 @@ class Renderer:
         self._shadow_distance = config.get("rendering.shadow_distance", self._shadow_distance)
         self._cascade_count = config.get("rendering.cascade_count", self._cascade_count)
         self._cascade_splits_norm = config.get("rendering.cascade_splits", []) or None
-        if self._shadows:
+        self._apply_shadow_system_state(update=True)
+        self._render_scale = config.get("rendering.render_scale", self._render_scale)
+        self._exposure = config.get("rendering.exposure", self._exposure)
+        Light.set_light_scale(config.get("rendering.light_scale", 1.0))
+        self._line_width = config.get("gizmo.line_width", self._line_width)
+
+    def _apply_shadow_system_state(self, update: bool = True) -> bool:
+        from core.components.rendering.environment.directional_shadow import DirectionalShadow
+        from core.components.rendering.environment.point_shadow import PointShadow
+        from core.components.rendering.environment.spot_shadow import SpotShadow
+        from core.components.rendering.environment.area_shadow import AreaShadow
+        d = DirectionalShadow.find_active()
+        p = PointShadow.find_active()
+        s = SpotShadow.find_active()
+        a = AreaShadow.find_active()
+        directional = d is not None
+        point = p is not None
+        spot = s is not None
+        area = a is not None
+        if d is not None:
+            self._shadow_resolution = int(d._shadow_resolution)
+            self._shadow_distance = float(d._shadow_distance)
+            self._cascade_count = int(d._cascade_count)
+            self._cascade_splits_norm = list(d._cascade_splits) or None
+        if p is not None:
+            self._point_shadow_resolution = int(p._shadow_resolution)
+        if s is not None:
+            self._spot_shadow_resolution = int(s._shadow_resolution)
+        if a is not None:
+            self._area_shadow_resolution = int(a._shadow_resolution)
+        self._shadow_type_flags = {
+            'directional': directional,
+            'point': point,
+            'spot': spot,
+            'area': area,
+        }
+        self._shadow_enabled = bool(directional or point or spot or area)
+        if update and self._shadows:
             try:
                 self._shadows.update_settings(
                     shadow_resolution=self._shadow_resolution,
                     shadow_distance=self._shadow_distance,
                     cascade_count=self._cascade_count,
                     cascade_splits=self._cascade_splits_norm,
+                    area_shadow_resolution=self._area_shadow_resolution,
+                    point_shadow_resolution=self._point_shadow_resolution,
+                    spot_shadow_resolution=self._spot_shadow_resolution,
+                    type_flags=self._shadow_type_flags,
                 )
             except Exception:
                 pass
-        self._render_scale = config.get("rendering.render_scale", self._render_scale)
-        self._exposure = config.get("rendering.exposure", self._exposure)
-        Light.set_light_scale(config.get("rendering.light_scale", 1.0))
-        self._line_width = config.get("gizmo.line_width", self._line_width)
+        return self._shadow_enabled
 
     def initialize(self):
         try:
@@ -634,7 +677,7 @@ void main() {
             self._gizmo._line_width = self._line_width
             self._gizmo.initialize_instanced_meshes()
             self._gizmo.initialize_instanced_lines()
-            self._shadows = ShadowRenderer(self._ctx, self._shadow_prog, self._shadow_resolution, self._shadow_distance, cascade_count=self._cascade_count, cascade_splits=self._cascade_splits_norm)
+            self._shadows = ShadowRenderer(self._ctx, self._shadow_prog, self._shadow_resolution, self._shadow_distance, cascade_count=self._cascade_count, cascade_splits=self._cascade_splits_norm, point_shadow_resolution=self._point_shadow_resolution)
             self._skybox_cube = make_cube_mesh()
             self._skybox_cube.build_gl(self._ctx, self._default_prog)
             self._cloud_quad = make_quad_mesh(2.0)
@@ -2415,7 +2458,13 @@ out vec4 frag_color;
         if prof:
             prof.start("render_shadow_pass")
         shadow_groups = {}
-        if shared_cache is not None and 'shadow_groups' in shared_cache:
+        self._apply_shadow_system_state(update=True)
+        if not self._shadow_enabled:
+            try:
+                self._shadows.reset_shadow_state()
+            except Exception:
+                pass
+        elif shared_cache is not None and 'shadow_groups' in shared_cache:
             shadow_groups = shared_cache['shadow_groups']
         else:
             needs_shadow = (bool(snap.shadow_renderables) or bool(snap.skinned_shadow_renderables)

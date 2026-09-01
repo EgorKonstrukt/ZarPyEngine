@@ -813,6 +813,8 @@ class SceneViewport(QOpenGLWidget):
                         if not is_collab_locked(self):
                             from core.foundation.commands import DeleteEntityCommand, get_history
                             for ent in list(self._selected_entities):
+                                if ent.locked or ent.system:
+                                    continue
                                 cmd = DeleteEntityCommand(eng.scene, ent.id)
                                 get_history().execute(cmd)
                             self._selected_entities.clear()
