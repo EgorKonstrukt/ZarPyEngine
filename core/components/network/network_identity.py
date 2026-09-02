@@ -5,8 +5,17 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+from enum import Enum
 from core.ecs.ecs import Component, ComponentRegistry
 from core.components.inspector_meta import FieldType, InspectorField
+
+
+class AuthorityMode(Enum):
+    SERVER = "server"
+    OWNER = "owner"
+    SHARED = "shared"
+
+
 @ComponentRegistry.register
 class NetworkIdentity(Component):
     _icon = "NetworkIdentity.png"
@@ -16,25 +25,107 @@ class NetworkIdentity(Component):
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
-            InspectorField("network_id", "Network ID", FieldType.INT, min_val=-1, max_val=999999),
-            InspectorField("is_server", "Is Server", FieldType.BOOL),
+            InspectorField("net_id", "Net ID", FieldType.INT, min_val=-1, max_val=999999, readonly=True),
+            InspectorField("owner_id", "Owner ID", FieldType.INT, min_val=-1, max_val=999999, readonly=True),
+            InspectorField("prefab_id", "Prefab ID", FieldType.STRING),
+            InspectorField("authority", "Authority", FieldType.ENUM, enum_class=AuthorityMode),
             InspectorField("is_local_player", "Is Local Player", FieldType.BOOL),
+            InspectorField("dont_destroy_on_load", "Dont Destroy", FieldType.BOOL),
         ]
 
     def __init__(self):
         super().__init__()
-        self.network_id: int = -1
-        self.is_server: bool = False
+        self.net_id: int = -1
+        self.owner_id: int = -1
+        self.prefab_id: str = ""
+        self.authority: AuthorityMode = AuthorityMode.SERVER
         self.is_local_player: bool = False
+        self.dont_destroy_on_load: bool = False
+        self.is_server: bool = False
+        self.network_id: int = -1
+
+    @property
+    def is_spawned(self) -> bool:
+        return self.net_id >= 0
+
+    @property
+    def is_owner(self) -> bool:
+        try:
+            from core.network.transport import get_transport
+            return get_transport().local_id == self.owner_id
+        except Exception:
+            return False
+
+    @property
+    def has_authority(self) -> bool:
+        if self.authority == AuthorityMode.SHARED:
+            return True
+        if self.authority == AuthorityMode.OWNER:
+            return self.is_owner
+        try:
+            from core.network.transport import get_transport
+            t = get_transport()
+            if t.is_server:
+                return True
+            return self.is_owner and self.authority == AuthorityMode.OWNER
+        except Exception:
+            return False
+
+    def transfer_ownership(self, new_owner_id: int):
+        self.owner_id = int(new_owner_id)
+        try:
+            from core.network.transport import get_transport
+            from core.network.protocol import MessageType
+            t = get_transport()
+            if t.is_connected:
+                t.broadcast(MessageType.NET_OWNER_CHANGE, {"net_id": self.net_id, "owner_id": self.owner_id})
+        except Exception:
+            pass
+
+    def request_ownership(self):
+        try:
+            from core.network.transport import get_transport
+            from core.network.protocol import MessageType
+            t = get_transport()
+            if t.is_connected:
+                t.send(MessageType.NET_OWNER_CHANGE, {"net_id": self.net_id, "requester": t.local_id})
+        except Exception:
+            pass
+
+    def apply_owner_change(self, new_owner_id: int):
+        self.owner_id = int(new_owner_id)
+
     def serialize(self) -> dict:
         d = super().serialize()
-        d.update({"network_id": self.network_id, "is_server": self.is_server, "is_local_player": self.is_local_player})
+        d.update({
+            "net_id": self.net_id,
+            "owner_id": self.owner_id,
+            "prefab_id": self.prefab_id,
+            "authority": self.authority.value if isinstance(self.authority, Enum) else str(self.authority),
+            "is_local_player": self.is_local_player,
+            "dont_destroy_on_load": self.dont_destroy_on_load,
+            "network_id": self.net_id,
+            "is_server": self.is_server,
+        })
         return d
+
     @classmethod
     def deserialize(cls, data: dict) -> NetworkIdentity:
         ni = cls()
         ni.enabled = data.get("enabled", True)
-        ni.network_id = data.get("network_id", -1)
-        ni.is_server = data.get("is_server", False)
-        ni.is_local_player = data.get("is_local_player", False)
+        if "net_id" in data:
+            ni.net_id = int(data.get("net_id", -1))
+        else:
+            ni.net_id = int(data.get("network_id", -1))
+        ni.owner_id = int(data.get("owner_id", -1))
+        ni.prefab_id = str(data.get("prefab_id", ""))
+        raw_auth = data.get("authority", "server")
+        try:
+            ni.authority = AuthorityMode(raw_auth)
+        except Exception:
+            ni.authority = AuthorityMode.SERVER
+        ni.is_local_player = bool(data.get("is_local_player", False))
+        ni.dont_destroy_on_load = bool(data.get("dont_destroy_on_load", False))
+        ni.is_server = bool(data.get("is_server", False))
+        ni.network_id = ni.net_id
         return ni

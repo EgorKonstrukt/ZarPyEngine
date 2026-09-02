@@ -65,6 +65,18 @@ class MessageType(IntEnum):
     SCRIPT_CHANGE = 51
     SCRIPT_CURSOR = 53
     SCRIPT_OPS = 55
+    NET_SPAWN = 100
+    NET_DESPAWN = 101
+    NET_SPAWN_REQUEST = 102
+    NET_RPC = 103
+    NET_TRANSFORM = 104
+    NET_RIGIDBODY = 105
+    NET_ANIMATOR = 106
+    NET_OWNER_CHANGE = 107
+    NET_VARIABLES = 108
+    NET_READY = 109
+    NET_KICK = 110
+    NET_SNAPSHOT = 111
 
 
 def make_msg(msg_type: int, data: dict) -> bytes:

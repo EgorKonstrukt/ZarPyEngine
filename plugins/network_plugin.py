@@ -8,62 +8,159 @@ from __future__ import annotations
 from typing import Callable, Optional, Any
 from core.foundation.plugin_manager import PluginBase
 from core.foundation.logger import Logger
+
+
 class NetworkMessage:
     def __init__(self, msg_type: str, payload: dict, sender_id: int = -1):
         self.msg_type = msg_type
         self.payload = payload
         self.sender_id = sender_id
+
+
 class NetworkPlugin(PluginBase):
     NAME = "NetworkPlugin"
-    VERSION = "0.1.0"
-    DESCRIPTION = "Network stub for future multiplayer integration."
+    VERSION = "1.0.0"
+    DESCRIPTION = "Multiplayer transport using GameServer/GameClient over TCP."
     SYSTEM = True
+
     def __init__(self):
         super().__init__()
-        self._connected: bool = False
-        self._server_mode: bool = False
-        self._local_id: int = -1
-        self._peers: dict[int, str] = {}
         self._handlers: dict[str, list[Callable]] = {}
         self._pending_messages: list[NetworkMessage] = []
+
     @property
-    def is_connected(self) -> bool: return self._connected
+    def is_connected(self) -> bool:
+        try:
+            from core.network.transport import get_transport
+            return get_transport().is_connected
+        except Exception:
+            return False
+
     @property
-    def is_server(self) -> bool: return self._server_mode
+    def is_server(self) -> bool:
+        try:
+            from core.network.transport import get_transport
+            return get_transport().is_server
+        except Exception:
+            return False
+
     @property
-    def local_id(self) -> int: return self._local_id
+    def local_id(self) -> int:
+        try:
+            from core.network.transport import get_transport
+            return get_transport().local_id
+        except Exception:
+            return -1
+
     @property
-    def peer_count(self) -> int: return len(self._peers)
+    def peer_count(self) -> int:
+        try:
+            from core.network.transport import get_transport
+            return get_transport().peer_count
+        except Exception:
+            return 0
+
     def host(self, port: int = 7777, max_players: int = 16):
-        Logger.warning(f"[NetworkPlugin] host() called - stub only. Port={port}, MaxPlayers={max_players}")
-        self._server_mode = True
-        self._local_id = 0
-        self._connected = True
+        try:
+            from core.network.transport import get_transport
+            ok = get_transport().host("0.0.0.0", int(port))
+            if ok:
+                Logger.info(f"[NetworkPlugin] Hosting on port {port} max_players={max_players}")
+            return ok
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] host failed: {e}")
+            return False
+
     def connect(self, host: str, port: int = 7777):
-        Logger.warning(f"[NetworkPlugin] connect() called - stub only. Host={host}:{port}")
-        self._server_mode = False
-        self._local_id = -1
-        self._connected = False
+        try:
+            from core.network.transport import get_transport
+            ok = get_transport().connect(str(host), int(port), "Player")
+            if ok:
+                Logger.info(f"[NetworkPlugin] Connected to {host}:{port}")
+            return ok
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] connect failed: {e}")
+            return False
+
     def disconnect(self):
-        Logger.warning("[NetworkPlugin] disconnect() called - stub only.")
-        self._connected = False
-        self._peers.clear()
-        self._local_id = -1
+        try:
+            from core.network.transport import get_transport
+            get_transport().disconnect()
+            Logger.info("[NetworkPlugin] Disconnected")
+        except Exception:
+            pass
+
     def send(self, msg_type: str, payload: dict, target_id: int = -1):
-        Logger.debug(f"[NetworkPlugin] send() stub: type={msg_type} target={target_id}")
+        try:
+            from core.network.transport import get_transport
+            from core.network.protocol import MessageType
+            t = get_transport()
+            data = {"rpc": str(msg_type), "payload": dict(payload) if isinstance(payload, dict) else {"value": payload}}
+            if int(target_id) >= 0 and t.is_server:
+                t.send_to(int(target_id), MessageType.NET_RPC, data)
+            else:
+                t.broadcast(MessageType.NET_RPC, data)
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] send error: {e}")
+
     def broadcast(self, msg_type: str, payload: dict):
-        Logger.debug(f"[NetworkPlugin] broadcast() stub: type={msg_type}")
+        try:
+            from core.network.transport import get_transport
+            from core.network.protocol import MessageType
+            get_transport().broadcast(MessageType.NET_RPC, {"rpc": str(msg_type), "payload": dict(payload) if isinstance(payload, dict) else {"value": payload}})
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] broadcast error: {e}")
+
     def on_message(self, msg_type: str, handler: Callable[[NetworkMessage], None]):
-        self._handlers.setdefault(msg_type, []).append(handler)
+        self._handlers.setdefault(str(msg_type), []).append(handler)
+
     def poll(self):
-        for msg in self._pending_messages:
-            for h in self._handlers.get(msg.msg_type, []):
-                try: h(msg)
-                except Exception as e: Logger.error(f"Network handler error: {e}", e)
-        self._pending_messages.clear()
+        try:
+            from core.network.transport import get_transport
+            from core.network.protocol import MessageType
+            t = get_transport()
+            msgs = t.poll()
+            for mtype, data in msgs:
+                if mtype == MessageType.NET_RPC:
+                    rpc = str(data.get("rpc", ""))
+                    payload = data.get("payload", data)
+                    sender = int(data.get("_sender", data.get("sender_id", -1)))
+                    msg = NetworkMessage(rpc, payload if isinstance(payload, dict) else {}, sender)
+                    for h in self._handlers.get(rpc, []):
+                        try:
+                            h(msg)
+                        except Exception as e:
+                            Logger.error(f"Network handler error: {e}")
+                    if not self._handlers.get(rpc):
+                        for h in self._handlers.get("*", []):
+                            try:
+                                h(msg)
+                            except Exception as e:
+                                Logger.error(f"Network handler error: {e}")
+                else:
+                    key = str(mtype)
+                    payload = data
+                    sender = int(data.get("_sender", -1))
+                    msg = NetworkMessage(key, payload, sender)
+                    for h in self._handlers.get(key, []):
+                        try:
+                            h(msg)
+                        except Exception as e:
+                            Logger.error(f"Network handler error: {e}")
+            for msg in self._pending_messages:
+                for h in self._handlers.get(msg.msg_type, []):
+                    try:
+                        h(msg)
+                    except Exception as e:
+                        Logger.error(f"Network handler error: {e}")
+            self._pending_messages.clear()
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] poll error: {e}")
+
     def initialize(self, engine):
         super().initialize(engine)
-        Logger.info("[NetworkPlugin] Network stub initialized. Ready for real transport implementation.")
+        Logger.info("[NetworkPlugin] Network transport initialized")
+
     def shutdown(self):
         self.disconnect()
-        Logger.info("[NetworkPlugin] Network stub shutdown.")
+        Logger.info("[NetworkPlugin] Network shutdown")
