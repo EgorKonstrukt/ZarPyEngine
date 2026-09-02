@@ -53,12 +53,13 @@ class NetworkTransform(Component):
         self.interpolate: bool = True
         self.interp_delay: float = 0.1
         self.teleport_threshold: float = 5.0
-        self._buffer: deque = deque(maxlen=24)
+        self._buffer: deque = deque(maxlen=32)
         self._last_sent_pos: Vec3 = Vec3.zero()
         self._last_sent_rot: Quat = Quat.identity()
         self._last_sent_scale: Vec3 = Vec3.one()
         self._send_accum: float = 0.0
         self._has_sent_initial: bool = False
+        self._seq: int = 0
 
     def _get_identity(self):
         ent = self._entity
@@ -76,11 +77,12 @@ class NetworkTransform(Component):
                 return get_transport().is_server
             except Exception:
                 return False
-        try:
-            from core.network.transport import get_transport
-            return ident.is_owner or get_transport().is_server
-        except Exception:
-            return False
+        if self.authority == TransformAuthority.OWNER:
+            try:
+                return ident.is_owner
+            except Exception:
+                return False
+        return False
 
     def _is_owner(self) -> bool:
         ident = self._get_identity()
@@ -115,9 +117,13 @@ class NetworkTransform(Component):
         ident = self._get_identity()
         if ident is None:
             return
+        if not self._can_send():
+            return
+        self._seq += 1
         payload = {
             "net_id": ident.net_id,
             "t": time.time(),
+            "seq": self._seq,
         }
         if self.sync_position:
             payload["p"] = pos.to_list()
@@ -141,6 +147,7 @@ class NetworkTransform(Component):
         p = data.get("p")
         r = data.get("r")
         s = data.get("s")
+        seq = int(data.get("seq", 0))
         ident = self._get_identity()
         if ident is not None and ident.is_owner and self.authority == TransformAuthority.OWNER:
             return
@@ -151,8 +158,8 @@ class NetworkTransform(Component):
                     return
             except Exception:
                 pass
-        if p is not None and s is None and r is None:
-            pass
+        if seq and self._buffer and seq <= int(self._buffer[-1].get("seq", 0)):
+            return
         if self.interpolate and self.teleport_threshold > 0 and p is not None:
             tr = self.transform
             if tr is not None:
@@ -170,7 +177,7 @@ class NetworkTransform(Component):
                     if s is not None:
                         tr.local_scale = Vec3(float(s[0]), float(s[1]), float(s[2]))
                     return
-        entry = {"t": t}
+        entry = {"t": t, "seq": seq}
         if p is not None:
             entry["p"] = [float(p[0]), float(p[1]), float(p[2])]
         if r is not None:
@@ -192,6 +199,14 @@ class NetworkTransform(Component):
     def teleport(self, pos: Vec3, rot: Quat | None = None, scale: Vec3 | None = None):
         tr = self.transform
         if tr is None:
+            return
+        if not self._can_send() and self.authority != TransformAuthority.SERVER:
+            tr.local_position = pos
+            if rot is not None:
+                tr.local_rotation = rot
+            if scale is not None:
+                tr.local_scale = scale
+            self._buffer.clear()
             return
         tr.local_position = pos
         if rot is not None:

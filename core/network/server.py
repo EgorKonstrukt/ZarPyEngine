@@ -6,13 +6,14 @@
 
 from __future__ import annotations
 import asyncio
+import socket
 import struct
 import random
 import time
-import msgpack
 from typing import Optional
 from core.foundation.logger import Logger
 from core.network.protocol import MessageType, make_msg, parse_msg, FRAME_HEADER_SIZE
+from core.config.constants import MAX_MESSAGE_SIZE
 
 
 class CollabClientInfo:
@@ -58,6 +59,11 @@ class CollabServer:
 
     async def start(self):
         self._server = await asyncio.start_server(self._handle_client, self._host, self._port)
+        for s in self._server.sockets or []:
+            try:
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
         self._running = True
         Logger.info(f"CollabServer listening on {self._host}:{self._port}")
 
@@ -66,6 +72,10 @@ class CollabServer:
         for c in list(self._clients.values()):
             try:
                 c.writer.close()
+                try:
+                    await c.writer.wait_closed()
+                except Exception:
+                    pass
             except Exception:
                 pass
         self._clients.clear()
@@ -74,19 +84,37 @@ class CollabServer:
             await self._server.wait_closed()
         Logger.info("CollabServer stopped")
 
+    async def _read_frame(self, reader: asyncio.StreamReader) -> tuple[int, dict]:
+        header = await reader.readexactly(FRAME_HEADER_SIZE)
+        payload_len = struct.unpack(">I", header)[0]
+        if payload_len == 0 or payload_len > MAX_MESSAGE_SIZE:
+            raise ValueError(f"bad payload_len {payload_len}")
+        payload = await reader.readexactly(payload_len)
+        return parse_msg(payload)
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock is not None:
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         addr = writer.get_extra_info("peername", ("unknown", 0))
         addr_str = f"{addr[0]}:{addr[1]}"
         peer_id = None
         try:
-            header = await reader.readexactly(FRAME_HEADER_SIZE)
-            payload_len = struct.unpack(">I", header)[0]
-            payload = await reader.readexactly(payload_len)
-            msg_type, data = parse_msg(payload)
+            msg_type, data = await self._read_frame(reader)
             if msg_type != MessageType.JOIN:
-                writer.close()
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
                 return
-            name = data.get("name", f"User_{len(self._clients)+1}")
+            name = str(data.get("name", f"User_{len(self._clients)+1}"))[:32]
             peer_id = f"peer_{int(time.time()*1000)}_{random.randint(1000,9999)}"
             color = _COLORS[self._color_idx % len(_COLORS)]
             self._color_idx += 1
@@ -111,9 +139,7 @@ class CollabServer:
                 self._scene_data = data.get("scene")
             Logger.info(f"Collab peer joined: {name} ({addr_str}) as {peer_id}")
             await self._client_loop(info)
-        except asyncio.IncompleteReadError:
-            pass
-        except ConnectionResetError:
+        except (asyncio.IncompleteReadError, ConnectionResetError, ValueError):
             pass
         except Exception as e:
             Logger.error(f"Collab client error: {e}")
@@ -122,19 +148,22 @@ class CollabServer:
                 if peer_id in self._clients:
                     del self._clients[peer_id]
                 self._broadcast(MessageType.LEAVE, {"id": peer_id}, exclude=peer_id)
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
             Logger.info(f"Collab peer left: {peer_id}")
 
     async def _client_loop(self, info: CollabClientInfo):
         reader = info.reader
         while True:
             try:
-                header = await reader.readexactly(FRAME_HEADER_SIZE)
-                payload_len = struct.unpack(">I", header)[0]
-                payload = await reader.readexactly(payload_len)
-                msg_type, data = parse_msg(payload)
+                msg_type, data = await self._read_frame(reader)
                 await self._route_message(info, msg_type, data)
-            except ValueError:
-                Logger.warning(f"Malformed message from {info.peer_id}, skipping")
+            except (asyncio.IncompleteReadError, ConnectionResetError, ValueError):
+                break
+            except Exception:
                 continue
 
     async def _route_message(self, info: CollabClientInfo, msg_type: int, data: dict):
@@ -204,7 +233,10 @@ class CollabServer:
             self._broadcast(msg_type, data, exclude=info.peer_id)
 
     def _broadcast(self, msg_type: int, data: dict, exclude: Optional[str] = None):
-        msg = make_msg(msg_type, data)
+        try:
+            msg = make_msg(msg_type, data)
+        except Exception:
+            return
         for pid, cinfo in list(self._clients.items()):
             if pid == exclude:
                 continue
@@ -215,7 +247,9 @@ class CollabServer:
 
     async def _broadcast_and_drain(self, msg_type: int, data: dict, exclude: Optional[str] = None):
         self._broadcast(msg_type, data, exclude)
-        for cinfo in self._clients.values():
+        for cinfo in list(self._clients.values()):
+            if cinfo.writer.is_closing():
+                continue
             try:
                 await cinfo.writer.drain()
             except Exception:

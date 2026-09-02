@@ -42,6 +42,7 @@ class NetworkVariables(Component):
         self._last_vars: dict[str, Any] = {}
         self._send_accum: float = 0.0
         self._dirty: bool = False
+        self._seq: int = 0
 
     def _get_identity(self):
         ent = self._entity
@@ -59,15 +60,17 @@ class NetworkVariables(Component):
                 return get_transport().is_server
             except Exception:
                 return False
-        try:
-            return ident.is_owner
-        except Exception:
-            return False
+        if self.authority == VariableAuthority.OWNER:
+            try:
+                return ident.is_owner
+            except Exception:
+                return False
+        return False
 
     def set_var(self, name: str, value: Any):
         self._vars[str(name)] = value
         self._dirty = True
-        if self.sync_on_change:
+        if self.sync_on_change and self._can_write():
             self._send_if_needed(force=False)
 
     def get_var(self, name: str, default: Any = None) -> Any:
@@ -113,14 +116,15 @@ class NetworkVariables(Component):
         ident = self._get_identity()
         if ident is None:
             return
+        self._seq += 1
         collapsed = {k: self._collapse(v) for k, v in self._vars.items()}
-        payload = {"net_id": ident.net_id, "vars": collapsed, "t": time.time()}
+        payload = {"net_id": ident.net_id, "vars": collapsed, "t": time.time(), "seq": self._seq}
         try:
             from core.network.transport import get_transport
             from core.network.protocol import MessageType
             get_transport().broadcast(MessageType.NET_VARIABLES, payload)
         except Exception:
-            pass
+            return
         self._last_vars = dict(collapsed)
         self._dirty = False
 
@@ -135,6 +139,11 @@ class NetworkVariables(Component):
                     return
             except Exception:
                 pass
+        seq = int(data.get("seq", 0))
+        if seq and hasattr(self, "_last_seq") and seq <= getattr(self, "_last_seq", 0):
+            return
+        if seq:
+            self._last_seq = seq
         vars_data = data.get("vars", data.get("data", {}))
         if not isinstance(vars_data, dict):
             return

@@ -49,6 +49,7 @@ class NetworkAnimator(Component):
         self._last_playing: bool | None = None
         self._last_params: dict = {}
         self._send_accum: float = 0.0
+        self._seq: int = 0
 
     def _get_identity(self):
         ent = self._entity
@@ -75,10 +76,12 @@ class NetworkAnimator(Component):
                 return get_transport().is_server
             except Exception:
                 return False
-        try:
-            return ident.is_owner
-        except Exception:
-            return False
+        if self.authority == AnimatorAuthority.OWNER:
+            try:
+                return ident.is_owner
+            except Exception:
+                return False
+        return False
 
     def _collect_state(self) -> dict | None:
         anim = self._get_animation()
@@ -126,9 +129,9 @@ class NetworkAnimator(Component):
     def _has_changed(self, state: dict) -> bool:
         if state.get("clip", self._last_clip) != self._last_clip:
             return True
-        if self.sync_time and abs(state.get("time", 0.0) - self._last_time) > 0.02:
+        if self.sync_time and abs(state.get("time", 0.0) - self._last_time) > 0.05:
             return True
-        if self.sync_speed and abs(state.get("speed", 1.0) - self._last_speed) > 0.001:
+        if self.sync_speed and abs(state.get("speed", 1.0) - self._last_speed) > 0.01:
             return True
         if self.sync_playing and state.get("playing") != self._last_playing:
             return True
@@ -142,7 +145,10 @@ class NetworkAnimator(Component):
         ident = self._get_identity()
         if ident is None:
             return
-        payload = {"net_id": ident.net_id, "t": time.time()}
+        if not self._can_send():
+            return
+        self._seq += 1
+        payload = {"net_id": ident.net_id, "t": time.time(), "seq": self._seq}
         payload.update(state)
         try:
             from core.network.transport import get_transport
@@ -167,6 +173,11 @@ class NetworkAnimator(Component):
                     return
             except Exception:
                 pass
+        seq = int(data.get("seq", 0))
+        if seq and self._seq and seq <= self._seq:
+            return
+        if seq:
+            self._seq = seq
         anim = self._get_animation()
         if anim is None:
             return
@@ -246,7 +257,8 @@ class NetworkAnimator(Component):
             try:
                 from core.network.transport import get_transport
                 from core.network.protocol import MessageType
-                get_transport().broadcast(MessageType.NET_ANIMATOR, {"net_id": ident.net_id, "trigger": str(name), "t": time.time()})
+                self._seq += 1
+                get_transport().broadcast(MessageType.NET_ANIMATOR, {"net_id": ident.net_id, "trigger": str(name), "t": time.time(), "seq": self._seq})
             except Exception:
                 pass
 

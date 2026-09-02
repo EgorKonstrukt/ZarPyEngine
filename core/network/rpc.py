@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from typing import Callable, Any
+from typing import Callable
 from core.ecs.ecs import Entity
 
 
@@ -35,19 +35,28 @@ def invoke_rpc(entity: Entity, method: str, args: dict, sender: int = -1):
         return
     for comp in entity.get_all_components():
         fn = getattr(comp, method, None)
-        if callable(fn):
+        if callable(fn) and getattr(fn, "_rpc_type", None) is not None:
             try:
                 if isinstance(args, dict):
                     fn(args)
                 else:
                     fn()
                 return
-            except Exception:
+            except TypeError:
                 try:
                     fn()
                     return
                 except Exception:
                     pass
+            except Exception:
+                pass
+        handler = getattr(comp, "handle_rpc", None)
+        if callable(handler):
+            try:
+                handler(method, args, sender)
+            except Exception:
+                pass
+            return
         alt = getattr(comp, f"rpc_{method}", None)
         if callable(alt):
             try:
@@ -64,7 +73,11 @@ def send_server_rpc(net_id: int, method: str, args: dict | None = None):
     try:
         from core.network.transport import get_transport
         from core.network.protocol import MessageType
-        get_transport().broadcast(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}})
+        t = get_transport()
+        if t.is_client:
+            t.send(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "rpc_type": "server"})
+        elif t.is_server:
+            t.broadcast(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "rpc_type": "server"})
     except Exception:
         pass
 
@@ -73,7 +86,9 @@ def send_client_rpc(net_id: int, method: str, args: dict | None = None):
     try:
         from core.network.transport import get_transport
         from core.network.protocol import MessageType
-        get_transport().broadcast(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}})
+        t = get_transport()
+        if t.is_server:
+            t.broadcast(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "rpc_type": "client"})
     except Exception:
         pass
 
@@ -82,6 +97,10 @@ def send_target_rpc(peer_id: int, net_id: int, method: str, args: dict | None = 
     try:
         from core.network.transport import get_transport
         from core.network.protocol import MessageType
-        get_transport().send_to(int(peer_id), MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "target": int(peer_id)})
+        t = get_transport()
+        if t.is_server:
+            t.send_to(int(peer_id), MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "target": int(peer_id), "rpc_type": "target"})
+        else:
+            t.send(MessageType.NET_RPC, {"net_id": int(net_id), "method": str(method), "args": dict(args) if args else {}, "target": int(peer_id), "rpc_type": "target"})
     except Exception:
         pass

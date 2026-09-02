@@ -62,21 +62,23 @@ class NetworkIdentity(Component):
             return True
         if self.authority == AuthorityMode.OWNER:
             return self.is_owner
-        try:
-            from core.network.transport import get_transport
-            t = get_transport()
-            if t.is_server:
-                return True
-            return self.is_owner and self.authority == AuthorityMode.OWNER
-        except Exception:
-            return False
+        if self.authority == AuthorityMode.SERVER:
+            try:
+                from core.network.transport import get_transport
+                return get_transport().is_server
+            except Exception:
+                return False
+        return False
 
     def transfer_ownership(self, new_owner_id: int):
-        self.owner_id = int(new_owner_id)
         try:
             from core.network.transport import get_transport
             from core.network.protocol import MessageType
             t = get_transport()
+            if not t.is_server:
+                return
+            self.owner_id = int(new_owner_id)
+            self._refresh_is_local()
             if t.is_connected:
                 t.broadcast(MessageType.NET_OWNER_CHANGE, {"net_id": self.net_id, "owner_id": self.owner_id})
         except Exception:
@@ -87,13 +89,21 @@ class NetworkIdentity(Component):
             from core.network.transport import get_transport
             from core.network.protocol import MessageType
             t = get_transport()
-            if t.is_connected:
+            if t.is_connected and not t.is_server:
                 t.send(MessageType.NET_OWNER_CHANGE, {"net_id": self.net_id, "requester": t.local_id})
         except Exception:
             pass
 
     def apply_owner_change(self, new_owner_id: int):
         self.owner_id = int(new_owner_id)
+        self._refresh_is_local()
+
+    def _refresh_is_local(self):
+        try:
+            from core.network.transport import get_transport
+            self.is_local_player = (self.owner_id == get_transport().local_id)
+        except Exception:
+            pass
 
     def serialize(self) -> dict:
         d = super().serialize()

@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 import asyncio
+import socket
 import struct
 import threading
 from typing import Optional, Callable
 from collections import deque
 from core.foundation.logger import Logger
 from core.network.protocol import MessageType, make_msg, parse_msg, FRAME_HEADER_SIZE
+from core.config.constants import MAX_MESSAGE_SIZE
 
 
 class CollabClient:
@@ -88,18 +90,31 @@ class CollabClient:
             Logger.error(f"CollabClient connect error: {e}")
             self._connected = False
             if self._on_disconnected:
-                self._on_disconnected()
+                try:
+                    self._on_disconnected()
+                except Exception:
+                    pass
 
     async def _connect(self, host: str, port: int):
         try:
             self._reader, self._writer = await asyncio.open_connection(host, port)
+            try:
+                sock = self._writer.get_extra_info("socket")
+                if sock is not None:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
             self._connected = True
             join_msg = make_msg(MessageType.JOIN, {"name": self._name})
             self._writer.write(join_msg)
+            self._bytes_sent += len(join_msg)
             await self._writer.drain()
             header = await self._reader.readexactly(FRAME_HEADER_SIZE)
             payload_len = struct.unpack(">I", header)[0]
+            if payload_len == 0 or payload_len > MAX_MESSAGE_SIZE:
+                raise ValueError(f"bad payload_len {payload_len}")
             payload = await self._reader.readexactly(payload_len)
+            self._bytes_received += FRAME_HEADER_SIZE + payload_len
             try:
                 msg_type, data = parse_msg(payload)
             except ValueError:
@@ -111,24 +126,36 @@ class CollabClient:
                 with self._lock:
                     self._incoming.append((msg_type, data))
                 if self._on_connected:
-                    self._on_connected()
+                    try:
+                        self._on_connected()
+                    except Exception:
+                        pass
             await self._read_loop()
-        except asyncio.IncompleteReadError:
-            pass
-        except ConnectionResetError:
+        except (asyncio.IncompleteReadError, ConnectionResetError, ValueError):
             pass
         except Exception as e:
             Logger.error(f"CollabClient connection error: {e}")
         finally:
             self._connected = False
+            if self._writer:
+                try:
+                    self._writer.close()
+                    await self._writer.wait_closed()
+                except Exception:
+                    pass
             if not self._stopped and self._on_disconnected:
-                self._on_disconnected()
+                try:
+                    self._on_disconnected()
+                except Exception:
+                    pass
 
     async def _read_loop(self):
         while not self._stopped and self._reader:
             try:
                 header = await self._reader.readexactly(FRAME_HEADER_SIZE)
                 payload_len = struct.unpack(">I", header)[0]
+                if payload_len == 0 or payload_len > MAX_MESSAGE_SIZE:
+                    raise ValueError(f"bad payload_len {payload_len}")
                 payload = await self._reader.readexactly(payload_len)
                 self._bytes_received += FRAME_HEADER_SIZE + payload_len
                 try:
@@ -136,12 +163,17 @@ class CollabClient:
                 except ValueError:
                     continue
                 if msg_type == MessageType.PING:
-                    self._writer.write(make_msg(MessageType.PONG, {"t": data.get("t", 0)}))
-                    self._bytes_sent += FRAME_HEADER_SIZE
+                    pong = make_msg(MessageType.PONG, {"t": data.get("t", 0)})
+                    self._writer.write(pong)
+                    self._bytes_sent += len(pong)
+                    try:
+                        await self._writer.drain()
+                    except Exception:
+                        pass
                 else:
                     with self._lock:
                         self._incoming.append((msg_type, data))
-            except (asyncio.IncompleteReadError, ConnectionResetError):
+            except (asyncio.IncompleteReadError, ConnectionResetError, ValueError):
                 break
 
     def send(self, msg_type: int, data: dict):

@@ -5,7 +5,7 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
-from typing import Callable, Optional, Any
+from typing import Callable
 from core.foundation.plugin_manager import PluginBase
 from core.foundation.logger import Logger
 
@@ -27,6 +27,7 @@ class NetworkPlugin(PluginBase):
         super().__init__()
         self._handlers: dict[str, list[Callable]] = {}
         self._pending_messages: list[NetworkMessage] = []
+        self._subscribed = False
 
     @property
     def is_connected(self) -> bool:
@@ -63,7 +64,7 @@ class NetworkPlugin(PluginBase):
     def host(self, port: int = 7777, max_players: int = 16):
         try:
             from core.network.transport import get_transport
-            ok = get_transport().host("0.0.0.0", int(port))
+            ok = get_transport().host("0.0.0.0", int(port), max_players=int(max_players))
             if ok:
                 Logger.info(f"[NetworkPlugin] Hosting on port {port} max_players={max_players}")
             return ok
@@ -114,46 +115,67 @@ class NetworkPlugin(PluginBase):
     def on_message(self, msg_type: str, handler: Callable[[NetworkMessage], None]):
         self._handlers.setdefault(str(msg_type), []).append(handler)
 
-    def poll(self):
+    def _dispatch_rpc(self, data: dict):
         try:
-            from core.network.transport import get_transport
+            from core.foundation.logger import Logger as _L
+            rpc = str(data.get("rpc", ""))
+            if not rpc:
+                return False
+            payload = data.get("payload", data)
+            sender = int(data.get("_sender", data.get("sender_id", -1)))
+            msg = NetworkMessage(rpc, payload if isinstance(payload, dict) else {}, sender)
+            handled = False
+            for h in self._handlers.get(rpc, []):
+                try:
+                    h(msg)
+                    handled = True
+                except Exception as e:
+                    _L.error(f"Network handler error: {e}")
+            if not handled:
+                for h in self._handlers.get("*", []):
+                    try:
+                        h(msg)
+                    except Exception as e:
+                        _L.error(f"Network handler error: {e}")
+            return True
+        except Exception:
+            return False
+
+    def handle_transport_messages(self, msgs: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
+        try:
             from core.network.protocol import MessageType
-            t = get_transport()
-            msgs = t.poll()
+            remaining: list[tuple[int, dict]] = []
             for mtype, data in msgs:
-                if mtype == MessageType.NET_RPC:
-                    rpc = str(data.get("rpc", ""))
-                    payload = data.get("payload", data)
-                    sender = int(data.get("_sender", data.get("sender_id", -1)))
-                    msg = NetworkMessage(rpc, payload if isinstance(payload, dict) else {}, sender)
-                    for h in self._handlers.get(rpc, []):
-                        try:
-                            h(msg)
-                        except Exception as e:
-                            Logger.error(f"Network handler error: {e}")
-                    if not self._handlers.get(rpc):
-                        for h in self._handlers.get("*", []):
-                            try:
-                                h(msg)
-                            except Exception as e:
-                                Logger.error(f"Network handler error: {e}")
+                if mtype == MessageType.NET_RPC and isinstance(data, dict) and "rpc" in data:
+                    self._dispatch_rpc(data)
                 else:
-                    key = str(mtype)
-                    payload = data
-                    sender = int(data.get("_sender", -1))
-                    msg = NetworkMessage(key, payload, sender)
-                    for h in self._handlers.get(key, []):
-                        try:
-                            h(msg)
-                        except Exception as e:
-                            Logger.error(f"Network handler error: {e}")
-            for msg in self._pending_messages:
+                    remaining.append((mtype, data))
+            for msg in list(self._pending_messages):
                 for h in self._handlers.get(msg.msg_type, []):
                     try:
                         h(msg)
                     except Exception as e:
                         Logger.error(f"Network handler error: {e}")
             self._pending_messages.clear()
+            return remaining
+        except Exception as e:
+            Logger.error(f"[NetworkPlugin] dispatch error: {e}")
+            return msgs
+
+    def poll(self):
+        try:
+            from core.network.transport import get_transport
+            msgs = get_transport().poll()
+            remaining = self.handle_transport_messages(msgs)
+            if remaining:
+                try:
+                    from core.network.transport import get_transport as _gt
+                    t = _gt()
+                    with t._lock:
+                        for m in remaining:
+                            t._incoming.appendleft(m)
+                except Exception:
+                    pass
         except Exception as e:
             Logger.error(f"[NetworkPlugin] poll error: {e}")
 

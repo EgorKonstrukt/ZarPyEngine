@@ -9,7 +9,7 @@ import struct
 import msgpack
 from enum import IntEnum
 
-from core.config.constants import FRAME_HEADER_SIZE
+from core.config.constants import FRAME_HEADER_SIZE, MAX_MESSAGE_SIZE
 
 class MessageType(IntEnum):
     JOIN = 1
@@ -80,14 +80,16 @@ class MessageType(IntEnum):
 
 
 def make_msg(msg_type: int, data: dict) -> bytes:
-    payload = msgpack.packb({"t": msg_type, "d": data})
+    payload = msgpack.packb({"t": int(msg_type), "d": data}, use_bin_type=True)
+    if len(payload) > MAX_MESSAGE_SIZE:
+        raise ValueError(f"payload too large: {len(payload)}")
     return struct.pack(">I", len(payload)) + payload
 
 
 def parse_msg(data: bytes) -> tuple[int, dict]:
     try:
         obj = msgpack.unpackb(data, raw=False)
-        return obj["t"], obj["d"]
+        return int(obj["t"]), dict(obj["d"])
     except Exception as e:
         hexdump = data[:64].hex()
         raise ValueError(f"Invalid message payload: {e} (raw: {hexdump})") from e

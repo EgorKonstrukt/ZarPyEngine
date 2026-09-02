@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 import time
-import math
 from collections import deque
 from enum import Enum
 from core.ecs.ecs import Component, ComponentRegistry
@@ -51,6 +50,7 @@ class NetworkRigidbody(Component):
         self._last_sent_avel: Vec3 = Vec3.zero()
         self._send_accum: float = 0.0
         self._has_sent: bool = False
+        self._seq: int = 0
 
     def _get_identity(self):
         ent = self._entity
@@ -74,10 +74,12 @@ class NetworkRigidbody(Component):
                 return get_transport().is_server
             except Exception:
                 return False
-        try:
-            return ident.is_owner
-        except Exception:
-            return False
+        if self.authority == RigidbodyAuthority.OWNER:
+            try:
+                return ident.is_owner
+            except Exception:
+                return False
+        return False
 
     def _should_send(self, vel: Vec3, avel: Vec3) -> bool:
         if not self._has_sent:
@@ -100,7 +102,10 @@ class NetworkRigidbody(Component):
         ident = self._get_identity()
         if ident is None:
             return
-        payload: dict = {"net_id": ident.net_id, "t": time.time()}
+        if not self._can_send():
+            return
+        self._seq += 1
+        payload: dict = {"net_id": ident.net_id, "t": time.time(), "seq": self._seq}
         if self.sync_velocity:
             payload["v"] = vel.to_list()
         if self.sync_angular:
@@ -126,7 +131,10 @@ class NetworkRigidbody(Component):
                     return
             except Exception:
                 pass
-        entry: dict = {"t": float(data.get("t", time.time()))}
+        seq = int(data.get("seq", 0))
+        if seq and self._buffer and seq <= int(self._buffer[-1].get("seq", 0)):
+            return
+        entry: dict = {"t": float(data.get("t", time.time())), "seq": seq}
         v = data.get("v")
         w = data.get("w")
         if v is not None:
