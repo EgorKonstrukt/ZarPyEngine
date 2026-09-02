@@ -1063,10 +1063,31 @@ class Gizmo:
         if snap_active and self._snap_rotate > 0:
             angle = self._apply_snap(angle, self._snap_rotate, "rot")
         self._delta_text = f"\u0394 {angle:+.1f}\u00b0"
-        dq = Quat.from_axis_angle(axis_dir, angle)
-        if self._space == GizmoSpace.LOCAL:
+        is_local = self._space == GizmoSpace.LOCAL
+        entity = self._entity
+        if is_local and self._active_axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
+            local_axis = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[self._active_axis]
+            dq = Quat.from_axis_angle(local_axis, angle)
             transform.local_rotation = (self._drag_start_rot * dq).normalized()
         else:
+            world_axis = axis_dir
+            if self._active_axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
+                world_axis = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[self._active_axis] if not is_local else axis_dir
+                if not is_local:
+                    world_axis = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[self._active_axis]
+            dq = Quat.from_axis_angle(world_axis, angle)
+            if entity and entity.parent:
+                pt = entity.parent.transform
+                if pt:
+                    pt._update_world_matrix()
+                    pw = pt._world_matrix
+                    _, prot, _ = pw.decompose()
+                    prot = prot.normalized()
+                    dq_world = dq
+                    new_world = dq_world * (prot * self._drag_start_rot)
+                    new_local = prot.conjugate() * new_world
+                    transform.local_rotation = new_local.normalized()
+                    return
             transform.local_rotation = (dq * self._drag_start_rot).normalized()
 
     def _apply_scale(self, transform, cam: SceneCamera, mx: int, my: int, vw: int, vh: int):
