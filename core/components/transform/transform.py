@@ -23,7 +23,7 @@ class Transform(Component):
             InspectorField("local_scale", "Scale", FieldType.VEC3),
         ]
 
-    __slots__ = ("_local_pos", "_local_rot", "_local_scale", "_world_matrix", "_world_target", "_dirty")
+    __slots__ = ("_local_pos", "_local_rot", "_local_scale", "_world_matrix", "_world_target", "_dirty", "_physics_dirty")
 
     def __init__(self):
         super().__init__()
@@ -33,6 +33,7 @@ class Transform(Component):
         self._world_matrix: Mat4 = Mat4.identity()
         self._world_target: Mat4 | None = None
         self._dirty: bool = True
+        self._physics_dirty: bool = False
 
     def _mark_dirty(self):
         if self._dirty:
@@ -122,12 +123,14 @@ class Transform(Component):
         else:
             self._local_pos = v
         self._mark_dirty()
+        self._physics_dirty = True
     @property
     def local_rotation(self) -> Quat: return self._local_rot
     @local_rotation.setter
     def local_rotation(self, v: Quat):
         self._local_rot = v.normalized() if isinstance(v, Quat) else v
         self._mark_dirty()
+        self._physics_dirty = True
     @property
     def local_scale(self) -> Vec3: return self._local_scale
     @local_scale.setter
@@ -139,6 +142,7 @@ class Transform(Component):
         else:
             self._local_scale = v
         self._mark_dirty()
+        self._physics_dirty = True
     @property
     def local_euler_angles(self) -> Vec3: return self._local_rot.to_euler()
     @local_euler_angles.setter
@@ -148,6 +152,7 @@ class Transform(Component):
         else:
             self._local_rot = Quat.from_euler(float(v[0]), float(v[1]), float(v[2]))
         self._mark_dirty()
+        self._physics_dirty = True
     @property
     def position(self) -> Vec3:
         wm = self._world_matrix
@@ -172,9 +177,11 @@ class Transform(Component):
                 local_arr = world_arr @ inv
                 self._local_pos = Vec3(float(local_arr[0]), float(local_arr[1]), float(local_arr[2]))
                 self._mark_dirty()
+                self._physics_dirty = True
                 return
         self._local_pos = world_pos
         self._mark_dirty()
+        self._physics_dirty = True
     @property
     def world_matrix(self) -> Mat4:
         self._update_world_matrix()
@@ -184,6 +191,7 @@ class Transform(Component):
     def world_matrix(self, m: Mat4):
         self._world_target = Mat4(m._d.copy()) if isinstance(m, Mat4) else Mat4(m)
         self._dirty = True
+        self._physics_dirty = True
     @property
     def forward(self) -> Vec3:
         self._update_world_matrix()

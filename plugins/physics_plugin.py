@@ -521,6 +521,12 @@ class PhysicsPlugin(PluginBase):
         _flags = shared._flags_nd
         _rdata = shared._rdata_nd
         for entity, rb, rb2d, tr, slot in cache:
+            if getattr(tr, "_physics_dirty", False):
+                continue
+            if rb2d is not None and rb2d.is_kinematic:
+                continue
+            if rb is not None and rb.is_kinematic:
+                continue
             fl = int(_flags[slot])
             if not (fl & 1) or (fl & 4):
                 continue
@@ -614,7 +620,7 @@ class PhysicsPlugin(PluginBase):
             lp = tr._local_pos
             slots.append(slot)
             if rb2d:
-                if rb2d.is_kinematic:
+                if getattr(tr, "_physics_dirty", False):
                     q = tr._local_rot
                     pos_x.append(lp._x)
                     pos_y.append(lp._y)
@@ -623,6 +629,44 @@ class PhysicsPlugin(PluginBase):
                     qy_l.append(0.0)
                     qz_l.append(q._z)
                     qw_l.append(q._w)
+                    vel_x.append(rb2d._velocity._x)
+                    vel_y.append(rb2d._velocity._y)
+                    vel_z.append(0.0)
+                    av_x.append(0.0)
+                    av_y.append(0.0)
+                    av_z.append(rb2d._angular_velocity)
+                    fa = rb2d._force_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(0.0)
+                    t_x.append(0.0)
+                    t_y.append(0.0)
+                    t_z.append(rb2d._torque_accum)
+                    flv.append(15)
+                    tr._physics_dirty = False
+                elif rb2d.is_kinematic:
+                    q = tr._local_rot
+                    pos_x.append(lp._x)
+                    pos_y.append(lp._y)
+                    pos_z.append(0.0)
+                    qx_l.append(0.0)
+                    qy_l.append(0.0)
+                    qz_l.append(q._z)
+                    qw_l.append(q._w)
+                    vel_x.append(rb2d._velocity._x)
+                    vel_y.append(rb2d._velocity._y)
+                    vel_z.append(0.0)
+                    av_x.append(0.0)
+                    av_y.append(0.0)
+                    av_z.append(rb2d._angular_velocity)
+                    fa = rb2d._force_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(0.0)
+                    t_x.append(0.0)
+                    t_y.append(0.0)
+                    t_z.append(rb2d._torque_accum)
+                    flv.append(15)
                 else:
                     pos_x.append(0.0)
                     pos_y.append(0.0)
@@ -631,25 +675,22 @@ class PhysicsPlugin(PluginBase):
                     qy_l.append(0.0)
                     qz_l.append(0.0)
                     qw_l.append(0.0)
-                vel_x.append(rb2d._velocity._x)
-                vel_y.append(rb2d._velocity._y)
-                vel_z.append(0.0)
-                av_x.append(0.0)
-                av_y.append(0.0)
-                av_z.append(rb2d._angular_velocity)
-                fa = rb2d._force_accum
-                f_x.append(fa._x)
-                f_y.append(fa._y)
-                f_z.append(0.0)
-                t_x.append(0.0)
-                t_y.append(0.0)
-                t_z.append(rb2d._torque_accum)
-                if rb2d.is_kinematic:
-                    flv.append(15)
-                else:
+                    vel_x.append(rb2d._velocity._x)
+                    vel_y.append(rb2d._velocity._y)
+                    vel_z.append(0.0)
+                    av_x.append(0.0)
+                    av_y.append(0.0)
+                    av_z.append(rb2d._angular_velocity)
+                    fa = rb2d._force_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(0.0)
+                    t_x.append(0.0)
+                    t_y.append(0.0)
+                    t_z.append(rb2d._torque_accum)
                     flv.append(11 if rb2d.consume_velocity_dirty() else 9)
             elif rb:
-                if rb.is_kinematic:
+                if getattr(tr, "_physics_dirty", False):
                     q = tr._local_rot
                     pos_x.append(lp._x)
                     pos_y.append(lp._y)
@@ -658,6 +699,58 @@ class PhysicsPlugin(PluginBase):
                     qy_l.append(q._y)
                     qz_l.append(q._z)
                     qw_l.append(q._w)
+                    vel_x.append(rb._velocity._x)
+                    vel_y.append(rb._velocity._y)
+                    vel_z.append(rb._velocity._z)
+                    av_x.append(rb._angular_velocity._x)
+                    av_y.append(rb._angular_velocity._y)
+                    av_z.append(rb._angular_velocity._z)
+                    fa = rb._force_accum
+                    ta = rb._torque_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(fa._z)
+                    t_x.append(ta._x)
+                    t_y.append(ta._y)
+                    t_z.append(ta._z)
+                    fa._x = 0.0
+                    fa._y = 0.0
+                    fa._z = 0.0
+                    ta._x = 0.0
+                    ta._y = 0.0
+                    ta._z = 0.0
+                    flv.append(7)
+                    tr._physics_dirty = False
+                elif rb.is_kinematic:
+                    q = tr._local_rot
+                    pos_x.append(lp._x)
+                    pos_y.append(lp._y)
+                    pos_z.append(lp._z)
+                    qx_l.append(q._x)
+                    qy_l.append(q._y)
+                    qz_l.append(q._z)
+                    qw_l.append(q._w)
+                    vel_x.append(rb._velocity._x)
+                    vel_y.append(rb._velocity._y)
+                    vel_z.append(rb._velocity._z)
+                    av_x.append(rb._angular_velocity._x)
+                    av_y.append(rb._angular_velocity._y)
+                    av_z.append(rb._angular_velocity._z)
+                    fa = rb._force_accum
+                    ta = rb._torque_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(fa._z)
+                    t_x.append(ta._x)
+                    t_y.append(ta._y)
+                    t_z.append(ta._z)
+                    fa._x = 0.0
+                    fa._y = 0.0
+                    fa._z = 0.0
+                    ta._x = 0.0
+                    ta._y = 0.0
+                    ta._z = 0.0
+                    flv.append(7)
                 else:
                     pos_x.append(0.0)
                     pos_y.append(0.0)
@@ -666,29 +759,26 @@ class PhysicsPlugin(PluginBase):
                     qy_l.append(0.0)
                     qz_l.append(0.0)
                     qw_l.append(0.0)
-                vel_x.append(rb._velocity._x)
-                vel_y.append(rb._velocity._y)
-                vel_z.append(rb._velocity._z)
-                av_x.append(rb._angular_velocity._x)
-                av_y.append(rb._angular_velocity._y)
-                av_z.append(rb._angular_velocity._z)
-                fa = rb._force_accum
-                ta = rb._torque_accum
-                f_x.append(fa._x)
-                f_y.append(fa._y)
-                f_z.append(fa._z)
-                t_x.append(ta._x)
-                t_y.append(ta._y)
-                t_z.append(ta._z)
-                fa._x = 0.0
-                fa._y = 0.0
-                fa._z = 0.0
-                ta._x = 0.0
-                ta._y = 0.0
-                ta._z = 0.0
-                if rb.is_kinematic:
-                    flv.append(7)
-                else:
+                    vel_x.append(rb._velocity._x)
+                    vel_y.append(rb._velocity._y)
+                    vel_z.append(rb._velocity._z)
+                    av_x.append(rb._angular_velocity._x)
+                    av_y.append(rb._angular_velocity._y)
+                    av_z.append(rb._angular_velocity._z)
+                    fa = rb._force_accum
+                    ta = rb._torque_accum
+                    f_x.append(fa._x)
+                    f_y.append(fa._y)
+                    f_z.append(fa._z)
+                    t_x.append(ta._x)
+                    t_y.append(ta._y)
+                    t_z.append(ta._z)
+                    fa._x = 0.0
+                    fa._y = 0.0
+                    fa._z = 0.0
+                    ta._x = 0.0
+                    ta._y = 0.0
+                    ta._z = 0.0
                     flv.append(3 if rb.consume_velocity_dirty() else 1)
             if slot > max_slot:
                 max_slot = slot

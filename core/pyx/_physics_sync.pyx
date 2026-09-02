@@ -53,7 +53,7 @@ def batch_sync_ecs_to_physics(list items, object solver):
         entity_id, body_id, entity, rb, tr, is_2d = items[i]
         if not entity._active:
             continue
-        if rb.is_kinematic:
+        if getattr(tr, "_physics_dirty", False):
             p = tr._local_pos
             if is_2d:
                 _quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
@@ -68,6 +68,11 @@ def batch_sync_ecs_to_physics(list items, object solver):
                                    &er_x, &er_y, &er_z)
                 solver.set_body_transform(body_id,
                     (p._x, p._y, p._z), (er_x, er_y, er_z))
+            try:
+                solver.activate(body_id)
+            except Exception:
+                pass
+            tr._physics_dirty = False
         fa = rb._force_accum
         if is_2d:
             if fa._x != 0.0 or fa._y != 0.0:
@@ -92,7 +97,7 @@ def batch_sync_physics_to_ecs(list items, object solver):
     cdef double qr_x, qr_y, qr_z, qr_w
     for i in range(n):
         entity_id, body_id, entity, rb, tr, is_2d = items[i]
-        if not entity._active or rb.is_kinematic:
+        if not entity._active or rb.is_kinematic or getattr(tr, "_physics_dirty", False):
             continue
         pos, rot = solver.get_body_transform(body_id)
         vel = solver.get_velocity(body_id)
@@ -142,6 +147,8 @@ def sync_read_to_ecs(object shared, list cache):
     cdef Vec3 vel3, av3
     for i in range(n):
         entity, rb, rb2d, tr, slot = cache[i]
+        if getattr(tr, "_physics_dirty", False):
+            continue
         fl = flags[slot]
         if not (fl & 1) or (fl & 4):
             continue
@@ -238,7 +245,30 @@ def sync_write_from_ecs(object shared, list cache):
         if rb2d is not None:
             fa2 = rb2d._force_accum
             vel2 = rb2d._velocity
-            if rb2d.is_kinematic:
+            if getattr(tr, "_physics_dirty", False):
+                q = tr._local_rot
+                edata[slot, 0] = lp._x
+                edata[slot, 1] = lp._y
+                edata[slot, 2] = 0.0
+                edata[slot, 3] = 0.0
+                edata[slot, 4] = 0.0
+                edata[slot, 5] = q._z
+                edata[slot, 6] = q._w
+                edata[slot, 7] = vel2._x
+                edata[slot, 8] = vel2._y
+                edata[slot, 9] = 0.0
+                edata[slot, 10] = 0.0
+                edata[slot, 11] = 0.0
+                edata[slot, 12] = rb2d._angular_velocity
+                fdata[slot, 0] = fa2._x
+                fdata[slot, 1] = fa2._y
+                fdata[slot, 2] = 0.0
+                fdata[slot, 3] = 0.0
+                fdata[slot, 4] = 0.0
+                fdata[slot, 5] = rb2d._torque_accum
+                flags[slot] = 15
+                tr._physics_dirty = False
+            elif rb2d.is_kinematic:
                 q = tr._local_rot
                 edata[slot, 0] = lp._x
                 edata[slot, 1] = lp._y
@@ -287,7 +317,7 @@ def sync_write_from_ecs(object shared, list cache):
             ta3 = rb._torque_accum
             vel3 = rb._velocity
             av3 = rb._angular_velocity
-            if rb.is_kinematic:
+            if getattr(tr, "_physics_dirty", False):
                 q = tr._local_rot
                 edata[slot, 0] = lp._x
                 edata[slot, 1] = lp._y
@@ -302,6 +332,47 @@ def sync_write_from_ecs(object shared, list cache):
                 edata[slot, 10] = av3._x
                 edata[slot, 11] = av3._y
                 edata[slot, 12] = av3._z
+                fdata[slot, 0] = fa3._x
+                fdata[slot, 1] = fa3._y
+                fdata[slot, 2] = fa3._z
+                fdata[slot, 3] = ta3._x
+                fdata[slot, 4] = ta3._y
+                fdata[slot, 5] = ta3._z
+                fa3._x = 0.0
+                fa3._y = 0.0
+                fa3._z = 0.0
+                ta3._x = 0.0
+                ta3._y = 0.0
+                ta3._z = 0.0
+                flags[slot] = 7
+                tr._physics_dirty = False
+            elif rb.is_kinematic:
+                q = tr._local_rot
+                edata[slot, 0] = lp._x
+                edata[slot, 1] = lp._y
+                edata[slot, 2] = lp._z
+                edata[slot, 3] = q._x
+                edata[slot, 4] = q._y
+                edata[slot, 5] = q._z
+                edata[slot, 6] = q._w
+                edata[slot, 7] = vel3._x
+                edata[slot, 8] = vel3._y
+                edata[slot, 9] = vel3._z
+                edata[slot, 10] = av3._x
+                edata[slot, 11] = av3._y
+                edata[slot, 12] = av3._z
+                fdata[slot, 0] = fa3._x
+                fdata[slot, 1] = fa3._y
+                fdata[slot, 2] = fa3._z
+                fdata[slot, 3] = ta3._x
+                fdata[slot, 4] = ta3._y
+                fdata[slot, 5] = ta3._z
+                fa3._x = 0.0
+                fa3._y = 0.0
+                fa3._z = 0.0
+                ta3._x = 0.0
+                ta3._y = 0.0
+                ta3._z = 0.0
                 flags[slot] = 7
             else:
                 edata[slot, 0] = 0.0
@@ -317,20 +388,20 @@ def sync_write_from_ecs(object shared, list cache):
                 edata[slot, 10] = av3._x
                 edata[slot, 11] = av3._y
                 edata[slot, 12] = av3._z
+                fdata[slot, 0] = fa3._x
+                fdata[slot, 1] = fa3._y
+                fdata[slot, 2] = fa3._z
+                fdata[slot, 3] = ta3._x
+                fdata[slot, 4] = ta3._y
+                fdata[slot, 5] = ta3._z
+                fa3._x = 0.0
+                fa3._y = 0.0
+                fa3._z = 0.0
+                ta3._x = 0.0
+                ta3._y = 0.0
+                ta3._z = 0.0
                 flags[slot] = 3 if rb._velocity_dirty else 1
                 rb._velocity_dirty = False
-            fdata[slot, 0] = fa3._x
-            fdata[slot, 1] = fa3._y
-            fdata[slot, 2] = fa3._z
-            fdata[slot, 3] = ta3._x
-            fdata[slot, 4] = ta3._y
-            fdata[slot, 5] = ta3._z
-            fa3._x = 0.0
-            fa3._y = 0.0
-            fa3._z = 0.0
-            ta3._x = 0.0
-            ta3._y = 0.0
-            ta3._z = 0.0
         if slot > max_slot:
             max_slot = slot
     return max_slot

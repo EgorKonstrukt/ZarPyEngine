@@ -370,6 +370,27 @@ class PhysicsScene:
                     items.append((entity_id, body_id, cached[0], cached[1], cached[2], cached[3]))
             if items:
                 batch_sync_ecs_to_physics(items, self._solver)
+            from core.math_helpers import quat_to_euler_rad
+            for entity_id, body_id in list(self._entity_to_body.items()):
+                cached = cache.get(entity_id)
+                if not cached:
+                    continue
+                entity, rb, tr, is_2d = cached
+                if not entity._active:
+                    continue
+                if not getattr(tr, "_physics_dirty", False):
+                    continue
+                p = tr._local_pos
+                if is_2d:
+                    self._solver.set_body_transform(body_id, (p._x, p._y, 0.0), (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)[2]))
+                else:
+                    e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)
+                    self._solver.set_body_transform(body_id, (p._x, p._y, p._z), e)
+                try:
+                    self._solver.activate(body_id)
+                except Exception:
+                    pass
+                tr._physics_dirty = False
         except ImportError:
             from core.math_helpers import quat_to_euler_rad
             cache = self._entity_body_cache
@@ -380,18 +401,18 @@ class PhysicsScene:
                 entity, rb, tr, is_2d = cached
                 if not entity._active:
                     continue
-                if rb.is_kinematic:
+                if getattr(tr, "_physics_dirty", False):
                     p = tr._local_pos
                     if is_2d:
-                        self._solver.set_body_transform(body_id,
-                            (p._x, p._y, 0.0),
-                            (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
-                                                          tr._local_rot._z, tr._local_rot._w)[2]))
+                        self._solver.set_body_transform(body_id, (p._x, p._y, 0.0), (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)[2]))
                     else:
-                        e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y,
-                                              tr._local_rot._z, tr._local_rot._w)
-                        self._solver.set_body_transform(body_id,
-                            (p._x, p._y, p._z), e)
+                        e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)
+                        self._solver.set_body_transform(body_id, (p._x, p._y, p._z), e)
+                    try:
+                        self._solver.activate(body_id)
+                    except Exception:
+                        pass
+                    tr._physics_dirty = False
                 fa = rb._force_accum
                 if is_2d:
                     if fa._x != 0.0 or fa._y != 0.0:
@@ -424,7 +445,7 @@ class PhysicsScene:
                 if not cached:
                     continue
                 entity, rb, tr, is_2d = cached
-                if not entity._active or rb.is_kinematic:
+                if not entity._active or rb.is_kinematic or getattr(tr, "_physics_dirty", False):
                     continue
                 pos, rot = self._solver.get_body_transform(body_id)
                 vel = self._solver.get_velocity(body_id)
