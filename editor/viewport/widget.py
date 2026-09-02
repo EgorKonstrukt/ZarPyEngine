@@ -1033,6 +1033,7 @@ class SceneViewport(QOpenGLWidget):
         shift = self._im.is_key_pressed(KEY_SHIFT) if self._im else False
         ctrl = self._im.is_key_pressed(KEY_CTRL) if self._im else False
         self._gizmo.ctrl_down = ctrl
+        self._gizmo.shift_down = shift
         btn = MOUSE_L if qt_btn == Qt.MouseButton.LeftButton else (MOUSE_R if qt_btn == Qt.MouseButton.RightButton else MOUSE_M)
         if self._im:
             self._im.feed_mouse_button(btn, True)
@@ -1054,6 +1055,41 @@ class SceneViewport(QOpenGLWidget):
             if self._pb_scale_gizmo and self._pb_scale_gizmo.active and self._pb_scale_gizmo.on_mouse_press(lx, ly):
                 return
             if self._gizmo.on_mouse_press(x, y, self._cam, *self._get_physical_dims()):
+                # Vertex Tools: Hold Ctrl (Windows) / Option (macOS) to extrude while Move/Scale
+                if self._gizmo.ctrl_down and getattr(self._gizmo, '_active_op', 'translate') in ('translate', 'scale') and self._selected_entities:
+                    try:
+                        from core.foundation.commands import PasteEntitiesCommand, get_history
+                        from core.engine.engine import Engine
+                        scene = self._engine.scene
+                        if scene and self._selected_entities:
+                            # Duplicate selected entities as extruded geometry
+                            clipboard = []
+                            for e in self._selected_entities:
+                                data = e.serialize()
+                                # Keep world position for extruded copy
+                                clipboard.append(data)
+                            if clipboard:
+                                from core.ecs.ecs import Entity
+                                reg = Engine.instance()._component_registry if Engine.instance() else None
+                                cmd = PasteEntitiesCommand(scene, clipboard, reg)
+                                get_history().execute(cmd)
+                                new_entities = [scene.get_entity(eid) for eid in cmd.spawned_ids]
+                                new_entities = [e for e in new_entities if e]
+                                if new_entities:
+                                    # Select extruded entities
+                                    self._selected_entities = new_entities
+                                    self._set_gizmo_entity(new_entities[0])
+                                    self.entities_selected.emit(self._selected_entities)
+                                    # Notify collaboration
+                                    try:
+                                        from editor.viewport.collaboration import send_collab_selection, send_collab_entity_create
+                                        send_collab_selection(self)
+                                        for ne in new_entities:
+                                            send_collab_entity_create(self, ne.serialize())
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
                 self._multi_entity_initial_transforms = {}
                 for ent in self._selected_entities:
                     et = ent.transform
@@ -1115,7 +1151,9 @@ class SceneViewport(QOpenGLWidget):
         self._last_mouse_pos = (lx, ly)
         px, py = int(lx * dpr), int(ly * dpr)
         ctrl = self._im.is_key_pressed(KEY_CTRL) if self._im else False
+        shift = self._im.is_key_pressed(KEY_SHIFT) if self._im else False
         self._gizmo.ctrl_down = ctrl
+        self._gizmo.shift_down = shift
         self._cam.on_mouse_move(lx, ly)
         self._ng_mouse_pos = (float(lx), float(ly))
         dx = lx - self._ng_last_mouse[0]
@@ -1371,6 +1409,41 @@ class SceneViewport(QOpenGLWidget):
         return mapping.get(qt_key)
 
     def contextMenuEvent(self, event):
+        from core.gizmo.gizmo import GizmoAxis
+        if self._gizmo._hover_axis != GizmoAxis.NONE and self._gizmo._is_multigizmo_active():
+            from PyQt6.QtGui import QAction
+            menu = QMenu(self)
+            gizmo_menu = menu.addMenu("Gizmo")
+            # Visibility
+            vis_act = gizmo_menu.addAction("Visible")
+            vis_act.setCheckable(True)
+            vis_act.setChecked(self._gizmo.multigizmo_visible)
+            vis_act.triggered.connect(lambda c: self._on_gizmo_visibility_toggled(c))
+            gizmo_menu.addSeparator()
+            # Alignment
+            align_menu = gizmo_menu.addMenu("Align To")
+            for label in ["View", "World", "Local", "Custom"]:
+                act = align_menu.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(self._gizmo.alignment.lower() == label.lower())
+                act.triggered.connect(lambda c, l=label.lower(): self._on_gizmo_align_changed(l))
+            gizmo_menu.addSeparator()
+            lock_act = gizmo_menu.addAction("Orientation Lock")
+            lock_act.setCheckable(True)
+            lock_act.setChecked(self._gizmo.orientation_lock)
+            lock_act.triggered.connect(lambda c: self._on_gizmo_orientation_lock_toggled(c))
+            hide_act = gizmo_menu.addAction("Hide Gizmo")
+            hide_act.triggered.connect(lambda: self._on_gizmo_visibility_toggled(False))
+            # Also show standard Create menu as submenu
+            create_menu = menu.addMenu("Create")
+            create_empty = create_menu.addAction("Empty")
+            create_empty.triggered.connect(lambda: self._emit_create_request())
+            primitives_menu = create_menu.addMenu("3D Object")
+            for name in ["Cube", "Sphere", "Plane"]:
+                act = primitives_menu.addAction(name)
+                act.triggered.connect(lambda checked=False, n=name.lower(): self._emit_create_request(n))
+            menu.exec(event.globalPos())
+            return
         from editor.viewport.collaboration import is_collab_locked
         menu = QMenu(self)
         create_menu = menu.addMenu("Create")

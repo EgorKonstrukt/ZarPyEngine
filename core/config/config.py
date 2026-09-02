@@ -211,7 +211,11 @@ def get_global_config() -> Config:
                 "icon_scale": 5.0,
                 "selection_bounds": True,
                 "selection_bounds_speed": 13.0,
-                "selection_bounds_color": [0.25, 0.55, 1.0]
+                "selection_bounds_color": [0.25, 0.55, 1.0],
+                "multigizmo_enabled": False,
+                "multigizmo_alignment": "local",
+                "multigizmo_orientation_lock": False,
+                "multigizmo_visible": True
             },
             "console": {
                 "font_size": 10,

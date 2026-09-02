@@ -15,6 +15,10 @@ from editor.main_window.handlers import (
     on_entity_dropped,
     on_gizmo_mode_changed,
     on_gizmo_space_changed,
+    on_multigizmo_toggled,
+    on_multigizmo_align_changed,
+    on_multigizmo_lock_toggled,
+    on_multigizmo_visible_toggled,
     on_grid_toggled,
     on_snap_toggled,
     on_snap_t_changed,
@@ -46,6 +50,10 @@ def connect_signals(mw):
     # Left section: SceneToolbar (gizmo mode, space)
     mw._scene_toolbar.gizmo_mode_changed.connect(lambda m: on_gizmo_mode_changed(mw, m))
     mw._scene_toolbar.gizmo_space_changed.connect(lambda s: on_gizmo_space_changed(mw, s))
+    mw._scene_toolbar.multigizmo_toggled.connect(lambda e: on_multigizmo_toggled(mw, e))
+    mw._scene_toolbar.multigizmo_align_changed.connect(lambda a: on_multigizmo_align_changed(mw, a))
+    mw._scene_toolbar.multigizmo_lock_toggled.connect(lambda l: on_multigizmo_lock_toggled(mw, l))
+    mw._scene_toolbar.multigizmo_visible_toggled.connect(lambda v: on_multigizmo_visible_toggled(mw, v))
 
     # Right section: RenderToolbar (render, camera, snap, grid, skybox, fx)
     mw._render_toolbar.render_mode_changed.connect(lambda m: on_render_mode_changed(mw, m))
@@ -71,4 +79,55 @@ def connect_signals(mw):
     mw._viewport.gizmo.snap_translate = mw._render_toolbar._snap_t_sb.value()
     mw._viewport.gizmo.snap_rotate = mw._render_toolbar._snap_r_sb.value()
     mw._viewport.gizmo.snap_scale = mw._render_toolbar._snap_s_sb.value()
+    from core.config.config import get_global_config
+    from core.gizmo.gizmo import GizmoMode
+    cfg = get_global_config()
+    mw._viewport.gizmo.load_config(cfg)
+    # Sync SceneToolbar multigizmo UI from config
+    try:
+        mw._scene_toolbar._multi_cb.blockSignals(True)
+        mw._scene_toolbar._multi_cb.setChecked(cfg.get("gizmo.multigizmo_enabled", False))
+        mw._scene_toolbar._multi_cb.blockSignals(False)
+        mw._scene_toolbar._align_cb.blockSignals(True)
+        mw._scene_toolbar._align_cb.setCurrentText(cfg.get("gizmo.multigizmo_alignment", "local").capitalize())
+        mw._scene_toolbar._align_cb.blockSignals(False)
+        mw._scene_toolbar._lock_cb.blockSignals(True)
+        mw._scene_toolbar._lock_cb.setChecked(cfg.get("gizmo.multigizmo_orientation_lock", False))
+        mw._scene_toolbar._lock_cb.blockSignals(False)
+        mw._scene_toolbar._gizmo_vis_cb.blockSignals(True)
+        mw._scene_toolbar._gizmo_vis_cb.setChecked(cfg.get("gizmo.multigizmo_visible", True))
+        mw._scene_toolbar._gizmo_vis_cb.blockSignals(False)
+        if cfg.get("gizmo.multigizmo_enabled", False):
+            mw._viewport.gizmo.mode = GizmoMode.MULTI
+    except Exception:
+        pass
     mw._undo_history.history_navigated.connect(lambda: on_undo_history_navigated(mw))
+    # React to global config changes for multigizmo
+    def _on_gizmo_cfg(key, value):
+        try:
+            if key.startswith("gizmo.multigizmo"):
+                mw._viewport.gizmo.load_config(get_global_config())
+                if key == "gizmo.multigizmo_enabled":
+                    mw._scene_toolbar._multi_cb.blockSignals(True)
+                    mw._scene_toolbar._multi_cb.setChecked(bool(value))
+                    mw._scene_toolbar._multi_cb.blockSignals(False)
+                    mw._viewport.gizmo.mode = GizmoMode.MULTI if value else GizmoMode.TRANSLATE
+                    mw._viewport.update()
+                elif key == "gizmo.multigizmo_alignment":
+                    mw._scene_toolbar._align_cb.blockSignals(True)
+                    mw._scene_toolbar._align_cb.setCurrentText(str(value).capitalize())
+                    mw._scene_toolbar._align_cb.blockSignals(False)
+                    mw._viewport.update()
+                elif key == "gizmo.multigizmo_orientation_lock":
+                    mw._scene_toolbar._lock_cb.blockSignals(True)
+                    mw._scene_toolbar._lock_cb.setChecked(bool(value))
+                    mw._scene_toolbar._lock_cb.blockSignals(False)
+                elif key == "gizmo.multigizmo_visible":
+                    mw._scene_toolbar._gizmo_vis_cb.blockSignals(True)
+                    mw._scene_toolbar._gizmo_vis_cb.setChecked(bool(value))
+                    mw._scene_toolbar._gizmo_vis_cb.blockSignals(False)
+                    mw._viewport._gizmo_visible = bool(value)
+                    mw._viewport.update()
+        except Exception:
+            pass
+    cfg.on_changed(_on_gizmo_cfg)

@@ -15,24 +15,48 @@ def register(registry, engine):
 
     @registry.tool(
         "scene_list_entities",
-        "List all entities with basic info (id, name, active, components, children)",
+        "List entities with pagination & filtering. TIP: Use filter_name to find Counter/Spawner, limit/offset for huge scenes, include_components=false by default to avoid truncation. For huge scenes, prefer scene_get_hierarchy or entity_find.",
         {
             "type": "object",
             "properties": {
                 "include_components": {
                     "type": "boolean",
-                    "description": "Include full component data",
+                    "description": "Include full component data (heavy, causes truncation)",
                     "default": False,
-                }
+                },
+                "filter_name": {
+                    "type": "string",
+                    "description": "Substring filter (case-insensitive) for entity name, e.g. 'Counter' or 'Spawner'",
+                    "default": "",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max entities to return (0 = all, default 50 to avoid truncation)",
+                    "default": 50,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip first N entities for pagination",
+                    "default": 0,
+                },
             },
         },
     )
-    def scene_list_entities(include_components=False):
+    def scene_list_entities(include_components=False, filter_name="", limit=50, offset=0):
         s = _scene()
         if s is None:
-            return {"error": "No scene loaded"}
+            return {"error": "No scene loaded", "help": "Call project_get_info to see project root, scene_get_hierarchy for tree view"}
+        all_ents = s.get_all_entities()
+        if filter_name:
+            all_ents = [e for e in all_ents if filter_name.lower() in e.name.lower()]
+        total = len(all_ents)
+        # Apply pagination
+        if limit and limit > 0:
+            all_ents = all_ents[offset:offset+limit]
+        else:
+            all_ents = all_ents[offset:]
         results = []
-        for e in s.get_all_entities():
+        for e in all_ents:
             entry = {
                 "id": e.id,
                 "name": e.name,
@@ -47,7 +71,7 @@ def register(registry, engine):
             if include_components:
                 entry["components"] = [serialize_component(c) for c in e.get_all_components()]
             results.append(entry)
-        return {"entities": results, "count": len(results)}
+        return {"entities": results, "count": len(results), "total_matched": total, "offset": offset, "limit": limit, "help": "Use filter_name='Counter' to find Counter, or scene_get_hierarchy for tree"}
 
     @registry.tool(
         "scene_get_entity",
@@ -423,6 +447,41 @@ def register(registry, engine):
     def scene_new(name="NewScene"):
         run_on_main_thread(lambda: engine.new_scene(name))
         return {"message": f"Created new scene '{name}'"}
+
+    @registry.tool(
+        "scene_find_entities",
+        "Find entities by substring (case-insensitive) in name, tag, or component. BETTER than scene_list_entities for huge scenes.",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Substring in name, e.g. 'Counter', 'Spawner'", "default": ""},
+                "tag": {"type": "string", "description": "Tag to search", "default": ""},
+                "component": {"type": "string", "description": "Component type, e.g. 'TextRenderer', 'Rigidbody'", "default": ""},
+                "limit": {"type": "integer", "description": "Max results", "default": 20},
+            },
+        },
+    )
+    def scene_find_entities(name="", tag="", component="", limit=20):
+        s = _scene()
+        if s is None:
+            return {"error": "No scene loaded"}
+        results = []
+        for e in s.get_all_entities():
+            ok = True
+            if name and name.lower() not in e.name.lower():
+                ok = False
+            if tag and tag not in e.tags:
+                ok = False
+            if component:
+                from core.ecs.ecs import ComponentRegistry
+                cls = ComponentRegistry.get(component)
+                if cls is None or not e.has_component(cls):
+                    ok = False
+            if ok:
+                results.append({"id": e.id, "name": e.name, "components": [type(c).__name__ for c in e.get_all_components()], "active": e.active})
+                if len(results) >= limit:
+                    break
+        return {"entities": results, "count": len(results), "help": "Use scene_get_entity with id for full details"}
 
 
 def _get_project_scenes(engine):

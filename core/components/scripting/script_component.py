@@ -80,6 +80,67 @@ class ScriptComponent(Component):
         self._cached_fields = self._build_fields_from_class(self._py_class)
         return self._cached_fields
 
+    _inspect_error_cache: dict[str, str] = {}
+    _inspect_error_mtime: dict[str, float] = {}
+
+    def _collect_script_errors(self, script_path: str) -> list[str]:
+        errors: list[str] = []
+        try:
+            with open(script_path, "r", encoding="utf-8") as f:
+                source = f.read()
+        except Exception as ex:
+            return [f"{script_path}:0: cannot read file: {ex}"]
+        try:
+            tree = __import__("ast").parse(source, filename=script_path)
+        except SyntaxError as se:
+            return [f"{script_path}:{se.lineno}:{se.offset}: SyntaxError: {se.msg}"]
+        # Collect all import errors without executing
+        for node in __import__("ast").walk(tree):
+            if isinstance(node, __import__("ast").ImportFrom):
+                mod_name = node.module or ""
+                if not mod_name.startswith("core."):
+                    continue
+                # Try to resolve the module
+                try:
+                    spec = importlib.util.find_spec(mod_name)
+                    if spec is None:
+                        errors.append(f"{script_path}:{node.lineno}: No module named '{mod_name}' (did you mean 'core.maths.math3d' instead of 'core.math3d'?)")
+                        continue
+                    # Check imported names
+                    mod = importlib.import_module(mod_name)
+                    for alias in node.names:
+                        if not hasattr(mod, alias.name):
+                            errors.append(f"{script_path}:{node.lineno}: cannot import name '{alias.name}' from '{mod_name}'")
+                except Exception as ex:
+                    errors.append(f"{script_path}:{node.lineno}: import error for '{mod_name}': {ex}")
+            elif isinstance(node, __import__("ast").Import):
+                for alias in node.names:
+                    mod_name = alias.name
+                    if not mod_name.startswith("core."):
+                        continue
+                    try:
+                        spec = importlib.util.find_spec(mod_name)
+                        if spec is None:
+                            errors.append(f"{script_path}:{node.lineno}: No module named '{mod_name}'")
+                    except Exception as ex:
+                        errors.append(f"{script_path}:{node.lineno}: import error '{mod_name}': {ex}")
+        # Try full exec to catch runtime import errors not caught above (e.g. circular)
+        if not errors:
+            try:
+                spec = importlib.util.spec_from_file_location("_user_script_check", script_path)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    mod.Input = Input
+                    mod.KeyCode = KeyCode
+                    spec.loader.exec_module(mod)
+            except Exception as ex:
+                # Extract line number if available
+                import traceback as _tb
+                tb = _tb.extract_tb(ex.__traceback__)
+                lineno = tb[-1].lineno if tb else 0
+                errors.append(f"{script_path}:{lineno}: {type(ex).__name__}: {ex}")
+        return errors
+
     def _load_script_class(self):
         if not self.script_path:
             return
@@ -98,6 +159,26 @@ class ScriptComponent(Component):
         if (self._py_class is not None and mtime is not None
                 and self._script_mtime == mtime):
             return
+        # Smart Unity-like: collect ALL errors, show once per file change
+        errors = self._collect_script_errors(script_path)
+        if errors:
+            key = self.script_path
+            prev_mtime = self._inspect_error_mtime.get(key, None)
+            prev_errors = self._inspect_error_cache.get(key, "")
+            cur_sig = "\n".join(errors)
+            if prev_mtime != mtime or prev_errors != cur_sig:
+                # Show all errors as one consolidated block like Unity
+                msg = f"Script '{self.script_path}' has {len(errors)} error(s):\n" + "\n".join(f"  {e}" for e in errors)
+                Logger.error(msg)
+                self._inspect_error_cache[key] = cur_sig
+                self._inspect_error_mtime[key] = mtime if mtime else 0
+            self._py_instance = None
+            self._cached_fields = []
+            self._cached_hints = None
+            return
+        # No errors -> clear cache
+        self._inspect_error_cache.pop(self.script_path, None)
+        self._inspect_error_mtime.pop(self.script_path, None)
         self._py_instance = None
         self._cached_fields = []
         self._cached_hints = None
@@ -119,7 +200,12 @@ class ScriptComponent(Component):
                         self._py_class = obj
                         return
         except Exception as e:
-            Logger.error(f"Script inspect error '{self.script_path}': {e}")
+            # Fallback single error (should already be caught above, but keep deduplication)
+            key = self.script_path
+            if key not in self._inspect_error_cache:
+                Logger.error(f"Script inspect error '{self.script_path}': {e}")
+                self._inspect_error_cache[key] = str(e)
+            pass
 
     def _build_fields_from_class(self, cls) -> list[InspectorField]:
         fields = []
@@ -262,12 +348,12 @@ class ScriptComponent(Component):
             try:
                 self._py_instance.on_awake()
             except Exception as e:
-                Logger.error(f"Script awake error: {e}")
+                Logger.error(f"Script awake error '{self.script_path}': {e}")
         if self._py_instance and self._py_has_start:
             try:
                 self._py_instance.on_start()
             except Exception as e:
-                Logger.error(f"Script start error: {e}")
+                Logger.error(f"Script start error '{self.script_path}': {e}")
 
     def on_update(self, dt: float):
         if self._py_instance and self._py_has_update:
@@ -275,7 +361,7 @@ class ScriptComponent(Component):
             try:
                 self._py_instance.on_update(dt)
             except Exception as e:
-                Logger.error(f"Script update error: {e}")
+                Logger.error(f"Script update error '{self.script_path}': {e}")
 
     def on_fixed_update(self, dt: float):
         if self._py_instance and self._py_has_fixed_update:
@@ -283,14 +369,14 @@ class ScriptComponent(Component):
             try:
                 self._py_instance.on_fixed_update(dt)
             except Exception as e:
-                Logger.error(f"Script fixed_update error: {e}")
+                Logger.error(f"Script fixed_update error '{self.script_path}': {e}")
 
     def on_destroy(self):
         if self._py_instance and self._py_has_destroy:
             try:
                 self._py_instance.on_destroy()
             except Exception as e:
-                Logger.error(f"Script destroy error: {e}")
+                Logger.error(f"Script destroy error '{self.script_path}': {e}")
 
     def gizmo_lines(self):
         if not self._py_instance and self.script_path:

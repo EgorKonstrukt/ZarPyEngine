@@ -21,23 +21,39 @@ def register(registry, engine):
 
     @registry.tool(
         "component_list_types",
-        "List all registered component types with categories",
-        {"type": "object", "properties": {}},
+        "List component types with FILTERING to avoid truncation. Use search='Rigidbody' or category='Physics' or limit=20. HUGE list (190+ types) truncated otherwise.",
+        {
+            "type": "object",
+            "properties": {
+                "search": {"type": "string", "description": "Substring filter for component name, e.g. 'Rigidbody', 'Collider', 'Text'", "default": ""},
+                "category": {"type": "string", "description": "Filter by category: Animation, Audio, Constraints, Gizmo, GUI, Light, Network, Physics, Rendering, Scripting, Transform, etc", "default": ""},
+                "limit": {"type": "integer", "description": "Max to return (default 30)", "default": 30},
+                "offset": {"type": "integer", "description": "Offset for pagination", "default": 0},
+            },
+        },
     )
-    def component_list_types():
+    def component_list_types(search="", category="", limit=30, offset=0):
         from core.ecs.ecs import ComponentRegistry
         all_comps = ComponentRegistry.all()
         cats = ComponentRegistry.all_categories()
-        result = {}
-        for name, cls in all_comps.items():
+        # Build list
+        items = []
+        for name, cls in sorted(all_comps.items()):
+            cat = cats.get(name, ["Other"])[0] if cats.get(name) else "Other"
+            if category and category.lower() not in cat.lower():
+                continue
+            if search and search.lower() not in name.lower():
+                continue
             module = getattr(cls, "__module__", "")
-            cat = cats.get(name, ["Other"])
-            result[name] = {
-                "category": cat[0] if cat else "Other",
-                "module": module,
-                "allow_multiple": getattr(cls, "_allow_multiple", False),
-            }
-        return {"component_types": result, "count": len(result)}
+            items.append((name, {"category": cat, "module": module, "allow_multiple": getattr(cls, "_allow_multiple", False)}))
+        total = len(items)
+        # Pagination
+        if limit and limit > 0:
+            items = items[offset:offset+limit]
+        else:
+            items = items[offset:]
+        result = {name: info for name, info in items}
+        return {"component_types": result, "count": len(result), "total_matched": total, "offset": offset, "limit": limit, "help": "Use search='Text' to find TextRenderer, category='Physics' for Rigidbody/BoxCollider, limit=20"}
 
     @registry.tool(
         "component_add",

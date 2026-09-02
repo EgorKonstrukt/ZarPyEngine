@@ -23,10 +23,17 @@ class GizmoMode(Enum):
     TRANSLATE = "translate"
     ROTATE = "rotate"
     SCALE = "scale"
+    MULTI = "multi"
 
 class GizmoSpace(Enum):
     WORLD = "world"
     LOCAL = "local"
+
+class GizmoAlignment(Enum):
+    WORLD = "world"
+    LOCAL = "local"
+    VIEW = "view"
+    CUSTOM = "custom"
 
 class GizmoAxis(Enum):
     NONE = 0
@@ -135,6 +142,10 @@ class Gizmo:
         self._smooth_snap_enabled = config.get("gizmo.smooth_snap", True)
         self._smooth_snap_speed = config.get("gizmo.smooth_snap_speed", 0.25)
         self._show_delta_label = config.get("gizmo.show_delta_label", True)
+        self._multigizmo_enabled = config.get("gizmo.multigizmo_enabled", False)
+        self._multigizmo_alignment = config.get("gizmo.multigizmo_alignment", "local")
+        self._orientation_lock = config.get("gizmo.multigizmo_orientation_lock", False)
+        self._multigizmo_visible = config.get("gizmo.multigizmo_visible", True)
 
     def __init__(self):
         self._mode: GizmoMode = GizmoMode.TRANSLATE
@@ -158,11 +169,20 @@ class Gizmo:
         self._pivot_offset: Vec3 = Vec3.zero()
         self._visual_center: Vec3 | None = None
         self._ctrl_down: bool = False
+        self._shift_down: bool = False
         self._delta_text: str = ""
         self._drag_delta: Vec3 = Vec3.zero()
         self._smooth_snap_enabled: bool = True
         self._show_delta_label: bool = True
         self._smooth_snap_speed: float = 0.25
+        self._multigizmo_enabled: bool = False
+        self._multigizmo_alignment: str = "local"
+        self._orientation_lock: bool = False
+        self._multigizmo_visible: bool = True
+        self._active_op: str = "translate"
+        self._hover_op: str = "translate"
+        self._orientation_lock_cache: Optional[tuple[Vec3, Vec3, Vec3]] = None
+        self._custom_matrix: Optional[Mat4] = None
         self._snap_state: dict[str, float] = {}
         self._snap_counter: int = 0
         self._batch: GpuGizmoBatch = GpuGizmoBatch(DEF_CAP)
@@ -204,6 +224,10 @@ class Gizmo:
     @ctrl_down.setter
     def ctrl_down(self, v: bool): self._ctrl_down = v
     @property
+    def shift_down(self) -> bool: return self._shift_down
+    @shift_down.setter
+    def shift_down(self, v: bool): self._shift_down = v
+    @property
     def delta_text(self) -> str: return self._delta_text
     @property
     def show_delta_label(self) -> bool: return self._show_delta_label
@@ -213,6 +237,26 @@ class Gizmo:
     def smooth_snap_enabled(self) -> bool: return self._smooth_snap_enabled
     @smooth_snap_enabled.setter
     def smooth_snap_enabled(self, v: bool): self._smooth_snap_enabled = v
+    @property
+    def multigizmo_enabled(self) -> bool: return self._multigizmo_enabled
+    @multigizmo_enabled.setter
+    def multigizmo_enabled(self, v: bool): self._multigizmo_enabled = bool(v)
+    @property
+    def multigizmo_visible(self) -> bool: return self._multigizmo_visible
+    @multigizmo_visible.setter
+    def multigizmo_visible(self, v: bool): self._multigizmo_visible = bool(v)
+    @property
+    def alignment(self) -> str: return self._multigizmo_alignment
+    @alignment.setter
+    def alignment(self, v: str): self._multigizmo_alignment = str(v)
+    @property
+    def orientation_lock(self) -> bool: return self._orientation_lock
+    @orientation_lock.setter
+    def orientation_lock(self, v: bool): self._orientation_lock = bool(v)
+    @property
+    def custom_matrix(self) -> Optional[Mat4]: return self._custom_matrix
+    @custom_matrix.setter
+    def custom_matrix(self, v: Optional[Mat4]): self._custom_matrix = v
 
     def _snap_key(self) -> str:
         self._snap_counter += 1
@@ -388,7 +432,29 @@ class Gizmo:
         sy[~valid] = np.nan
         return np.column_stack([sx, sy])
 
-    def _get_axis_directions(self, transform):
+    def _get_axis_directions(self, transform, cam=None):
+        if self._orientation_lock and self._orientation_lock_cache is not None:
+            return self._orientation_lock_cache
+        if self._multigizmo_enabled:
+            align = self._multigizmo_alignment
+            if align == "view" and cam is not None:
+                r = cam._right() if hasattr(cam, "_right") else Vec3.right()
+                u = cam._up() if hasattr(cam, "_up") else Vec3.up()
+                f = -cam.forward if hasattr(cam, "forward") else Vec3(0,0,1)
+                return r, u, f
+            if align == "custom" and self._custom_matrix is not None:
+                try:
+                    m = self._custom_matrix._d
+                    rx = Vec3(float(m[0,0]), float(m[0,1]), float(m[0,2])).normalized()
+                    ry = Vec3(float(m[1,0]), float(m[1,1]), float(m[1,2])).normalized()
+                    rz = Vec3(float(m[2,0]), float(m[2,1]), float(m[2,2])).normalized()
+                    return rx, ry, rz
+                except Exception:
+                    pass
+            if align == "world":
+                return Vec3.right(), Vec3.up(), Vec3(0, 0, 1)
+            if align == "local":
+                return transform.right, transform.up, -transform.forward
         if self._space == GizmoSpace.LOCAL:
             return transform.right, transform.up, -transform.forward
         else:
@@ -403,8 +469,13 @@ class Gizmo:
         p2 = v.cross(p1).normalized()
         return p1, p2
 
+    def _is_multigizmo_active(self) -> bool:
+        return self._multigizmo_enabled and self._multigizmo_visible and self._mode != GizmoMode.NONE
+
     def get_gizmo_lines(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600) -> list:
         if not self._entity or self._mode == GizmoMode.NONE:
+            return []
+        if self._multigizmo_enabled and not self._multigizmo_visible:
             return []
         t = self._entity.transform
         if not t:
@@ -412,12 +483,16 @@ class Gizmo:
         self._update_cache(cam, viewport_w, viewport_h)
         pos = self._visual_center if self._visual_center is not None else t.position + self._pivot_offset
         self._batch.clear()
-        if self._mode == GizmoMode.TRANSLATE:
+        if self._is_multigizmo_active():
+            self._get_multigizmo_lines_batch(pos, t, cam, viewport_w, viewport_h)
+        elif self._mode == GizmoMode.TRANSLATE:
             self._get_translate_lines_batch(pos, t, cam, viewport_w, viewport_h)
         elif self._mode == GizmoMode.ROTATE:
             self._get_rotate_lines_batch(pos, t, cam, viewport_w, viewport_h)
         elif self._mode == GizmoMode.SCALE:
             self._get_scale_lines_batch(pos, t, cam, viewport_w, viewport_h)
+        elif self._mode == GizmoMode.MULTI:
+            self._get_multigizmo_lines_batch(pos, t, cam, viewport_w, viewport_h)
         starts, ends, colors = self._batch.get_arrays()
         out = []
         for i in range(len(starts)):
@@ -431,22 +506,30 @@ class Gizmo:
     def get_gizmo_arrays(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600):
         if not self._entity or self._mode == GizmoMode.NONE:
             return None
+        if self._multigizmo_enabled and not self._multigizmo_visible:
+            return None
         t = self._entity.transform
         if not t:
             return None
         self._update_cache(cam, viewport_w, viewport_h)
         pos = self._visual_center if self._visual_center is not None else t.position + self._pivot_offset
         self._batch.clear()
-        if self._mode == GizmoMode.TRANSLATE:
+        if self._is_multigizmo_active():
+            self._get_multigizmo_lines_batch(pos, t, cam, viewport_w, viewport_h)
+        elif self._mode == GizmoMode.TRANSLATE:
             self._get_translate_lines_batch(pos, t, cam, viewport_w, viewport_h)
         elif self._mode == GizmoMode.ROTATE:
             self._get_rotate_lines_batch(pos, t, cam, viewport_w, viewport_h)
         elif self._mode == GizmoMode.SCALE:
             self._get_scale_lines_batch(pos, t, cam, viewport_w, viewport_h)
+        elif self._mode == GizmoMode.MULTI:
+            self._get_multigizmo_lines_batch(pos, t, cam, viewport_w, viewport_h)
         return self._batch.get_arrays()
 
     def get_gizmo_flat_verts(self, cam: SceneCamera, viewport_w: int = 800, viewport_h: int = 600) -> Optional[np.ndarray]:
         if not self._entity or self._mode == GizmoMode.NONE:
+            return None
+        if self._multigizmo_enabled and not self._multigizmo_visible:
             return None
         t = self._entity.transform
         if not t:
@@ -454,7 +537,9 @@ class Gizmo:
         self._update_cache(cam, viewport_w, viewport_h)
         pos = self._visual_center if self._visual_center is not None else t.position + self._pivot_offset
         self._batch.clear()
-        if self._mode == GizmoMode.TRANSLATE:
+        if self._is_multigizmo_active():
+            self._get_multigizmo_lines_batch(pos, t, cam, viewport_w, viewport_h)
+        elif self._mode == GizmoMode.TRANSLATE:
             self._get_translate_lines_batch(pos, t, cam, viewport_w, viewport_h)
         elif self._mode == GizmoMode.ROTATE:
             self._get_rotate_lines_batch(pos, t, cam, viewport_w, viewport_h)
@@ -594,6 +679,89 @@ class Gizmo:
         if entity_sp:
             self._add_cube_handle(pos, entity_sp, half_px * 1.2, inv_vp, cam_fwd, vw, vh, color)
 
+    def _get_multigizmo_lines_batch(self, pos, transform, cam, vw, vh):
+        prev_active = self._active_axis
+        prev_hover = self._hover_axis
+        prev_op_active = getattr(self, '_active_op', 'translate')
+        prev_op_hover = getattr(self, '_hover_op', 'translate')
+        try:
+            is_active_translate = (prev_op_active == 'translate')
+            is_hover_translate = (prev_op_hover == 'translate')
+            self._active_axis = prev_active if is_active_translate else GizmoAxis.NONE
+            self._hover_axis = prev_hover if is_hover_translate else GizmoAxis.NONE
+            self._get_translate_lines_batch(pos, transform, cam, vw, vh)
+            is_active_scale = (prev_op_active == 'scale')
+            is_hover_scale = (prev_op_hover == 'scale')
+            self._active_axis = prev_active if is_active_scale else GizmoAxis.NONE
+            self._hover_axis = prev_hover if is_hover_scale else GizmoAxis.NONE
+            self._get_scale_lines_batch(pos, transform, cam, vw, vh)
+            is_active_rotate = (prev_op_active == 'rotate')
+            is_hover_rotate = (prev_op_hover == 'rotate')
+            self._active_axis = prev_active if is_active_rotate else GizmoAxis.NONE
+            self._hover_axis = prev_hover if is_hover_rotate else GizmoAxis.NONE
+            self._get_vertex_rotate_lines_batch(pos, transform, cam, vw, vh)
+        finally:
+            self._active_axis = prev_active
+            self._hover_axis = prev_hover
+
+    def _get_vertex_rotate_lines_batch(self, pos, transform, cam, vw, vh):
+        batch = self._batch
+        segs = 32
+        active = self._active_axis if self._dragging else self._hover_axis
+        active_op = getattr(self, '_active_op' if self._dragging else '_hover_op', 'rotate')
+        if active_op not in ('rotate', 'translate'):
+            active = GizmoAxis.NONE
+        rx, ry, rz = self._get_axis_directions(transform, cam)
+        if self._multigizmo_alignment == "view" and cam is not None:
+            rx, ry, rz = self._get_axis_directions(transform, cam)
+        elif self._space == GizmoSpace.LOCAL or self._multigizmo_alignment == "local":
+            rx, ry, rz = self._get_axis_directions(transform, cam)
+        else:
+            rx, ry, rz = Vec3.right(), Vec3.up(), Vec3(0, 0, 1)
+        circle_defs = [(GizmoAxis.X, rx), (GizmoAxis.Y, ry), (GizmoAxis.Z, rz)]
+        vp = self._vp_mat_cache
+        inv_vp = self._inv_vp_cache
+        cam_fwd = self._cam_fwd_cache
+        world_radius = self._wpp_cache * self.SCREEN_AXIS_LENGTH * 0.72
+        for axis_id, normal in circle_defs:
+            is_active = (active == axis_id and active_op == 'rotate')
+            color = AXIS_HIGHLIGHT if is_active else AXIS_COLORS[axis_id]
+            p1, p2 = self._get_perpendiculars(normal)
+            # Vertex Tools: 90-degree arc in positive octant only
+            p1n = p1.normalized()
+            p2n = p2.normalized()
+            # Ensure p1,p2 oriented to give 90 deg in positive quadrant (both positive)
+            angles = np.linspace(0.0, math.pi * 0.5, segs + 1, endpoint=True)
+            pts = np.empty((segs + 1, 3), dtype=FLOAT_T)
+            p1a = np.array([p1n.x, p1n.y, p1n.z], dtype=FLOAT_T)
+            p2a = np.array([p2n.x, p2n.y, p2n.z], dtype=FLOAT_T)
+            pos_a = np.array([pos.x, pos.y, pos.z], dtype=FLOAT_T)
+            cos_a = np.cos(angles)
+            sin_a = np.sin(angles)
+            pts[:, 0] = pos_a[0] + p1a[0] * cos_a * world_radius + p2a[0] * sin_a * world_radius
+            pts[:, 1] = pos_a[1] + p1a[1] * cos_a * world_radius + p2a[1] * sin_a * world_radius
+            pts[:, 2] = pos_a[2] + p1a[2] * cos_a * world_radius + p2a[2] * sin_a * world_radius
+            sp = self._project_points_to_screen_np(pts, vp, vw, vh)
+            valid = ~np.isnan(sp[:, 0])
+            for i in range(segs):
+                if valid[i] and valid[i+1]:
+                    s = Vec3(float(pts[i,0]), float(pts[i,1]), float(pts[i,2]))
+                    e = Vec3(float(pts[i+1,0]), float(pts[i+1,1]), float(pts[i+1,2]))
+                    batch.append(s, e, color)
+            # Scale handle at arc end (90 deg) - small square as in Vertex Tools
+            end_pt = pos + p2n * world_radius
+            end_sp = self._project_to_screen(end_pt, vp, vw, vh)
+            if end_sp is not None:
+                scale_color = AXIS_COLORS[axis_id]
+                if is_active:
+                    scale_color = AXIS_HIGHLIGHT
+                half_px = 6.0
+                # offset slightly beyond arc for visibility
+                scale_pt = pos + p2n * world_radius * 1.08
+                scale_sp = self._project_to_screen(scale_pt, vp, vw, vh)
+                if scale_sp is not None:
+                    self._add_cube_handle(scale_pt, scale_sp, half_px, inv_vp, cam_fwd, vw, vh, scale_color)
+
     def _add_arrow_head(self, tip_w: Vec3, tip_sp: tuple, entity_sp: tuple,
                          arrow_len_px: float, inv_vp: Mat4, cam_fwd: Vec3,
                          vw: int, vh: int, color: list):
@@ -692,6 +860,9 @@ class Gizmo:
         batch.append(corners_w[0], corners_w[2], color)
 
     def _pick_axis(self, mx: int, my: int, transform, cam: SceneCamera, vw: int, vh: int) -> GizmoAxis:
+        if self._is_multigizmo_active():
+            axis = self._pick_multigizmo_axis(mx, my, transform, cam, vw, vh)
+            return axis
         pos = transform.position + self._pivot_offset
         self._update_cache(cam, vw, vh)
         vp_mat = self._vp_mat_cache
@@ -840,6 +1011,176 @@ class Gizmo:
                     best_axis = GizmoAxis.ALL
         return best_axis
 
+    def _pick_multigizmo_axis(self, mx: int, my: int, transform, cam: SceneCamera, vw: int, vh: int):
+        if self._orientation_lock and self._orientation_lock_cache is not None:
+            rx, ry, rz = self._orientation_lock_cache
+        else:
+            rx, ry, rz = self._get_axis_directions(transform, cam)
+        pos = transform.position + self._pivot_offset
+        self._update_cache(cam, vw, vh)
+        vp_mat = self._vp_mat_cache
+        wpp = self._wpp_cache
+        sp_start = self._project_to_screen(pos, vp_mat, vw, vh)
+        if sp_start is None:
+            return GizmoAxis.NONE, "translate"
+        best_axis = GizmoAxis.NONE
+        best_op = "translate"
+        best_dist = float('inf')
+        is_2d = cam.is_2d_mode
+        def _scr_dir(axis):
+            eps = pos + axis * max(0.001, wpp * 10.0)
+            sp = self._project_to_screen(eps, vp_mat, vw, vh)
+            if sp_start and sp:
+                dx = sp[0] - sp_start[0]
+                dy = sp[1] - sp_start[1]
+                d = math.sqrt(dx*dx+dy*dy)
+                if d > 1e-8:
+                    return (dx/d, dy/d)
+            return None
+        sd_x = _scr_dir(rx)
+        sd_y = _scr_dir(ry)
+        sd_z = _scr_dir(rz) if not is_2d else None
+        # Move 2D planes
+        ph_px = self.PLANE_HANDLE_SIZE * self.SCREEN_AXIS_LENGTH / self.BASE_AXIS_LENGTH
+        offset_px = ph_px * 0.2
+        planes = [(GizmoAxis.XY, sd_x, sd_y)]
+        if not is_2d:
+            planes.extend([(GizmoAxis.XZ, sd_x, sd_z), (GizmoAxis.YZ, sd_y, sd_z)])
+        for axis_id, sd1, sd2 in planes:
+            if sd1 and sd2 and sp_start:
+                d1x, d1y = sd1
+                d2x, d2y = sd2
+                ox = sp_start[0] + d1x*offset_px + d2x*offset_px
+                oy = sp_start[1] + d1y*offset_px + d2y*offset_px
+                corners = [(ox, oy), (ox+d1x*ph_px, oy+d1y*ph_px), (ox+d1x*ph_px+d2x*ph_px, oy+d1y*ph_px+d2y*ph_px), (ox+d2x*ph_px, oy+d2y*ph_px)]
+                if self._point_in_convex_quad(mx, my, corners):
+                    self._hover_op = "translate"
+                    return axis_id
+        # Center - translate free move
+        if sp_start:
+            half_px = self.CENTER_HANDLE_SIZE * self.SCREEN_AXIS_LENGTH * 0.5
+            if abs(mx - sp_start[0]) <= half_px and abs(my - sp_start[1]) <= half_px:
+                # Prefer translate center; scale center handled via distance check below
+                if best_dist > half_px:
+                    best_dist = half_px
+                    best_axis = GizmoAxis.ALL
+                    best_op = "translate"
+        # Scale center uniform - Vertex Tools: Hold Shift for uniform 3D scaling
+        if sp_start and self._shift_down:
+            half_px_s = self.CENTER_HANDLE_SIZE * self.SCREEN_AXIS_LENGTH / (self.BASE_AXIS_LENGTH*2.0)*1.2
+            d = math.sqrt((mx-sp_start[0])**2 + (my-sp_start[1])**2)
+            if d < half_px_s*1.5:
+                if d < best_dist:
+                    best_dist = d
+                    best_axis = GizmoAxis.ALL
+                    best_op = "scale"
+        # Scale axis cubes
+        world_len = wpp * self.SCREEN_AXIS_LENGTH
+        for axis_id, axis_dir in [(GizmoAxis.X, rx), (GizmoAxis.Y, ry), (GizmoAxis.Z, rz)]:
+            if is_2d and axis_id == GizmoAxis.Z:
+                continue
+            tip = pos + axis_dir * world_len
+            tip_sp = self._project_to_screen(tip, vp_mat, vw, vh)
+            if tip_sp:
+                half_px = self.CENTER_HANDLE_SIZE * self.SCREEN_AXIS_LENGTH / (self.BASE_AXIS_LENGTH*2.0)
+                if abs(mx - tip_sp[0]) <= half_px and abs(my - tip_sp[1]) <= half_px:
+                    d = math.sqrt((mx-tip_sp[0])**2 + (my-tip_sp[1])**2)
+                    if d < best_dist:
+                        best_dist = d
+                        best_axis = axis_id
+                        best_op = "scale"
+        # Translate axes
+        axes = [GizmoAxis.X, GizmoAxis.Y]
+        if not is_2d:
+            axes.append(GizmoAxis.Z)
+        axis_dirs = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}
+        for axis_id in axes:
+            direction = axis_dirs[axis_id]
+            eps_pos = pos + direction * 0.001
+            sp_eps = self._project_to_screen(eps_pos, vp_mat, vw, vh)
+            if sp_start and sp_eps:
+                dx = sp_eps[0]-sp_start[0]
+                dy = sp_eps[1]-sp_start[1]
+                screen_len = math.sqrt(dx*dx+dy*dy)
+                if screen_len < 1e-8:
+                    d = math.sqrt((mx-sp_start[0])**2 + (my-sp_start[1])**2)
+                else:
+                    sp_end_x = sp_start[0] + dx/screen_len*self.SCREEN_AXIS_LENGTH
+                    sp_end_y = sp_start[1] + dy/screen_len*self.SCREEN_AXIS_LENGTH
+                    d = self._point_to_segment_dist(mx, my, sp_start[0], sp_start[1], sp_end_x, sp_end_y)
+                if d < best_dist and d < self.PICK_THRESHOLD:
+                    best_dist = d
+                    best_axis = axis_id
+                    best_op = "translate"
+        # Rotate 90-deg arcs
+        if not is_2d:
+            rx_r, ry_r, rz_r = rx, ry, rz
+            circle_defs = [(GizmoAxis.X, rx_r), (GizmoAxis.Y, ry_r), (GizmoAxis.Z, rz_r)]
+            segs = 32
+            d_mat = vp_mat._d
+            px, py, pz = pos.x, pos.y, pos.z
+            world_radius = wpp * self.SCREEN_AXIS_LENGTH * 0.72
+            for axis_id, normal in circle_defs:
+                p1, p2 = self._get_perpendiculars(normal)
+                # 90 deg arc only for Vertex Tools style
+                angles = np.linspace(0.0, math.pi*0.5, segs+1, endpoint=True)
+                cos_a = np.cos(angles)
+                sin_a = np.sin(angles)
+                p1x, p1y, p1z = p1.x*world_radius, p1.y*world_radius, p1.z*world_radius
+                p2x, p2y, p2z = p2.x*world_radius, p2.y*world_radius, p2.z*world_radius
+                wxs = px + p1x*cos_a + p2x*sin_a
+                wys = py + p1y*cos_a + p2y*sin_a
+                wzs = pz + p1z*cos_a + p2z*sin_a
+                cxs = wxs*d_mat[0,0]+wys*d_mat[1,0]+wzs*d_mat[2,0]+d_mat[3,0]
+                cys = wxs*d_mat[0,1]+wys*d_mat[1,1]+wzs*d_mat[2,1]+d_mat[3,1]
+                cws = wxs*d_mat[0,3]+wys*d_mat[1,3]+wzs*d_mat[2,3]+d_mat[3,3]
+                valid = np.abs(cws) > 1e-6
+                inv_w = np.where(valid, 1.0/np.where(valid, cws, 1.0), 0.0)
+                sxs = (cxs*inv_w+1.0)*0.5*vw
+                sys_ = (1.0 - cys*inv_w)*0.5*vh
+                min_d = float('inf')
+                for i in range(segs):
+                    if not valid[i] or not valid[i+1]:
+                        continue
+                    ax, ay = sxs[i], sys_[i]
+                    bx, by = sxs[i+1], sys_[i+1]
+                    ddx, ddy = bx-ax, by-ay
+                    len_sq = ddx*ddx+ddy*ddy
+                    if len_sq < 1e-6:
+                        dd = math.sqrt((mx-ax)**2+(my-ay)**2)
+                    else:
+                        t = max(0.0, min(1.0, ((mx-ax)*ddx+(my-ay)*ddy)/len_sq))
+                        dd = math.sqrt((mx-ax-t*ddx)**2+(my-ay-t*ddy)**2)
+                    if dd < min_d:
+                        min_d = dd
+                if min_d < best_dist and min_d < self.PICK_THRESHOLD:
+                    best_dist = min_d
+                    best_axis = axis_id
+                    best_op = "rotate"
+                # Scale handle at arc end
+                end_pt = pos + p2 * world_radius * 1.08
+                end_sp = self._project_to_screen(end_pt, vp_mat, vw, vh)
+                if end_sp is not None:
+                    d = math.sqrt((mx-end_sp[0])**2 + (my-end_sp[1])**2)
+                    if d < 12 and d < best_dist:
+                        best_dist = d
+                        best_axis = axis_id
+                        best_op = "scale"
+            # view circle
+            sp_center = sp_start
+            if sp_center is not None:
+                outer_px = self.SCREEN_AXIS_LENGTH * 0.85 * 1.18
+                dist = math.sqrt((mx-sp_center[0])**2 + (my-sp_center[1])**2)
+                if abs(dist-outer_px) < self.PICK_THRESHOLD*0.7 and dist < best_dist:
+                    best_dist = abs(dist-outer_px)
+                    best_axis = GizmoAxis.ALL
+                    best_op = "rotate"
+        if best_axis != GizmoAxis.NONE:
+            self._hover_op = best_op
+            return best_axis
+        self._hover_op = "translate"
+        return GizmoAxis.NONE
+
     def on_mouse_press(self, mx: int, my: int, cam: SceneCamera, viewport_w: int, viewport_h: int) -> bool:
         if not self._entity or self._mode == GizmoMode.NONE:
             return False
@@ -850,24 +1191,35 @@ class Gizmo:
         if axis == GizmoAxis.NONE:
             return False
         self._active_axis = axis
+        if self._is_multigizmo_active():
+            self._active_op = getattr(self, '_hover_op', 'translate')
+        else:
+            mode_to_op = {GizmoMode.TRANSLATE: 'translate', GizmoMode.ROTATE: 'rotate', GizmoMode.SCALE: 'scale'}
+            self._active_op = mode_to_op.get(self._mode, 'translate')
+            if self._mode == GizmoMode.MULTI:
+                self._active_op = getattr(self, '_hover_op', 'translate')
         self._dragging = True
         self._drag_start_mouse = (mx, my)
         self._drag_start_pos = Vec3(*t.position.to_list()) + self._pivot_offset
         self._drag_start_rot = Quat(*t.local_rotation.to_list())
         self._drag_start_scale = Vec3(*t.local_scale.to_list())
         self._drag_entity_start_pos = Vec3(*t.position.to_list())
+        if self._orientation_lock:
+            rx0, ry0, rz0 = self._get_axis_directions(t, cam)
+            self._orientation_lock_cache = (rx0, ry0, rz0)
         pos = t.position + self._pivot_offset
-        rx, ry, rz = self._get_axis_directions(t)
+        rx, ry, rz = self._get_axis_directions(t, cam)
         ray_origin, ray_dir = self._screen_to_ray(mx, my, cam, viewport_w, viewport_h)
-        if self._mode == GizmoMode.TRANSLATE:
+        op = getattr(self, '_active_op', 'translate')
+        if op == 'translate':
             if axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
                 axis_dir = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}[axis]
                 self._drag_axis_dir = axis_dir
                 plane_normal = self._best_translate_plane_normal(axis_dir, cam.forward)
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, plane_normal)
                 if hit is None:
-                    t = self._closest_point_ray_to_line(ray_origin, ray_dir, pos, axis_dir)
-                    hit = (ray_origin + ray_dir * t) if t is not None else pos
+                    tt = self._closest_point_ray_to_line(ray_origin, ray_dir, pos, axis_dir)
+                    hit = (ray_origin + ray_dir * tt) if tt is not None else pos
                 self._drag_hit_start = hit
             elif axis in (GizmoAxis.XY, GizmoAxis.XZ, GizmoAxis.YZ):
                 plane_map = {GizmoAxis.XY: (rx, ry), GizmoAxis.XZ: (rx, rz), GizmoAxis.YZ: (ry, rz)}
@@ -883,23 +1235,29 @@ class Gizmo:
                 self._drag_plane_axes = (rx, ry)
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, plane_normal)
                 self._drag_hit_start = hit if hit else pos
-        elif self._mode == GizmoMode.ROTATE:
+        elif op == 'rotate':
             if axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z, GizmoAxis.ALL):
                 if axis == GizmoAxis.ALL:
                     axis_dir = cam.forward
                 else:
                     axis_dir = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[axis]
-                    if self._space == GizmoSpace.LOCAL:
+                    if self._space == GizmoSpace.LOCAL or (self._is_multigizmo_active() and self._multigizmo_alignment == "local"):
                         axis_dir = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}[axis]
                 self._drag_axis_dir = axis_dir
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, axis_dir)
                 self._drag_hit_start = hit if hit else pos
-        elif self._mode == GizmoMode.SCALE:
+        elif op == 'scale':
+            if self._shift_down:
+                axis = GizmoAxis.ALL
+                self._active_axis = GizmoAxis.ALL
             if axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
                 axis_dir = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}[axis]
                 self._drag_axis_dir = axis_dir
-                plane_normal = cam.forward
+                plane_normal = self._best_translate_plane_normal(axis_dir, cam.forward)
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, plane_normal)
+                if hit is None:
+                    tt = self._closest_point_ray_to_line(ray_origin, ray_dir, pos, axis_dir)
+                    hit = (ray_origin + ray_dir * tt) if tt is not None else pos
                 self._drag_hit_start = hit if hit else pos
             elif axis == GizmoAxis.ALL:
                 self._drag_axis_dir = Vec3.zero()
@@ -910,25 +1268,30 @@ class Gizmo:
 
     def on_mouse_release(self):
         self._visual_center = None
+        if not self._orientation_lock:
+            self._orientation_lock_cache = None
         if self._dragging and self._entity:
             t = self._entity.transform
             if t:
                 from core.foundation.commands import SetComponentCommand, get_history
                 from core.components import Transform as TransformComponent
-                if self._mode == GizmoMode.TRANSLATE:
+                op = getattr(self, '_active_op', 'translate')
+                is_multi = self._is_multigizmo_active() or self._mode == GizmoMode.MULTI
+                check_op = op if is_multi else {GizmoMode.TRANSLATE: 'translate', GizmoMode.ROTATE: 'rotate', GizmoMode.SCALE: 'scale'}.get(self._mode, 'translate')
+                if check_op == 'translate':
                     if not getattr(self, '_multi_undo_active', False):
                         new_pos = t.position
                         if (new_pos - self._drag_entity_start_pos).length() > 1e-8:
                             get_history().execute(SetComponentCommand(
                                 self._entity, TransformComponent, "position",
                                 self._drag_entity_start_pos, new_pos))
-                elif self._mode == GizmoMode.ROTATE:
+                elif check_op == 'rotate':
                     if not getattr(self, '_multi_undo_active', False):
                         new_rot = t.local_rotation
                         get_history().execute(SetComponentCommand(
                             self._entity, TransformComponent, "local_rotation",
                             self._drag_start_rot, new_rot))
-                elif self._mode == GizmoMode.SCALE:
+                elif check_op == 'scale':
                     if not getattr(self, '_multi_undo_active', False):
                         new_scale = t.local_scale
                         get_history().execute(SetComponentCommand(
@@ -936,6 +1299,7 @@ class Gizmo:
                             self._drag_start_scale, new_scale))
         self._dragging = False
         self._active_axis = GizmoAxis.NONE
+        self._active_op = "translate"
         self._delta_text = ""
         self._drag_delta = Vec3.zero()
         self._snap_state.clear()
@@ -945,18 +1309,37 @@ class Gizmo:
         if self._dragging and self._entity:
             t = self._entity.transform
             if t:
-                if self._mode == GizmoMode.TRANSLATE:
+                if self._is_multigizmo_active():
+                    op = getattr(self, '_active_op', 'translate')
+                    if op == 'translate':
+                        self._apply_translate(t, cam, mx, my, viewport_w, viewport_h)
+                    elif op == 'rotate':
+                        self._apply_rotate(t, cam, mx, my, viewport_w, viewport_h)
+                    elif op == 'scale':
+                        self._apply_scale(t, cam, mx, my, viewport_w, viewport_h)
+                elif self._mode == GizmoMode.TRANSLATE:
                     self._apply_translate(t, cam, mx, my, viewport_w, viewport_h)
                 elif self._mode == GizmoMode.ROTATE:
                     self._apply_rotate(t, cam, mx, my, viewport_w, viewport_h)
                 elif self._mode == GizmoMode.SCALE:
                     self._apply_scale(t, cam, mx, my, viewport_w, viewport_h)
+                elif self._mode == GizmoMode.MULTI:
+                    op = getattr(self, '_active_op', 'translate')
+                    if op == 'translate':
+                        self._apply_translate(t, cam, mx, my, viewport_w, viewport_h)
+                    elif op == 'rotate':
+                        self._apply_rotate(t, cam, mx, my, viewport_w, viewport_h)
+                    elif op == 'scale':
+                        self._apply_scale(t, cam, mx, my, viewport_w, viewport_h)
         elif self._entity:
             t = self._entity.transform
             if t:
                 new_hover = self._pick_axis(mx, my, t, cam, viewport_w, viewport_h)
                 if new_hover != self._hover_axis:
                     self._hover_axis = new_hover
+                if self._is_multigizmo_active():
+                    # _hover_op already set by _pick_multigizmo_axis
+                    pass
 
     def _closest_point_ray_to_line(self, ray_o: Vec3, ray_d: Vec3, line_o: Vec3, line_d: Vec3) -> Optional[float]:
         w0 = ray_o - line_o

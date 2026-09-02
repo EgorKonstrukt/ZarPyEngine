@@ -23,9 +23,13 @@ def _make_sep() -> QFrame:
 
 
 class SceneToolbar(QToolBar):
-    """Left section: Gizmo mode (Q/W/E/R) + Space (World/Local)."""
+    """Left section: Gizmo mode (Q/W/E/R) + Space (World/Local) + Multi."""
     gizmo_mode_changed = pyqtSignal(object)
     gizmo_space_changed = pyqtSignal(object)
+    multigizmo_toggled = pyqtSignal(bool)
+    multigizmo_align_changed = pyqtSignal(str)
+    multigizmo_lock_toggled = pyqtSignal(bool)
+    multigizmo_visible_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__("Scene Tools", parent)
@@ -59,10 +63,38 @@ class SceneToolbar(QToolBar):
         self._space_cb.addItems(["World", "Local"])
         self._space_cb.currentTextChanged.connect(self._on_space_changed)
         self.addWidget(self._space_cb)
+        self.addWidget(_make_sep())
+        self._multi_cb = QCheckBox("Multi")
+        self._multi_cb.setToolTip("Vertex Tools Multi Gizmo (Translate+Rotate+Scale)")
+        self._multi_cb.toggled.connect(self._on_multi_toggled)
+        self.addWidget(self._multi_cb)
+        self._align_cb = QComboBox()
+        self._align_cb.addItems(["Local", "World", "View", "Custom"])
+        self._align_cb.setToolTip("Gizmo Alignment - View/World/Local/Custom (Vertex Tools)")
+        self._align_cb.currentTextChanged.connect(self._on_align_changed)
+        self.addWidget(self._align_cb)
+        self._lock_cb = QCheckBox("Lock")
+        self._lock_cb.setToolTip("Orientation Lock - retain orientation when rotating")
+        self._lock_cb.toggled.connect(self.multigizmo_lock_toggled)
+        self.addWidget(self._lock_cb)
+        self._gizmo_vis_cb = QCheckBox("Gizmo")
+        self._gizmo_vis_cb.setChecked(True)
+        self._gizmo_vis_cb.setToolTip("Toggle Gizmo Visibility")
+        self._gizmo_vis_cb.toggled.connect(self.multigizmo_visible_toggled)
+        self.addWidget(self._gizmo_vis_cb)
 
     def _on_space_changed(self, text: str):
         space = GizmoSpace.WORLD if text == "World" else GizmoSpace.LOCAL
         self.gizmo_space_changed.emit(space)
+
+    def _on_multi_toggled(self, checked: bool):
+        self.multigizmo_toggled.emit(checked)
+        # Disable single mode buttons when multi active
+        for btn in [self._btn_none, self._btn_translate, self._btn_rotate, self._btn_scale]:
+            btn.setEnabled(not checked)
+
+    def _on_align_changed(self, text: str):
+        self.multigizmo_align_changed.emit(text.lower())
 
 
 class RenderToolbar(QToolBar):

@@ -498,10 +498,52 @@ def on_scene_loaded(mw, scene):
 
 def on_gizmo_mode_changed(mw, mode):
     mw._viewport.gizmo.mode = mode
+    if hasattr(mw, '_scene_toolbar') and mw._scene_toolbar:
+        # If multigizmo was active and user switches to single mode, disable multigizmo
+        if mode != mw._viewport.gizmo.__class__.__dict__.get('MULTI', None) and getattr(mw._viewport.gizmo, '_multigizmo_enabled', False):
+            # Keep multigizmo enabled but allow mode switch - Vertex Tools keeps multi independent
+            pass
 
 
 def on_gizmo_space_changed(mw, space):
     mw._viewport.gizmo.space = space
+
+def on_multigizmo_toggled(mw, enabled: bool):
+    from core.gizmo.gizmo import GizmoMode
+    mw._viewport.gizmo.multigizmo_enabled = enabled
+    if enabled:
+        mw._viewport.gizmo.mode = GizmoMode.MULTI
+        mw._viewport.gizmo.multigizmo_visible = True
+    else:
+        mw._viewport.gizmo.mode = GizmoMode.TRANSLATE
+    from core.config.config import get_global_config
+    get_global_config().set("gizmo.multigizmo_enabled", enabled)
+    get_global_config().save()
+    mw._viewport.update()
+
+def on_multigizmo_align_changed(mw, align: str):
+    mw._viewport.gizmo.alignment = align
+    from core.config.config import get_global_config
+    get_global_config().set("gizmo.multigizmo_alignment", align)
+    get_global_config().save()
+    mw._viewport.update()
+
+def on_multigizmo_lock_toggled(mw, locked: bool):
+    mw._viewport.gizmo.orientation_lock = locked
+    from core.config.config import get_global_config
+    get_global_config().set("gizmo.multigizmo_orientation_lock", locked)
+    get_global_config().save()
+    if not locked:
+        mw._viewport.gizmo._orientation_lock_cache = None
+    mw._viewport.update()
+
+def on_multigizmo_visible_toggled(mw, visible: bool):
+    mw._viewport.gizmo.multigizmo_visible = visible
+    mw._viewport._gizmo_visible = visible
+    from core.config.config import get_global_config
+    get_global_config().set("gizmo.multigizmo_visible", visible)
+    get_global_config().save()
+    mw._viewport.update()
 
 
 def on_grid_toggled(mw, enabled: bool):

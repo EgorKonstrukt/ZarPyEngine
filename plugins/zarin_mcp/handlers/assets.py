@@ -306,3 +306,5 @@ def register(registry, engine):
         if mat is None:
             return {"error": "Entity has no Material"}
         return {"material": serialize_component(mat)}
+
+
