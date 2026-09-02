@@ -178,63 +178,176 @@ class ComponentWidget(QWidget):
             super().dropEvent(event)
 
     def _undo_setter(self, prop_name):
-        c = self._component
-        def _set_and_sync(v):
-            get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, getattr(c, prop_name), v))
-            try:
-                from core.engine.engine import Engine
-                collab = Engine.instance().collab_manager
-                if collab and collab.connected and self._entity:
-                    val = collapse_value(v)
-                    print(f"COLLAB SYNC: entity={self._entity.id}, key={self._component_key}, prop={prop_name}, val={val}")
-                    collab.send_component_update(self._entity.id, self._component_key, prop_name, val)
-                else:
-                    print(f"COLLAB SKIP: collab={collab}, connected={collab.connected if collab else 'N/A'}, entity={self._entity}")
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-        return _set_and_sync
+        return self._undo_setter_all(type(self._component), prop_name)
 
     def _undo_setter_all(self, comp_type, prop_name):
         entities = [e for e in self._selected_entities if e.has_component(comp_type)]
         if len(entities) <= 1:
-            return self._undo_setter(prop_name)
-        old_values = []
-        for ent in entities:
-            comp = ent.get_component(comp_type)
-            if comp and hasattr(comp, prop_name):
-                old_values.append(getattr(comp, prop_name))
-            else:
-                old_values.append(None)
+            ent = self._entity
+            c = self._component
+            def _set_single(v):
+                old = getattr(c, prop_name) if hasattr(c, prop_name) else None
+                try:
+                    setattr(c, prop_name, v)
+                except Exception:
+                    pass
+                get_history().execute(SetComponentCommand(ent, comp_type, prop_name, old, v))
+                try:
+                    from core.engine.engine import Engine
+                    collab = Engine.instance().collab_manager
+                    if collab and collab.connected and ent:
+                        val = collapse_value(v)
+                        collab.send_component_update(ent.id, self._component_key, prop_name, val)
+                except Exception:
+                    pass
+            return _set_single
         def _set_all(v):
             cmds = []
-            for i, ent in enumerate(entities):
+            for ent in entities:
                 comp = ent.get_component(comp_type)
                 if comp and hasattr(comp, prop_name):
-                    old_v = old_values[i]
-                    if old_v is not None:
-                        cmds.append(SetComponentCommand(ent, comp_type, prop_name, old_v, v))
+                    old_v = getattr(comp, prop_name)
+                    try:
+                        setattr(comp, prop_name, v)
+                    except Exception:
+                        continue
+                    cmds.append(SetComponentCommand(ent, comp_type, prop_name, old_v, v))
+                    try:
+                        from core.engine.engine import Engine
+                        collab = Engine.instance().collab_manager
+                        if collab and collab.connected:
+                            collab.send_component_update(ent.id, self._component_key if ent is self._entity else comp_type.__name__, prop_name, collapse_value(v))
+                    except Exception:
+                        pass
             if cmds:
                 get_history().execute(CompoundCommand(cmds, f"Set {prop_name} on {len(entities)} entities"))
         return _set_all
 
     def _undo_setter_int(self, prop_name):
-        return self._undo_setter(prop_name)
+        return self._undo_setter_all(type(self._component), prop_name)
+
+    def _set_vec_multi(self, prop_name, idx, new_val):
+        comp_type = type(self._component)
+        entities = [e for e in self._selected_entities if e.has_component(comp_type)]
+        if len(entities) <= 1:
+            c = self._component
+            vec = getattr(c, prop_name, None)
+            if vec is None:
+                return
+            if isinstance(vec, (list, tuple)):
+                lst = list(vec)
+                if idx < len(lst):
+                    lst[idx] = new_val
+                    setattr(c, prop_name, type(vec)(lst) if isinstance(vec, tuple) else lst)
+            elif hasattr(vec, 'x'):
+                vals = [vec.x, vec.y, vec.z, vec.w] if hasattr(vec, 'w') else ([vec.x, vec.y] if hasattr(vec, 'y') else [vec.x])
+                vals[idx] = new_val
+                if len(vals) == 2:
+                    setattr(c, prop_name, Vec2(*vals))
+                elif len(vals) == 3:
+                    setattr(c, prop_name, Vec3(*vals))
+                elif len(vals) == 4:
+                    setattr(c, prop_name, Vec4(*vals))
+            return
+        cmds = []
+        for ent in entities:
+            comp = ent.get_component(comp_type)
+            if not comp or not hasattr(comp, prop_name):
+                continue
+            vec = getattr(comp, prop_name, None)
+            if vec is None:
+                continue
+            old = vec
+            if isinstance(vec, (list, tuple)):
+                lst = list(vec)
+                if idx < len(lst):
+                    lst[idx] = new_val
+                    new_vec = type(vec)(lst) if isinstance(vec, tuple) else lst
+                else:
+                    continue
+            elif hasattr(vec, 'x'):
+                if hasattr(vec, 'w'):
+                    vals = [vec.x, vec.y, vec.z, vec.w]
+                    vals[idx] = new_val
+                    new_vec = Vec4(*vals)
+                elif hasattr(vec, 'z'):
+                    vals = [vec.x, vec.y, vec.z]
+                    vals[idx] = new_val
+                    new_vec = Vec3(*vals)
+                else:
+                    vals = [vec.x, vec.y]
+                    vals[idx] = new_val
+                    new_vec = Vec2(*vals)
+            else:
+                continue
+            try:
+                setattr(comp, prop_name, new_vec)
+            except Exception:
+                continue
+            cmds.append(SetComponentCommand(ent, comp_type, prop_name, old, new_vec))
+        if cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set {prop_name}[{idx}] on {len(cmds)} entities"))
 
     def _on_layer_mask_toggle(self, prop_name, bit, btn, layer_names, menu, all_act, nothing_act):
-        mask = int(getattr(self._component, prop_name))
-        if mask & (1 << bit):
-            mask &= ~(1 << bit)
-        else:
-            mask |= 1 << bit
-        setattr(self._component, prop_name, mask)
-        self._update_layer_mask_text(btn, mask, layer_names)
-        all_act.setChecked(mask == 0xFFFF)
-        nothing_act.setChecked(mask == 0)
+        comp_type = type(self._component)
+        entities = [e for e in self._selected_entities if e.has_component(comp_type)]
+        if len(entities) <= 1:
+            mask = int(getattr(self._component, prop_name))
+            if mask & (1 << bit):
+                mask &= ~(1 << bit)
+            else:
+                mask |= 1 << bit
+            self._undo_setter_all(comp_type, prop_name)(mask)
+            self._update_layer_mask_text(btn, mask, layer_names)
+            all_act.setChecked(mask == 0xFFFF)
+            nothing_act.setChecked(mask == 0)
+            return
+        first_mask = int(getattr(self._component, prop_name))
+        new_mask = first_mask & ~(1 << bit) if (first_mask & (1 << bit)) else first_mask | (1 << bit)
+        cmds = []
+        for ent in entities:
+            comp = ent.get_component(comp_type)
+            if comp:
+                old = int(getattr(comp, prop_name))
+                cur = old & ~(1 << bit) if (old & (1 << bit)) else old | (1 << bit)
+                try:
+                    setattr(comp, prop_name, cur)
+                except Exception:
+                    continue
+                cmds.append(SetComponentCommand(ent, comp_type, prop_name, old, cur))
+        if cmds:
+            get_history().execute(CompoundCommand(cmds, f"Toggle layer {bit} on {len(cmds)} entities"))
+        self._update_layer_mask_text(btn, new_mask, layer_names)
+        all_act.setChecked(new_mask == 0xFFFF)
+        nothing_act.setChecked(new_mask == 0)
 
     def _on_layer_mask_set_all(self, prop_name, state, btn, layer_names, menu):
+        comp_type = type(self._component)
+        entities = [e for e in self._selected_entities if e.has_component(comp_type)]
         mask = 0xFFFF if state else 0
-        setattr(self._component, prop_name, mask)
+        if len(entities) <= 1:
+            self._undo_setter_all(comp_type, prop_name)(mask)
+            self._update_layer_mask_text(btn, mask, layer_names)
+            for act in menu.actions():
+                if act.isCheckable() and act.text() not in ("Everything", "Nothing"):
+                    act.setChecked(state)
+                elif act.text() == "Everything":
+                    act.setChecked(state)
+                elif act.text() == "Nothing":
+                    act.setChecked(not state)
+            return
+        cmds = []
+        for ent in entities:
+            comp = ent.get_component(comp_type)
+            if comp:
+                old = int(getattr(comp, prop_name))
+                try:
+                    setattr(comp, prop_name, mask)
+                except Exception:
+                    continue
+                cmds.append(SetComponentCommand(ent, comp_type, prop_name, old, mask))
+        if cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set layer mask x{len(cmds)}"))
         self._update_layer_mask_text(btn, mask, layer_names)
         for act in menu.actions():
             if act.isCheckable() and act.text() not in ("Everything", "Nothing"):
@@ -264,12 +377,34 @@ class ComponentWidget(QWidget):
         self._content_widget.setEnabled(self._component.enabled)
 
     def _on_enabled_toggled(self, checked: bool):
-        old = not checked
-        self._component.enabled = checked
-        if checked: self._component.on_enable()
-        else: self._component.on_disable()
-        if self._entity:
-            get_history().execute(SetComponentCommand(self._entity, type(self._component), "enabled", old, checked))
+        comp_type = type(self._component)
+        entities = [e for e in self._selected_entities if e.has_component(comp_type)]
+        if len(entities) <= 1:
+            old = not checked
+            self._component.enabled = checked
+            if checked: self._component.on_enable()
+            else: self._component.on_disable()
+            if self._entity:
+                get_history().execute(SetComponentCommand(self._entity, comp_type, "enabled", old, checked))
+            self._update_appearance()
+            return
+        cmds = []
+        for ent in entities:
+            comp = ent.get_component(comp_type)
+            if comp:
+                old = comp.enabled
+                if old == checked:
+                    continue
+                comp.enabled = checked
+                if checked:
+                    try: comp.on_enable()
+                    except Exception: pass
+                else:
+                    try: comp.on_disable()
+                    except Exception: pass
+                cmds.append(SetComponentCommand(ent, comp_type, "enabled", old, checked))
+        if cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set enabled x{len(cmds)}"))
         self._update_appearance()
 
     def _show_context_menu(self, pos):
@@ -769,21 +904,38 @@ class ComponentWidget(QWidget):
                 initial = value
             color_edit = ColorLineEdit(initial)
             comp_cls = type(c)
-            def _on_color_changed(col, _pn=prop_name, _val=value, _cls=comp_cls):
-                rgb = [col.redF(), col.greenF(), col.blueF()]
-                if isinstance(_val, Vec4):
-                    rgb.append(col.alphaF())
-                if isinstance(_val, Vec3):
-                    setattr(c, _pn, Vec3(*rgb))
-                elif isinstance(_val, Vec4):
-                    setattr(c, _pn, Vec4(*rgb))
-                elif isinstance(_val, list):
-                    setattr(c, _pn, rgb)
-                elif isinstance(_val, tuple):
-                    setattr(c, _pn, tuple(rgb))
-                elif isinstance(_val, QColor):
-                    setattr(c, _pn, col)
-                get_history().execute(SetComponentCommand(self._entity, _cls, _pn, _val, rgb))
+            def _on_color_changed(col, _pn=prop_name, _cls=comp_cls):
+                entities = [e for e in self._selected_entities if e.has_component(_cls)] or ([self._entity] if self._entity else [])
+                cmds = []
+                for ent in entities:
+                    comp = ent.get_component(_cls)
+                    if not comp or not hasattr(comp, _pn):
+                        continue
+                    old_val = getattr(comp, _pn)
+                    rgb = [col.redF(), col.greenF(), col.blueF()]
+                    if isinstance(old_val, Vec4):
+                        rgb.append(col.alphaF())
+                    if isinstance(old_val, Vec3):
+                        new_val = Vec3(*rgb)
+                    elif isinstance(old_val, Vec4):
+                        new_val = Vec4(*rgb)
+                    elif isinstance(old_val, list):
+                        new_val = list(rgb)
+                    elif isinstance(old_val, tuple):
+                        new_val = tuple(rgb)
+                    elif isinstance(old_val, QColor):
+                        new_val = col
+                    else:
+                        new_val = rgb
+                    try:
+                        setattr(comp, _pn, new_val)
+                    except Exception:
+                        continue
+                    cmds.append(SetComponentCommand(ent, _cls, _pn, old_val, new_val))
+                if len(cmds) == 1:
+                    get_history().execute(cmds[0])
+                elif cmds:
+                    get_history().execute(CompoundCommand(cmds, f"Set {_pn} x{len(cmds)}"))
             color_edit.colorChanged.connect(_on_color_changed)
             self._add_field(field.label, color_edit, prop_name, field.toggle_field)
         elif field.field_type.value == "enum":
@@ -796,25 +948,38 @@ class ComponentWidget(QWidget):
             except Exception:
                 pass
             comp_cls = type(c)
-            def _on_enum_change(t):
+            def _on_enum_change(t, _cls=comp_cls, _pn=prop_name):
                 nv = self._enum_value(enum_cls, t)
-                setattr(c, prop_name, nv)
-                get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, nv))
+                entities = [e for e in self._selected_entities if e.has_component(_cls)] or ([self._entity] if self._entity else [])
+                cmds = []
+                for ent in entities:
+                    comp = ent.get_component(_cls)
+                    if comp and hasattr(comp, _pn):
+                        old = getattr(comp, _pn)
+                        try:
+                            setattr(comp, _pn, nv)
+                        except Exception:
+                            continue
+                        cmds.append(SetComponentCommand(ent, _cls, _pn, old, nv))
+                if len(cmds) == 1:
+                    get_history().execute(cmds[0])
+                elif cmds:
+                    get_history().execute(CompoundCommand(cmds, f"Set {_pn} x{len(cmds)}"))
             combo.currentTextChanged.connect(_on_enum_change)
             self._add_field(field.label, combo, prop_name, field.toggle_field)
         elif field.field_type.value == "resource":
-            pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter(prop_name))
+            pw = make_resource_picker(value, field.file_filter or "All Files (*)", self._undo_setter_all(type(c), prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "gameobject":
             from core.engine.engine import Engine
             scene = Engine.instance().scene
-            gw = make_gameobject_picker(value, scene, self._undo_setter(prop_name))
+            gw = make_gameobject_picker(value, scene, self._undo_setter_all(type(c), prop_name))
             self._add_field(field.label, gw, prop_name, field.toggle_field)
         elif field.field_type.value == "resource_type":
-            pw = make_resource_type_picker(value, field.resource_type or "", self._undo_setter(prop_name))
+            pw = make_resource_type_picker(value, field.resource_type or "", self._undo_setter_all(type(c), prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "asset":
-            pw = make_asset_picker(value, field.resource_type or "", self._undo_setter(prop_name))
+            pw = make_asset_picker(value, field.resource_type or "", self._undo_setter_all(type(c), prop_name))
             self._add_field(field.label, pw, prop_name, field.toggle_field)
         elif field.field_type.value == "curve":
             preview = CurvePreview()
@@ -835,68 +1000,80 @@ class ComponentWidget(QWidget):
                 current = getattr(c, prop_name)
                 if isinstance(current, int):
                     ctrl.set_anchor(current)
-            def _on_anchor_change(v):
-                setattr(c, prop_name, v)
-                get_history().execute(SetComponentCommand(self._entity, type(c), prop_name, value, v))
+            comp_cls = type(c)
+            def _on_anchor_change(v, _cls=comp_cls, _pn=prop_name):
+                entities = [e for e in self._selected_entities if e.has_component(_cls)] or ([self._entity] if self._entity else [])
+                cmds = []
+                for ent in entities:
+                    comp = ent.get_component(_cls)
+                    if comp and hasattr(comp, _pn):
+                        old = getattr(comp, _pn)
+                        try:
+                            setattr(comp, _pn, v)
+                        except Exception:
+                            continue
+                        cmds.append(SetComponentCommand(ent, _cls, _pn, old, v))
+                if len(cmds) == 1:
+                    get_history().execute(cmds[0])
+                elif cmds:
+                    get_history().execute(CompoundCommand(cmds, f"Set {_pn} x{len(cmds)}"))
             ctrl.anchor_changed.connect(_on_anchor_change)
             self._add_field(field.label, ctrl, prop_name, field.toggle_field)
         elif field.field_type.value == "text":
+            comp_cls = type(c)
             if field.multiline:
                 te = QPlainTextEdit()
                 te.setPlainText(str(value) if value else "")
                 te.setFixedHeight(scale(60))
-                te.textChanged.connect(lambda: setattr(c, prop_name, te.toPlainText()))
-                comp_cls = type(c)
-                te.focusOutEvent = lambda ev: (get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.toPlainText())), QPlainTextEdit.focusOutEvent(te, ev))
+                def _commit_multi_text():
+                    new_val = te.toPlainText()
+                    entities = [e for e in self._selected_entities if e.has_component(comp_cls)] or ([self._entity] if self._entity else [])
+                    cmds = []
+                    for ent in entities:
+                        comp = ent.get_component(comp_cls)
+                        if comp and hasattr(comp, prop_name):
+                            old = getattr(comp, prop_name)
+                            try:
+                                setattr(comp, prop_name, new_val)
+                            except Exception:
+                                continue
+                            cmds.append(SetComponentCommand(ent, comp_cls, prop_name, old, new_val))
+                    if len(cmds) == 1:
+                        get_history().execute(cmds[0])
+                    elif cmds:
+                        get_history().execute(CompoundCommand(cmds, f"Set {prop_name} x{len(cmds)}"))
+                te.focusOutEvent = lambda ev, _f=_commit_multi_text: (_f(), QPlainTextEdit.focusOutEvent(te, ev))
             else:
                 te = QLineEdit()
                 te.setText(str(value) if value else "")
-                te.textChanged.connect(lambda: setattr(c, prop_name, te.text()))
-                comp_cls = type(c)
-                te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
+                def _commit_single_text():
+                    new_val = te.text()
+                    entities = [e for e in self._selected_entities if e.has_component(comp_cls)] or ([self._entity] if self._entity else [])
+                    cmds = []
+                    for ent in entities:
+                        comp = ent.get_component(comp_cls)
+                        if comp and hasattr(comp, prop_name):
+                            old = getattr(comp, prop_name)
+                            try:
+                                setattr(comp, prop_name, new_val)
+                            except Exception:
+                                continue
+                            cmds.append(SetComponentCommand(ent, comp_cls, prop_name, old, new_val))
+                    if len(cmds) == 1:
+                        get_history().execute(cmds[0])
+                    elif cmds:
+                        get_history().execute(CompoundCommand(cmds, f"Set {prop_name} x{len(cmds)}"))
+                te.editingFinished.connect(_commit_single_text)
             self._add_field(field.label, te, prop_name, field.toggle_field)
         elif field.field_type.value == "vec2":
             w, sbs = make_vec2_row(field.label, value if value is not None else Vec2(0.0, 0.0), lambda: None)
-            comp_cls = type(c)
-            for sb in sbs:
-                sb.valueChanged.connect(lambda v, pn=prop_name, sbs_box=sbs, cls=comp_cls: self._on_vec2_changed(pn, sbs_box))
             for i, sb in enumerate(sbs):
-                def make_setter(idx):
-                    def setter(v):
-                        vec = getattr(c, prop_name)
-                        if vec is None:
-                            vec = Vec2(0.0, 0.0)
-                        if isinstance(vec, (list, tuple)):
-                            lst = [float(vec[0]), float(vec[1])]
-                        else:
-                            lst = [vec.x, vec.y]
-                        lst[idx] = v
-                        if isinstance(vec, (list, tuple)):
-                            setattr(c, prop_name, list(lst))
-                        else:
-                            setattr(c, prop_name, type(vec)(*lst))
-                    return setter
-                sb.valueChanged.connect(make_setter(i))
+                sb.valueChanged.connect(lambda v, idx=i, pn=prop_name: self._set_vec_multi(pn, idx, v))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3":
             w, sbs = make_vec3_row(field.label, value if value is not None else Vec3(0.0, 0.0, 0.0), lambda: None)
             for i, sb in enumerate(sbs):
-                def make_setter(idx):
-                    def setter(v):
-                        vec = getattr(c, prop_name)
-                        if vec is None:
-                            vec = Vec3(0.0, 0.0, 0.0)
-                        if isinstance(vec, (list, tuple)):
-                            lst = [float(vec[0]), float(vec[1]), float(vec[2])]
-                        else:
-                            lst = [vec.x, vec.y, vec.z]
-                        lst[idx] = v
-                        if isinstance(vec, (list, tuple)):
-                            setattr(c, prop_name, list(lst))
-                        else:
-                            setattr(c, prop_name, type(vec)(*lst))
-                    return setter
-                sb.valueChanged.connect(make_setter(i))
+                sb.valueChanged.connect(lambda v, idx=i, pn=prop_name: self._set_vec_multi(pn, idx, v))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "list":
             self._build_list_field_standalone(field, prop_name)
@@ -937,16 +1114,7 @@ class ComponentWidget(QWidget):
         elif field.field_type.value == "vec4":
             w, sbs = make_vec4_row(field.label, value if value is not None else Vec4(0.0, 0.0, 0.0, 0.0), lambda: None)
             for i, sb in enumerate(sbs):
-                def make_setter(idx):
-                    def setter(v):
-                        vec = getattr(c, prop_name)
-                        if vec is None:
-                            vec = Vec4(0.0, 0.0, 0.0, 0.0)
-                        lst = [vec.x, vec.y, vec.z, vec.w]
-                        lst[idx] = v
-                        setattr(c, prop_name, type(vec)(*lst))
-                    return setter
-                sb.valueChanged.connect(make_setter(i))
+                sb.valueChanged.connect(lambda v, idx=i, pn=prop_name: self._set_vec_multi(pn, idx, v))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "keybinding":
             te = QLineEdit()
@@ -960,35 +1128,21 @@ class ComponentWidget(QWidget):
                 }}
                 QLineEdit:focus {{ border-color: {_accent()}; }}
             """)
-            te.textChanged.connect(lambda: setattr(c, prop_name, te.text()))
             comp_cls = type(c)
-            te.editingFinished.connect(lambda: get_history().execute(SetComponentCommand(self._entity, comp_cls, prop_name, value, te.text())))
+            def _on_keybinding_commit():
+                new_val = te.text()
+                self._undo_setter_all(comp_cls, prop_name)(new_val)
+            te.editingFinished.connect(_on_keybinding_commit)
             self._add_field(field.label, te, prop_name, field.toggle_field)
         elif field.field_type.value == "vec2_slider":
             w, sbs = make_vec2_slider_row(field.label, value, lambda: None, field.min_val, field.max_val)
-            comp_cls = type(c)
             for i, sb in enumerate(sbs):
-                def make_setter(idx):
-                    def setter(v):
-                        vec = getattr(c, prop_name)
-                        lst = [vec.x, vec.y]
-                        lst[idx] = v
-                        setattr(c, prop_name, type(vec)(*lst))
-                    return setter
-                sb.valueChanged.connect(make_setter(i))
+                sb.valueChanged.connect(lambda v, idx=i, pn=prop_name: self._set_vec_multi(pn, idx, v))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "vec3_slider":
             w, sbs = make_vec3_slider_row(field.label, value, lambda: None, field.min_val, field.max_val)
-            comp_cls = type(c)
             for i, sb in enumerate(sbs):
-                def make_setter(idx):
-                    def setter(v):
-                        vec = getattr(c, prop_name)
-                        lst = [vec.x, vec.y, vec.z]
-                        lst[idx] = v
-                        setattr(c, prop_name, type(vec)(*lst))
-                    return setter
-                sb.valueChanged.connect(make_setter(i))
+                sb.valueChanged.connect(lambda v, idx=i, pn=prop_name: self._set_vec_multi(pn, idx, v))
             self._target_layout().addWidget(w)
         elif field.field_type.value == "gradient":
             grad_preview = QPushButton()
@@ -1607,10 +1761,28 @@ class ComponentWidget(QWidget):
 
     def _update_transform_from_spinboxes(self, attr, sbs):
         if self._updating: return
-        tr = self._component
+        comp_type = type(self._component)
         new = Vec3(sbs[0].value(), sbs[1].value(), sbs[2].value())
-        old = getattr(tr, attr)
-        get_history().execute(SetComponentCommand(self._entity, type(tr), attr, old, new))
+        entities = [e for e in self._selected_entities if e.has_component(comp_type)]
+        if len(entities) <= 1:
+            tr = self._component
+            old = getattr(tr, attr)
+            get_history().execute(SetComponentCommand(self._entity, comp_type, attr, old, new))
+        else:
+            cmds = []
+            for ent in entities:
+                comp = ent.get_component(comp_type)
+                if comp:
+                    old = getattr(comp, attr)
+                    try:
+                        setattr(comp, attr, Vec3(new.x, new.y, new.z))
+                    except Exception:
+                        continue
+                    cmds.append(SetComponentCommand(ent, comp_type, attr, old, Vec3(new.x, new.y, new.z)))
+            if len(cmds) == 1:
+                get_history().execute(cmds[0])
+            elif cmds:
+                get_history().execute(CompoundCommand(cmds, f"Set {attr} x{len(cmds)}"))
         self._redraw_viewport()
 
     def refresh_transform(self):

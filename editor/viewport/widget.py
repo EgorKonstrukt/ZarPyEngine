@@ -879,7 +879,8 @@ class SceneViewport(QOpenGLWidget):
                         render_selection_bounds(self, vp_mat, time.perf_counter(), self._last_dt)
                         if not eng.play_mode:
                             try:
-                                render_component_icons_gl(self)
+                                if self._gizmo_icons_visible:
+                                    render_component_icons_gl(self)
                             except Exception:
                                 pass
                         self._render_api_gizmos()
@@ -904,7 +905,7 @@ class SceneViewport(QOpenGLWidget):
                     self._render_bvh_debug()
                 if self._pb_scale_gizmo and self._pb_scale_gizmo.active and not eng.play_mode:
                     self._pb_scale_gizmo.render()
-                if self._gizmo_visible:
+                if self._gizmo.entity is not None and self._gizmo.mode != GizmoMode.NONE:
                     gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
                     if gizmo_result is not None:
                         gs, ge, gcol = gizmo_result

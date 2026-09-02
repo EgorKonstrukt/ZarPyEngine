@@ -1236,8 +1236,6 @@ class InspectorPanel(QDockWidget):
             tags = ", ".join(self._entity.tags)
             self._tag_edit.setText(tags)
             self._layer_sb.setValue(self._entity.layer)
-            rev_map = {id(c): k for k, c in self._entity._components.items()}
-            comps = self._entity.get_all_components()
             overridden = set()
             if self._entity.is_prefab_instance:
                 from core.ecs.prefab import Prefab
@@ -1246,23 +1244,60 @@ class InspectorPanel(QDockWidget):
                     if "." in prop:
                         overridden.add(prop.split(".", 1)[1])
             self._search_edit.setVisible(True)
-            for idx, comp in enumerate(comps):
-                if getattr(type(comp), "_editor_hidden", False):
-                    continue
-                try:
-                    key = rev_map.get(id(comp), "")
-                    cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget,
-                                         component_key=key, overridden_props=overridden)
-                    cw.remove_requested.connect(self._remove_component)
-                    cw.move_up_requested.connect(self._move_component_up)
-                    cw.move_down_requested.connect(self._move_component_down)
-                    cw.reorder_requested.connect(self._on_reorder_component)
-                    cw._move_up_btn.setEnabled(idx > 0)
-                    cw._move_down_btn.setEnabled(idx < len(comps) - 1)
-                    self._content_layout.addWidget(cw)
-                    self._comp_widgets.append(cw)
-                except Exception as e:
-                    Logger.error(f"Inspector build error for {type(comp).__name__}: {e}", e)
+            if len(self._selected_entities) > 1:
+                type_sets = []
+                for ent in self._selected_entities:
+                    tset = set()
+                    for k in ent._components.keys():
+                        base = k.split(".")[0]
+                        tset.add(base)
+                    type_sets.append(tset)
+                common = set.intersection(*type_sets) if type_sets else set()
+                comps_to_show = []
+                seen = set()
+                rev_map_first = {id(c): k for k, c in self._entity._components.items()}
+                for k, comp in self._entity._components.items():
+                    base = k.split(".")[0]
+                    if base in common and base not in seen:
+                        if getattr(type(comp), "_editor_hidden", False):
+                            continue
+                        actual_key = base if not getattr(type(comp), "_allow_multiple", False) else k
+                        seen.add(base)
+                        comps_to_show.append((comp, actual_key))
+                for idx, (comp, key) in enumerate(comps_to_show):
+                    try:
+                        cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget,
+                                             component_key=key, overridden_props=overridden)
+                        cw.remove_requested.connect(self._remove_component)
+                        cw.move_up_requested.connect(self._move_component_up)
+                        cw.move_down_requested.connect(self._move_component_down)
+                        cw.reorder_requested.connect(self._on_reorder_component)
+                        cw._move_up_btn.setEnabled(False)
+                        cw._move_down_btn.setEnabled(False)
+                        self._content_layout.addWidget(cw)
+                        self._comp_widgets.append(cw)
+                    except Exception as e:
+                        Logger.error(f"Inspector build error for {type(comp).__name__}: {e}", e)
+            else:
+                rev_map = {id(c): k for k, c in self._entity._components.items()}
+                comps = self._entity.get_all_components()
+                for idx, comp in enumerate(comps):
+                    if getattr(type(comp), "_editor_hidden", False):
+                        continue
+                    try:
+                        key = rev_map.get(id(comp), "")
+                        cw = ComponentWidget(comp, self._entity, self._selected_entities, self._content_widget,
+                                             component_key=key, overridden_props=overridden)
+                        cw.remove_requested.connect(self._remove_component)
+                        cw.move_up_requested.connect(self._move_component_up)
+                        cw.move_down_requested.connect(self._move_component_down)
+                        cw.reorder_requested.connect(self._on_reorder_component)
+                        cw._move_up_btn.setEnabled(idx > 0)
+                        cw._move_down_btn.setEnabled(idx < len(comps) - 1)
+                        self._content_layout.addWidget(cw)
+                        self._comp_widgets.append(cw)
+                    except Exception as e:
+                        Logger.error(f"Inspector build error for {type(comp).__name__}: {e}", e)
             self._content_layout.addStretch()
         finally:
             self._updating = False
@@ -1292,12 +1327,23 @@ class InspectorPanel(QDockWidget):
 
     def _on_active_changed(self, checked: bool):
         if self._updating or not self._entity: return
-        old = not checked
-        self._entity.active = checked
-        get_history().execute(SetComponentCommand(self._entity, type(self._entity), "active", old, checked))
+        entities = self._selected_entities if len(self._selected_entities) > 1 else [self._entity]
+        cmds = []
+        for ent in entities:
+            old = ent.active
+            if old == checked:
+                continue
+            ent.active = checked
+            cmds.append(SetComponentCommand(ent, type(ent), "active", old, checked))
+        if len(cmds) == 1:
+            get_history().execute(cmds[0])
+        elif cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set active -> {checked} x{len(cmds)}"))
 
     def _on_name_changed(self, text: str):
         if self._updating or not self._entity: return
+        if len(self._selected_entities) > 1:
+            return
         old = self._entity.name
         self._entity.name = text
         get_history().execute(SetComponentCommand(self._entity, type(self._entity), "name", old, text))
@@ -1305,26 +1351,72 @@ class InspectorPanel(QDockWidget):
 
     def _on_tag_changed(self, text: str):
         if self._updating or not self._entity: return
-        old = set(self._entity.tags)
-        self._entity._tags = set(t.strip() for t in text.split(",") if t.strip())
-        get_history().execute(SetComponentCommand(self._entity, type(self._entity), "tags", old, set(self._entity.tags)))
+        entities = self._selected_entities if len(self._selected_entities) > 1 else [self._entity]
+        new_tags = set(t.strip() for t in text.split(",") if t.strip())
+        cmds = []
+        for ent in entities:
+            old = set(ent.tags)
+            if old == new_tags:
+                continue
+            ent._tags = set(new_tags)
+            cmds.append(SetComponentCommand(ent, type(ent), "tags", old, set(new_tags)))
+        if len(cmds) == 1:
+            get_history().execute(cmds[0])
+        elif cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set tags x{len(cmds)}"))
 
     def _on_layer_changed(self, val: int):
         if self._updating or not self._entity: return
-        old = self._entity.layer
-        self._entity.layer = val
-        get_history().execute(SetComponentCommand(self._entity, type(self._entity), "layer", old, val))
+        entities = self._selected_entities if len(self._selected_entities) > 1 else [self._entity]
+        cmds = []
+        for ent in entities:
+            old = ent.layer
+            if old == val:
+                continue
+            ent.layer = val
+            cmds.append(SetComponentCommand(ent, type(ent), "layer", old, val))
+        if len(cmds) == 1:
+            get_history().execute(cmds[0])
+        elif cmds:
+            get_history().execute(CompoundCommand(cmds, f"Set layer -> {val} x{len(cmds)}"))
 
     def _remove_component(self, comp_name: str, comp_key: str = ""):
         if not self._entity: return
         from core.ecs.ecs import ComponentRegistry
-        from core.foundation.commands import RemoveComponentCommand
+        from core.foundation.commands import RemoveComponentCommand, CompoundCommand
         cls = ComponentRegistry.get(comp_name)
-        if cls:
+        if not cls:
+            return
+        if len(self._selected_entities) > 1:
+            cmds = []
+            for ent in list(self._selected_entities):
+                target_key = comp_key
+                if not target_key:
+                    for k, c in ent._components.items():
+                        if k == comp_name or k.startswith(comp_name + "."):
+                            target_key = k
+                            break
+                    else:
+                        continue
+                if target_key not in ent._components and comp_name not in ent._components:
+                    continue
+                cmds.append(RemoveComponentCommand(ent, cls, component_key=target_key))
+            if len(cmds) == 1:
+                get_history().execute(cmds[0])
+            elif cmds:
+                get_history().execute(CompoundCommand(cmds, f"Remove {comp_name} x{len(cmds)}"))
+            for ent in self._selected_entities:
+                key_to_send = comp_key or comp_name
+                if key_to_send in ent._components or any(k.startswith(comp_name+".") for k in ent._components):
+                    continue
+                collab = self._engine.collab_manager if hasattr(self._engine, 'collab_manager') else None
+                if collab and collab.connected:
+                    collab.send_component_remove(ent.id, key_to_send)
+        else:
             cmd = RemoveComponentCommand(self._entity, cls, component_key=comp_key)
             get_history().execute(cmd)
+            self._send_collab_component_remove(comp_key or comp_name)
         self._rebuild()
-        self._send_collab_component_remove(comp_key or comp_name)
 
     def _on_reorder_component(self, source_eid: str, dragged_key: str, target_key: str):
         if not self._entity or self._entity.id != source_eid:
@@ -1414,32 +1506,90 @@ class InspectorPanel(QDockWidget):
     def _add_component(self, comp_name: str):
         if not self._entity: return
         from core.ecs.ecs import ComponentRegistry
-        from core.foundation.commands import AddComponentCommand
+        from core.foundation.commands import AddComponentCommand, CompoundCommand
         cls = ComponentRegistry.get(comp_name)
-        if cls:
-            can_multiple = getattr(cls, '_allow_multiple', False)
+        if not cls:
+            return
+        can_multiple = getattr(cls, '_allow_multiple', False)
+        if len(self._selected_entities) > 1:
+            cmds = []
+            added_keys = []
+            for ent in list(self._selected_entities):
+                if not can_multiple and ent.has_component(cls):
+                    continue
+                cmd = AddComponentCommand(ent, cls)
+                cmds.append(cmd)
+                added_keys.append((ent, cmd))
+            if not cmds:
+                return
+            if len(cmds) == 1:
+                get_history().execute(cmds[0])
+            else:
+                get_history().execute(CompoundCommand(cmds, f"Add {comp_name} x{len(cmds)}"))
+            for ent, cmd in added_keys:
+                self._send_collab_component_add_for_entity(ent, comp_name, cmd._added_key)
+        else:
             if not can_multiple and self._entity.has_component(cls):
                 return
             cmd = AddComponentCommand(self._entity, cls)
             get_history().execute(cmd)
-            self._rebuild()
             self._send_collab_component_add(comp_name, cmd._added_key)
+        self._rebuild()
+
+    def _send_collab_component_add_for_entity(self, entity, comp_name: str, added_key: str):
+        if not hasattr(self, '_engine') or not self._engine:
+            return
+        collab = self._engine.collab_manager if hasattr(self._engine, 'collab_manager') else None
+        if not collab or not collab.connected:
+            return
+        from core.ecs.ecs import ComponentRegistry
+        cls = ComponentRegistry.get(comp_name)
+        if not cls:
+            return
+        comp_key = added_key or next((k for k in entity._components if k == comp_name or k.startswith(comp_name + ".")), None)
+        comp = entity._components.get(comp_key) if comp_key else None
+        if not comp:
+            return
+        comp_data = comp.serialize() if hasattr(comp, 'serialize') else {}
+        collab.send_component_add(entity.id, comp_name, comp_data)
 
     def _add_script_component(self, script_path: str):
         if not self._entity: return
         from core.components.scripting.script_component import ScriptComponent
-        from core.foundation.commands import AddComponentCommand
-        cmd = AddComponentCommand(self._entity, ScriptComponent)
-        get_history().execute(cmd)
-        found = self._entity.get_components(ScriptComponent)
-        if found:
-            root = self._engine.project_root
-            try:
-                found[-1].script_path = os.path.relpath(script_path, root).replace("\\", "/")
-            except ValueError:
-                found[-1].script_path = os.path.abspath(script_path)
-            self._rebuild()
-        self._send_collab_component_add("ScriptComponent", cmd._added_key)
+        from core.foundation.commands import AddComponentCommand, CompoundCommand
+        if len(self._selected_entities) > 1:
+            cmds = []
+            targets = []
+            for ent in list(self._selected_entities):
+                cmd = AddComponentCommand(ent, ScriptComponent)
+                cmds.append(cmd)
+                targets.append((ent, cmd))
+            if cmds:
+                if len(cmds) == 1:
+                    get_history().execute(cmds[0])
+                else:
+                    get_history().execute(CompoundCommand(cmds, f"Add ScriptComponent x{len(cmds)}"))
+                root = self._engine.project_root
+                for ent, cmd in targets:
+                    found = ent.get_components(ScriptComponent)
+                    if found:
+                        try:
+                            found[-1].script_path = os.path.relpath(script_path, root).replace("\\", "/")
+                        except ValueError:
+                            found[-1].script_path = os.path.abspath(script_path)
+                    self._send_collab_component_add_for_entity(ent, "ScriptComponent", cmd._added_key)
+        else:
+            cmd = AddComponentCommand(self._entity, ScriptComponent)
+            get_history().execute(cmd)
+            found = self._entity.get_components(ScriptComponent)
+            if found:
+                root = self._engine.project_root
+                try:
+                    found[-1].script_path = os.path.relpath(script_path, root).replace("\\", "/")
+                except ValueError:
+                    found[-1].script_path = os.path.abspath(script_path)
+            self._send_collab_component_add("ScriptComponent", cmd._added_key)
+        self._rebuild()
 
     def _on_apply_prefab(self):
         if not self._entity or not self._entity.is_prefab_instance:

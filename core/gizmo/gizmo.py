@@ -678,8 +678,9 @@ class Gizmo:
         rx, ry, rz = self._get_axis_directions(transform)
         is_2d = cam.is_2d_mode
         sp_start = self._project_to_screen(pos, vp_mat, vw, vh)
+        wpp = self._wpp_cache
         def _scr_dir(axis):
-            eps = pos + axis * 0.001
+            eps = pos + axis * max(0.001, wpp * 10.0)
             sp = self._project_to_screen(eps, vp_mat, vw, vh)
             if sp_start and sp:
                 dx = sp[0] - sp_start[0]
@@ -1043,10 +1044,13 @@ class Gizmo:
         snap_active = self._snap_enabled and not self._ctrl_down
         if self._active_axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
             axis_dir = self._drag_axis_dir
-            plane_normal = cam.forward
+            plane_normal = self._best_translate_plane_normal(axis_dir, cam.forward)
             hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, plane_normal)
-            if not hit:
-                return
+            if hit is None:
+                t = self._closest_point_ray_to_line(ray_origin, ray_dir, pos, axis_dir)
+                if t is None:
+                    return
+                hit = ray_origin + ray_dir * t
             delta = hit - self._drag_hit_start
             axis_delta = delta.dot(axis_dir)
             if snap_active and self._snap_scale > 0:
