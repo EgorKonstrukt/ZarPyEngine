@@ -909,11 +909,11 @@ class SceneViewport(QOpenGLWidget):
                     gizmo_result = self._gizmo.get_gizmo_arrays(self._cam, fw, fh)
                     if gizmo_result is not None:
                         gs, ge, gcol = gizmo_result
-                        self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.0)
+                        self._renderer.render_gizmo_arrays(gs, ge, gcol, vp_mat, fw, fh, thickness_multiplier=1.8)
                     else:
                         gizmo_lines = self._gizmo.get_gizmo_lines(self._cam, fw, fh)
                         if gizmo_lines:
-                            self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.0)
+                            self._renderer.render_gizmo_lines(gizmo_lines, vp_mat, cam_pos, fw, fh, thickness_multiplier=1.8)
                 eng.set_profiler_data("gizmo_time", (time.perf_counter() - t1) * 1000.0)
                 self._last_gizmo_ms = (time.perf_counter() - t1) * 1000.0
                 t2 = time.perf_counter()

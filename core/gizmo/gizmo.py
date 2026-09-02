@@ -469,9 +469,10 @@ class Gizmo:
         vp = self._vp_mat_cache
         inv_vp = self._inv_vp_cache
         cam_fwd = self._cam_fwd_cache
-        tip_x = self._screen_axis_tip(pos, rx, cam, vw, vh)
-        tip_y = self._screen_axis_tip(pos, ry, cam, vw, vh)
-        tip_z = self._screen_axis_tip(pos, rz, cam, vw, vh)
+        world_len = self._wpp_cache * self.SCREEN_AXIS_LENGTH
+        tip_x = pos + rx * world_len
+        tip_y = pos + ry * world_len
+        tip_z = pos + rz * world_len
         entity_sp = self._project_to_screen(pos, vp, vw, vh)
         tip_sp_x = self._project_to_screen(tip_x, vp, vw, vh)
         tip_sp_y = self._project_to_screen(tip_y, vp, vw, vh)
@@ -516,12 +517,11 @@ class Gizmo:
         else:
             circle_defs = [(GizmoAxis.X, Vec3(1,0,0)), (GizmoAxis.Y, Vec3(0,1,0)), (GizmoAxis.Z, Vec3(0,0,1))]
         vp = self._vp_mat_cache
+        world_radius = self._wpp_cache * self.SCREEN_AXIS_LENGTH * 0.85
         for axis_id, normal in circle_defs:
             color = AXIS_HIGHLIGHT if active == axis_id else AXIS_COLORS[axis_id]
             p1, p2 = self._get_perpendiculars(normal)
-            tip1 = self._screen_axis_tip(pos, p1, cam, vw, vh)
-            tip2 = self._screen_axis_tip(pos, p2, cam, vw, vh)
-            radius = min((tip1 - pos).length(), (tip2 - pos).length()) * 0.9
+            radius = world_radius
             angles = np.linspace(0.0, 2.0 * math.pi, segs + 1, endpoint=True)
             pts = np.empty((segs + 1, 3), dtype=FLOAT_T)
             p1a = np.array([p1.x, p1.y, p1.z], dtype=FLOAT_T)
@@ -539,6 +539,27 @@ class Gizmo:
                     s = Vec3(float(pts[i,0]), float(pts[i,1]), float(pts[i,2]))
                     e = Vec3(float(pts[i+1,0]), float(pts[i+1,1]), float(pts[i+1,2]))
                     batch.append(s, e, color)
+        view_color = AXIS_HIGHLIGHT if active == GizmoAxis.ALL else [0.85, 0.85, 0.85, 1.0]
+        view_normal = cam.forward
+        p1, p2 = self._get_perpendiculars(view_normal)
+        outer_radius = world_radius * 1.18
+        angles = np.linspace(0.0, 2.0 * math.pi, segs + 1, endpoint=True)
+        pts = np.empty((segs + 1, 3), dtype=FLOAT_T)
+        p1a = np.array([p1.x, p1.y, p1.z], dtype=FLOAT_T)
+        p2a = np.array([p2.x, p2.y, p2.z], dtype=FLOAT_T)
+        pos_a = np.array([pos.x, pos.y, pos.z], dtype=FLOAT_T)
+        cos_a = np.cos(angles)
+        sin_a = np.sin(angles)
+        pts[:, 0] = pos_a[0] + p1a[0] * cos_a * outer_radius + p2a[0] * sin_a * outer_radius
+        pts[:, 1] = pos_a[1] + p1a[1] * cos_a * outer_radius + p2a[1] * sin_a * outer_radius
+        pts[:, 2] = pos_a[2] + p1a[2] * cos_a * outer_radius + p2a[2] * sin_a * outer_radius
+        sp = self._project_points_to_screen_np(pts, vp, vw, vh)
+        valid = ~np.isnan(sp[:, 0])
+        for i in range(segs):
+            if valid[i] and valid[i+1]:
+                s = Vec3(float(pts[i,0]), float(pts[i,1]), float(pts[i,2]))
+                e = Vec3(float(pts[i+1,0]), float(pts[i+1,1]), float(pts[i+1,2]))
+                batch.append(s, e, view_color)
 
     def _get_scale_lines_batch(self, pos, transform, cam, vw, vh):
         batch = self._batch
@@ -547,9 +568,10 @@ class Gizmo:
         vp = self._vp_mat_cache
         inv_vp = self._inv_vp_cache
         cam_fwd = self._cam_fwd_cache
-        tip_x = self._screen_axis_tip(pos, rx, cam, vw, vh)
-        tip_y = self._screen_axis_tip(pos, ry, cam, vw, vh)
-        tip_z = self._screen_axis_tip(pos, rz, cam, vw, vh)
+        world_len = self._wpp_cache * self.SCREEN_AXIS_LENGTH
+        tip_x = pos + rx * world_len
+        tip_y = pos + ry * world_len
+        tip_z = pos + rz * world_len
         entity_sp = self._project_to_screen(pos, vp, vw, vh)
         tip_sp_x = self._project_to_screen(tip_x, vp, vw, vh)
         tip_sp_y = self._project_to_screen(tip_y, vp, vw, vh)
@@ -776,9 +798,7 @@ class Gizmo:
         px, py, pz = pos.x, pos.y, pos.z
         for axis_id, normal in circle_defs:
             p1, p2 = self._get_perpendiculars(normal)
-            tip1 = self._screen_axis_tip(pos, p1, cam, vw, vh)
-            tip2 = self._screen_axis_tip(pos, p2, cam, vw, vh)
-            radius = min((tip1 - pos).length(), (tip2 - pos).length()) * 0.9
+            radius = self._wpp_cache * self.SCREEN_AXIS_LENGTH * 0.85
             p1x, p1y, p1z = p1.x * radius, p1.y * radius, p1.z * radius
             p2x, p2y, p2z = p2.x * radius, p2.y * radius, p2.z * radius
             angles = np.linspace(0.0, 2.0 * math.pi, segs + 1, endpoint=True)
@@ -810,6 +830,14 @@ class Gizmo:
             if min_d < best_dist:
                 best_dist = min_d
                 best_axis = axis_id
+        sp_center = self._project_to_screen(pos, vp_mat, vw, vh)
+        if sp_center is not None:
+            outer_px = self.SCREEN_AXIS_LENGTH * 0.85 * 1.18
+            dist = math.sqrt((mx - sp_center[0])**2 + (my - sp_center[1])**2)
+            if outer_px - self.PICK_THRESHOLD < dist < outer_px + self.PICK_THRESHOLD:
+                view_dist = abs(dist - outer_px)
+                if view_dist < best_dist:
+                    best_axis = GizmoAxis.ALL
         return best_axis
 
     def on_mouse_press(self, mx: int, my: int, cam: SceneCamera, viewport_w: int, viewport_h: int) -> bool:
@@ -856,10 +884,13 @@ class Gizmo:
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, plane_normal)
                 self._drag_hit_start = hit if hit else pos
         elif self._mode == GizmoMode.ROTATE:
-            if axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z):
-                axis_dir = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[axis]
-                if self._space == GizmoSpace.LOCAL:
-                    axis_dir = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}[axis]
+            if axis in (GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z, GizmoAxis.ALL):
+                if axis == GizmoAxis.ALL:
+                    axis_dir = cam.forward
+                else:
+                    axis_dir = {GizmoAxis.X: Vec3(1,0,0), GizmoAxis.Y: Vec3(0,1,0), GizmoAxis.Z: Vec3(0,0,1)}[axis]
+                    if self._space == GizmoSpace.LOCAL:
+                        axis_dir = {GizmoAxis.X: rx, GizmoAxis.Y: ry, GizmoAxis.Z: rz}[axis]
                 self._drag_axis_dir = axis_dir
                 hit = self._ray_plane_intersect(ray_origin, ray_dir, pos, axis_dir)
                 self._drag_hit_start = hit if hit else pos
@@ -1004,7 +1035,7 @@ class Gizmo:
                 pt._update_world_matrix()
                 inv = mat4_inv_fast(pt._world_matrix._d)
                 world_arr = np.array([new_world_pos.x, new_world_pos.y, new_world_pos.z, 1.0], dtype=FLOAT_TYPE)
-                local_arr = world_arr @ inv.T
+                local_arr = world_arr @ inv
                 transform.local_position = Vec3(float(local_arr[0]), float(local_arr[1]), float(local_arr[2]))
                 return
         transform.position = new_world_pos
