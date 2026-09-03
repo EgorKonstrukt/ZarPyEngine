@@ -202,6 +202,8 @@ def _physics_loop(
                 solver.remove_all_bodies()
                 physics_scene._entity_to_body.clear()
                 physics_scene._body_to_entity.clear()
+                if hasattr(physics_scene, "_entity_to_extra_bodies"):
+                    physics_scene._entity_to_extra_bodies.clear()
                 physics_scene._entity_to_joint.clear()
                 physics_scene._joint_to_entity.clear()
                 physics_scene._cached_shape.clear()
@@ -216,10 +218,7 @@ def _physics_loop(
 
             elif t == "remove_bodies":
                 for eid in cmd.get("entity_ids", []):
-                    bid = physics_scene._entity_to_body.pop(eid, None)
-                    if bid is not None:
-                        solver.remove_rigid_body(bid)
-                        physics_scene._body_to_entity.pop(bid, None)
+                    _drop_entity_bodies(physics_scene, solver, eid)
                 for slot in cmd.get("slots", []):
                     _slot_to_body.pop(slot, None)
                     shared.set_active(slot, False)
@@ -230,6 +229,8 @@ def _physics_loop(
                 solver.remove_all_bodies()
                 physics_scene._entity_to_body.clear()
                 physics_scene._body_to_entity.clear()
+                if hasattr(physics_scene, "_entity_to_extra_bodies"):
+                    physics_scene._entity_to_extra_bodies.clear()
                 physics_scene._entity_to_joint.clear()
                 physics_scene._joint_to_entity.clear()
                 physics_scene._cached_shape.clear()
@@ -251,6 +252,107 @@ def _physics_loop(
 
 
 def _create_body(body: dict, solver, physics_scene, shared, _slot_to_body: dict):
+    shapes = body.get("shapes")
+    if shapes is not None and len(shapes) > 1 and not body.get("is_2d", False):
+        from core.physics.shape_utils import partition_compound_shapes
+        dynamic = (body.get("mass", 0.0) > 0.0) and (not body.get("is_kinematic", False)) and (not shapes[0].get("is_trigger", False))
+        if not dynamic:
+            dynamic = bool(body.get("is_kinematic", False))
+        prims, separate = partition_compound_shapes(shapes, dynamic)
+        extras = list(separate)
+        if not prims:
+            prims = [shapes[0]]
+            extras = [s for s in extras if s is not shapes[0]]
+        if extras and not dynamic:
+            p0 = prims[0]
+            if len(prims) == 1:
+                bid = solver.create_rigid_body(
+                    entity_id=body["entity_id"],
+                    shape_type=p0["type"],
+                    shape_params=p0["params"],
+                    position=body["position"],
+                    rotation=body["rotation"],
+                    mass=body["mass"],
+                    friction=p0.get("friction", 0.6),
+                    restitution=p0.get("restitution", 0.0),
+                    is_trigger=p0.get("is_trigger", False),
+                    is_kinematic=body.get("is_kinematic", False),
+                    collision_layer=p0.get("layer", 0),
+                    collision_mask=p0.get("mask", 0xFFFF),
+                )
+            else:
+                bid = solver.create_compound_rigid_body(
+                    entity_id=body["entity_id"],
+                    shapes=prims,
+                    position=body["position"],
+                    rotation=body["rotation"],
+                    mass=body["mass"],
+                    friction=p0.get("friction", 0.6),
+                    restitution=p0.get("restitution", 0.0),
+                    is_trigger=p0.get("is_trigger", False),
+                    is_kinematic=body.get("is_kinematic", False),
+                    collision_layer=p0.get("layer", 0),
+                    collision_mask=p0.get("mask", 0xFFFF),
+                )
+            if bid >= 0:
+                _register_slot_body(body, bid, solver, physics_scene, shared, _slot_to_body)
+                for extra in extras:
+                    try:
+                       ibid = solver.create_rigid_body(
+                            entity_id=body["entity_id"],
+                            shape_type=extra["type"],
+                            shape_params=extra["params"],
+                            position=body["position"],
+                            rotation=body["rotation"],
+                            mass=0.0,
+                            friction=extra.get("friction", 0.6),
+                            restitution=extra.get("restitution", 0.0),
+                            is_trigger=extra.get("is_trigger", False),
+                            is_kinematic=True,
+                            collision_layer=extra.get("layer", 0),
+                            collision_mask=extra.get("mask", 0xFFFF),
+                        )
+                    except Exception:
+                        ibid = -1
+                    if ibid is not None and ibid >= 0:
+                        physics_scene._body_to_entity[ibid] = body["entity_id"]
+                        physics_scene._entity_to_extra_bodies.setdefault(body["entity_id"], []).append(ibid)
+            return
+        p0 = prims[0]
+        if p0.get("type") not in ("box", "sphere", "capsule", "cylinder"):
+            bid = solver.create_rigid_body(
+                entity_id=body["entity_id"],
+                shape_type=p0["type"],
+                shape_params=p0["params"],
+                position=body["position"],
+                rotation=body["rotation"],
+                mass=body["mass"],
+                friction=p0.get("friction", 0.6),
+                restitution=p0.get("restitution", 0.0),
+                is_trigger=p0.get("is_trigger", False),
+                is_kinematic=body.get("is_kinematic", False),
+                collision_layer=p0.get("layer", 0),
+                collision_mask=p0.get("mask", 0xFFFF),
+            )
+            if bid >= 0:
+                _register_slot_body(body, bid, solver, physics_scene, shared, _slot_to_body)
+            return
+        bid = solver.create_compound_rigid_body(
+            entity_id=body["entity_id"],
+            shapes=prims,
+            position=body["position"],
+            rotation=body["rotation"],
+            mass=body["mass"],
+            friction=p0.get("friction", 0.6),
+            restitution=p0.get("restitution", 0.0),
+            is_trigger=p0.get("is_trigger", False),
+            is_kinematic=body.get("is_kinematic", False),
+            collision_layer=p0.get("layer", 0),
+            collision_mask=p0.get("mask", 0xFFFF),
+        )
+        if bid >= 0:
+            _register_slot_body(body, bid, solver, physics_scene, shared, _slot_to_body)
+        return
     bid = solver.create_rigid_body(
         entity_id=body["entity_id"],
         shape_type=body["shape_type"],
@@ -266,19 +368,40 @@ def _create_body(body: dict, solver, physics_scene, shared, _slot_to_body: dict)
         collision_mask=body.get("collision_mask", 0xFFFF),
     )
     if bid >= 0:
-        slot = body.get("slot", -1)
-        if slot >= 0:
-            _slot_to_body[slot] = bid
-            shared.set_body_id(slot, bid)
-            shared.set_active(slot, True)
-            shared.set_kinematic(slot, body.get("is_kinematic", False))
-            shared.set_2d(slot, body.get("is_2d", False))
-            shared.set_dirty(slot, True)
-            if slot >= shared.get_num_entities():
-                shared.set_num_entities(slot + 1)
-        physics_scene._entity_to_body[body["entity_id"]] = bid
-        physics_scene._body_to_entity[bid] = body["entity_id"]
-        physics_scene._cached_shape[body["entity_id"]] = ()
+        _register_slot_body(body, bid, solver, physics_scene, shared, _slot_to_body)
+
+
+def _register_slot_body(body: dict, bid: int, solver, physics_scene, shared, _slot_to_body: dict):
+    slot = body.get("slot", -1)
+    if slot >= 0:
+        _slot_to_body[slot] = bid
+        shared.set_body_id(slot, bid)
+        shared.set_active(slot, True)
+        shared.set_kinematic(slot, body.get("is_kinematic", False))
+        shared.set_2d(slot, body.get("is_2d", False))
+        shared.set_dirty(slot, True)
+        if slot >= shared.get_num_entities():
+            shared.set_num_entities(slot + 1)
+    physics_scene._entity_to_body[body["entity_id"]] = bid
+    physics_scene._body_to_entity[bid] = body["entity_id"]
+    physics_scene._cached_shape[body["entity_id"]] = ()
+
+
+def _drop_entity_bodies(physics_scene, solver, entity_id: str):
+    bid = physics_scene._entity_to_body.pop(entity_id, None)
+    if bid is not None:
+        try:
+            solver.remove_rigid_body(bid)
+        except Exception:
+            pass
+        physics_scene._body_to_entity.pop(bid, None)
+    extras = physics_scene._entity_to_extra_bodies.pop(entity_id, []) if hasattr(physics_scene, "_entity_to_extra_bodies") else []
+    for ibid in extras:
+        try:
+            solver.remove_rigid_body(ibid)
+        except Exception:
+            pass
+        physics_scene._body_to_entity.pop(ibid, None)
 
 
 def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body):

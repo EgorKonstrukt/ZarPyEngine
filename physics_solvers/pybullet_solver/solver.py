@@ -31,9 +31,6 @@ def _pybullet_data_path() -> str:
     return _LazyPybullet._data.getDataPath() if _LazyPybullet._data else ""
 
 
-_LOADED_MESH_VERTS: dict[str, np.ndarray] = {}
-
-
 def _decimate_verts(verts: np.ndarray, max_vertices: int) -> np.ndarray:
     n = len(verts)
     if n <= max_vertices or max_vertices < 1:
@@ -57,19 +54,64 @@ def _decimate_verts(verts: np.ndarray, max_vertices: int) -> np.ndarray:
 
 
 def _load_mesh_verts(path: str) -> Optional[np.ndarray]:
-    key = path.lower().replace("\\", "/")
-    if key in _LOADED_MESH_VERTS:
-        return _LOADED_MESH_VERTS[key]
-    try:
-        from core.assets.asset_importer import load_mesh
-        data = load_mesh(path)
-    except Exception:
-        return None
-    if data is None or len(data.vertices) == 0:
-        return None
-    verts = data.vertices.reshape(-1, 3)
-    _LOADED_MESH_VERTS[key] = verts
+    verts, _ = _load_mesh_geometry(path)
     return verts
+
+
+def _load_mesh_geometry(path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    try:
+        from core.components.physics.mesh_collider import load_collision_geometry
+        verts, indices, _ = load_collision_geometry(path)
+        if verts is not None and len(verts) > 0:
+            return verts, indices
+    except Exception:
+        pass
+    return None, None
+
+
+def _load_mesh_tscale(path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
+    try:
+        from core.components.physics.mesh_collider import load_collision_geometry
+        verts, indices, k = load_collision_geometry(path)
+        if verts is not None and len(verts) > 0:
+            return verts, indices, k
+    except Exception:
+        pass
+    return None, None, 1.0
+
+
+def _transform_scale(params_scale, import_scale: float) -> tuple[float, float, float]:
+    try:
+        k = float(import_scale or 1.0)
+    except Exception:
+        k = 1.0
+    if abs(k) < 1e-9:
+        k = 1.0
+    try:
+        return (float(params_scale[0]) / k, float(params_scale[1]) / k, float(params_scale[2]) / k)
+    except Exception:
+        return (1.0, 1.0, 1.0)
+
+
+def _convex_hull_shape(cid: int, points: np.ndarray, max_vertices: int, cache: dict, cache_key: tuple) -> int:
+    pts = points
+    if len(pts) > 1:
+        try:
+            pts = np.unique(np.ascontiguousarray(pts, dtype=np.float32), axis=0)
+        except Exception:
+            pass
+    if max_vertices >= 4 and len(pts) > max_vertices:
+        pts = _decimate_verts(pts, max_vertices)
+    if len(pts) < 4:
+        return -1
+    try:
+        shape_id = p.createCollisionShape(
+            p.GEOM_MESH, vertices=pts.tolist(), physicsClientId=cid,
+        )
+        cache[cache_key] = shape_id
+        return shape_id
+    except Exception:
+        return -1
 
 
 class PyBulletSolver(IPhysicsSolver):
@@ -94,7 +136,7 @@ class PyBulletSolver(IPhysicsSolver):
         self._angular_damping = 0.04
         self._max_contacts_per_body = 64
         self._enable_sleeping = True
-        self._mesh_shape_cache: dict[tuple[str, tuple[float, float, float]], int] = {}
+        self._mesh_shape_cache: dict[tuple, int] = {}
         self._body_collision_info: dict[int, tuple[int, int]] = {}
 
     def initialize(self, settings: Optional[dict] = None) -> bool:
@@ -209,7 +251,7 @@ class PyBulletSolver(IPhysicsSolver):
         self._gravity = gravity
         p.setGravity(*gravity, physicsClientId=self._cid())
 
-    def _make_shape(self, shape_type: str, shape_params: dict) -> int:
+    def _make_shape(self, shape_type: str, shape_params: dict, is_static: bool = True) -> int:
         cid = self._cid()
         if shape_type == "box":
             size = shape_params.get("size", [1, 1, 1])
@@ -234,11 +276,22 @@ class PyBulletSolver(IPhysicsSolver):
             radius = shape_params.get("radius", 0.5)
             height = shape_params.get("height", 2.0)
             center = shape_params.get("center", [0, 0, 0])
+            try:
+                direction = int(shape_params.get("direction", 1))
+            except Exception:
+                direction = 1
+            try:
+                from core.physics.shape_utils import capsule_section_height, _PYBULLET_CAPSULE_EULER
+                r, hsec = capsule_section_height(float(radius), float(height))
+                frame_rot = p.getQuaternionFromEuler(_PYBULLET_CAPSULE_EULER.get(direction, (0.0, 0.0, 0.0)))
+            except Exception:
+                r, hsec, frame_rot = radius, height, (0.0, 0.0, 0.0, 1.0)
             return p.createCollisionShape(
                 p.GEOM_CAPSULE,
-                radius=radius,
-                height=height,
+                radius=r,
+                height=hsec,
                 collisionFramePosition=center,
+                collisionFrameOrientation=frame_rot,
                 physicsClientId=cid,
             )
         elif shape_type == "cylinder":
@@ -269,143 +322,133 @@ class PyBulletSolver(IPhysicsSolver):
                 if os.path.exists(candidate):
                     resolved = candidate
             if not os.path.exists(resolved):
+                try:
+                    from core.components.physics.mesh_collider import _resolve_mesh_path
+                    alt = _resolve_mesh_path(file_path)
+                    if alt and os.path.exists(alt):
+                        resolved = alt
+                except Exception:
+                    pass
+            if not os.path.exists(resolved):
                 Logger.warning(f"MeshCollider: file not found: {file_path}")
                 return -1
-            ext = os.path.splitext(resolved)[1].lower()
-            supported = (".obj", ".stl", ".glb", ".gltf")
-            if ext not in supported:
-                Logger.warning(
-                    f"MeshCollider: unsupported format '{ext}' for collision. "
-                    f"Use {', '.join(supported)}. Body will not be created for: {file_path}"
-                )
-                return -1
 
-            collision_mode = shape_params.get("collision_mode", "mesh")
-            max_vertices = shape_params.get("max_vertices", 2000)
-            scale = tuple(shape_params.get("scale", [1, 1, 1]))
-            cache_key = (resolved, scale, collision_mode, max_vertices)
+            raw_mode = shape_params.get("collision_mode", "auto")
+            try:
+                collision_mode = str(raw_mode or "auto").lower()
+            except Exception:
+                collision_mode = "auto"
+            if collision_mode not in ("auto", "mesh", "convex_hull", "box", "sphere"):
+                Logger.warning(f"MeshCollider: unknown collision_mode '{raw_mode}', using 'auto'")
+                collision_mode = "auto"
+            try:
+                max_vertices = int(shape_params.get("max_vertices", 0) or 0)
+            except Exception:
+                max_vertices = 0
+            scale = shape_params.get("scale", [1, 1, 1])
+            try:
+                sx, sy, sz = float(scale[0]), float(scale[1]), float(scale[2])
+            except Exception:
+                sx = sy = sz = 1.0
+            center = shape_params.get("center", [0, 0, 0])
+            try:
+                cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+            except Exception:
+                cx = cy = cz = 0.0
+            try:
+                from core.components.physics.mesh_collider import _import_sig_of
+                meta_sig = _import_sig_of(file_path)
+            except Exception:
+                meta_sig = "-"
+            scale_t = (sx, sy, sz)
+            center_t = (cx, cy, cz)
+            cache_key = (resolved, scale_t, center_t, collision_mode, max_vertices, meta_sig)
             if cache_key in self._mesh_shape_cache:
                 return self._mesh_shape_cache[cache_key]
 
-            if collision_mode in ("convex_hull",):
-                verts = _load_mesh_verts(resolved)
-                if verts is not None:
-                    if scale != (1.0, 1.0, 1.0):
-                        sv = verts * np.array(scale, dtype=np.float32)
-                    else:
-                        sv = verts
-                    try:
-                        verts_list = sv.tolist()
-                        shape_id = p.createCollisionShape(
-                            p.GEOM_MESH, vertices=verts_list, physicsClientId=cid,
-                        )
-                        self._mesh_shape_cache[cache_key] = shape_id
-                        return shape_id
-                    except Exception as e:
-                        Logger.warning(f"MeshCollider convex_hull failed for '{file_path}': {e}")
+            if collision_mode == "auto":
+                collision_mode = "mesh" if is_static else "convex_hull"
+            elif collision_mode == "mesh" and not is_static:
+                Logger.warning(f"MeshCollider: concave mesh '{file_path}' requires a static body, using convex hull")
+                collision_mode = "convex_hull"
+
+            verts, indices, import_scale = _load_mesh_tscale(resolved)
+            if verts is None or len(verts) == 0:
+                Logger.warning(f"MeshCollider: could not read mesh '{file_path}'")
+                return -1
+            tx, ty, tz = _transform_scale(scale, import_scale)
+            if not all(np.isfinite((tx, ty, tz))) or min(abs(tx), abs(ty), abs(tz)) < 1e-9:
+                Logger.warning(f"MeshCollider: degenerate scale for '{file_path}'")
+                return -1
+            sv = verts * np.array([tx, ty, tz], dtype=np.float32)
+
+            if collision_mode == "convex_hull":
+                shape_id = _convex_hull_shape(cid, sv, max_vertices, self._mesh_shape_cache, cache_key)
+                if shape_id >= 0:
+                    return shape_id
+                Logger.warning(f"MeshCollider: convex hull failed for '{file_path}'")
+                return -1
+
+            if collision_mode == "box":
+                mins = sv.min(axis=0)
+                maxs = sv.max(axis=0)
+                half = np.maximum((maxs - mins) * 0.5, 1e-4).tolist()
+                frame = ((mins + maxs) * 0.5 + np.array([cx, cy, cz], dtype=np.float32)).tolist()
                 try:
                     shape_id = p.createCollisionShape(
-                        p.GEOM_MESH, fileName=resolved, meshScale=scale, physicsClientId=cid,
+                        p.GEOM_BOX,
+                        halfExtents=half,
+                        collisionFramePosition=frame,
+                        physicsClientId=cid,
                     )
                     self._mesh_shape_cache[cache_key] = shape_id
                     return shape_id
                 except Exception as e:
-                    Logger.warning(f"MeshCollider convex_hull fallback failed for '{file_path}': {e}")
+                    Logger.warning(f"MeshCollider box approximation failed for '{file_path}': {e}")
                     return -1
 
-            if collision_mode in ("box", "sphere", "auto"):
-                verts = _load_mesh_verts(resolved)
-                if verts is None:
-                    Logger.warning(f"MeshCollider: could not read vertices from '{file_path}', falling back to native mesh")
-                    try:
-                        shape_id = p.createCollisionShape(
-                            p.GEOM_MESH,
-                            fileName=resolved,
-                            meshScale=scale,
-                            physicsClientId=cid,
-                        )
-                        self._mesh_shape_cache[cache_key] = shape_id
-                        return shape_id
-                    except Exception as e:
-                        Logger.warning(f"MeshCollider: fallback GEOM_MESH failed for '{file_path}': {e}")
-                        return -1
+            if collision_mode == "sphere":
+                bc = sv.mean(axis=0)
+                radius = max(float(np.max(np.linalg.norm(sv - bc, axis=1))), 1e-4)
+                frame = (bc + np.array([cx, cy, cz], dtype=np.float32)).tolist()
+                try:
+                    shape_id = p.createCollisionShape(
+                        p.GEOM_SPHERE,
+                        radius=radius,
+                        collisionFramePosition=frame,
+                        physicsClientId=cid,
+                    )
+                    self._mesh_shape_cache[cache_key] = shape_id
+                    return shape_id
+                except Exception as e:
+                    Logger.warning(f"MeshCollider sphere approximation failed for '{file_path}': {e}")
+                    return -1
 
-                if scale != (1.0, 1.0, 1.0):
-                    sv = verts * np.array(scale, dtype=np.float32)
-                else:
-                    sv = verts
-
-                num_verts = len(sv)
-
-                if collision_mode == "auto":
-                    if num_verts <= max_vertices:
-                        try:
-                            verts_list = sv.tolist()
-                            shape_id = p.createCollisionShape(
-                                p.GEOM_MESH, vertices=verts_list, physicsClientId=cid,
-                            )
-                            self._mesh_shape_cache[cache_key] = shape_id
-                            return shape_id
-                        except Exception as e:
-                            Logger.warning(f"MeshCollider auto convex hull failed for '{file_path}': {e}")
-                    else:
-                        try:
-                            dv = _decimate_verts(sv, max_vertices)
-                            verts_list = dv.tolist()
-                            shape_id = p.createCollisionShape(
-                                p.GEOM_MESH, vertices=verts_list, physicsClientId=cid,
-                            )
-                            self._mesh_shape_cache[cache_key] = shape_id
-                            return shape_id
-                        except Exception as e:
-                            Logger.warning(f"MeshCollider auto decimate+convex hull failed for '{file_path}': {e}")
-
-                if collision_mode == "box":
-                    mins = sv.min(axis=0)
-                    maxs = sv.max(axis=0)
-                    half = ((maxs - mins) * 0.5).tolist()
-                    center = ((mins + maxs) * 0.5).tolist()
-                    try:
-                        shape_id = p.createCollisionShape(
-                            p.GEOM_BOX,
-                            halfExtents=half,
-                            collisionFramePosition=center,
-                            physicsClientId=cid,
-                        )
-                        self._mesh_shape_cache[cache_key] = shape_id
-                        return shape_id
-                    except Exception as e:
-                        Logger.warning(f"MeshCollider box fallback failed for '{file_path}': {e}")
-                        return -1
-
-                if collision_mode == "sphere":
-                    center = sv.mean(axis=0)
-                    radius = float(np.max(np.linalg.norm(sv - center, axis=1)))
-                    try:
-                        shape_id = p.createCollisionShape(
-                            p.GEOM_SPHERE,
-                            radius=radius,
-                            collisionFramePosition=center.tolist(),
-                            physicsClientId=cid,
-                        )
-                        self._mesh_shape_cache[cache_key] = shape_id
-                        return shape_id
-                    except Exception as e:
-                        Logger.warning(f"MeshCollider sphere fallback failed for '{file_path}': {e}")
-                        return -1
-
-            try:
-                shape_id = p.createCollisionShape(
-                    p.GEOM_MESH,
-                    fileName=resolved,
-                    meshScale=scale,
-                    physicsClientId=cid,
-                )
-                self._mesh_shape_cache[cache_key] = shape_id
+            frame = [cx, cy, cz]
+            concave_flags = getattr(p, "GEOM_FORCE_CONCAVE_TRIMESH", 0)
+            if indices is not None and len(indices) >= 3 and len(indices) % 3 == 0:
+                try:
+                    shape_id = p.createCollisionShape(
+                        p.GEOM_MESH,
+                        vertices=sv.tolist(),
+                        indices=indices.reshape(-1).tolist(),
+                        collisionFramePosition=frame,
+                        flags=concave_flags,
+                        physicsClientId=cid,
+                    )
+                    self._mesh_shape_cache[cache_key] = shape_id
+                    return shape_id
+                except Exception as e:
+                    Logger.warning(f"MeshCollider: failed to build triangle mesh for '{file_path}': {e}")
+                    return -1
+            if indices is not None and len(indices) % 3 != 0:
+                Logger.warning(f"MeshCollider: mesh '{file_path}' has non-triangulated faces, using convex hull")
+                shape_id = _convex_hull_shape(cid, sv, max_vertices, self._mesh_shape_cache, cache_key)
+                if shape_id < 0:
+                    Logger.warning(f"MeshCollider: convex hull failed for '{file_path}'")
                 return shape_id
-            except Exception as e:
-                Logger.warning(f"MeshCollider: failed to load '{file_path}': {e}")
-                return -1
+            Logger.warning(f"MeshCollider: mesh '{file_path}' has no triangles for collision")
+            return -1
         elif shape_type == "heightfield":
             size = shape_params.get("size", [1000.0, 60.0, 1000.0])
             resolution = int(shape_params.get("resolution", 0))
@@ -456,7 +499,8 @@ class PyBulletSolver(IPhysicsSolver):
         collision_mask: int = 0xFFFF,
     ) -> int:
         cid = self._cid()
-        shape_id = self._make_shape(shape_type, shape_params)
+        is_static = (mass <= 0.0 or is_trigger or is_kinematic)
+        shape_id = self._make_shape(shape_type, shape_params, is_static=is_static)
         if shape_id < 0:
             return -1
 
@@ -539,6 +583,115 @@ class PyBulletSolver(IPhysicsSolver):
             p.addUserData(body_id, "entity_id", entity_id, physicsClientId=cid)
             self._apply_collision_filters(body_id)
 
+        return body_id
+
+    def create_compound_rigid_body(
+        self,
+        entity_id: str,
+        shapes: list,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        mass: float,
+        friction: float = 0.6,
+        restitution: float = 0.0,
+        is_trigger: bool = False,
+        is_kinematic: bool = False,
+        collision_layer: int = 0,
+        collision_mask: int = 0xFFFF,
+    ) -> int:
+        cid = self._cid()
+        if not shapes:
+            return -1
+        if len(shapes) == 1:
+            first = shapes[0]
+            return self.create_rigid_body(
+                entity_id=entity_id,
+                shape_type=first.get("type", "box"),
+                shape_params=first.get("params", {}),
+                position=position,
+                rotation=rotation,
+                mass=mass,
+                friction=friction,
+                restitution=restitution,
+                is_trigger=is_trigger,
+                is_kinematic=is_kinematic,
+                collision_layer=collision_layer,
+                collision_mask=collision_mask,
+            )
+        try:
+            if any(bool(s.get("is_trigger", False)) != bool(is_trigger) for s in shapes):
+                Logger.warning("MeshCollider compound: mixed trigger/solid colliders share one body, using the first")
+        except Exception:
+            pass
+        is_static = (mass <= 0.0 or is_trigger or is_kinematic)
+        try:
+            from core.physics.shape_utils import part_volume
+            vols = []
+            for s in shapes:
+                try:
+                    vols.append(max(float(part_volume(s.get("type", "box"), s.get("params", {}))), 1e-9))
+                except Exception:
+                    vols.append(1.0)
+        except Exception:
+            vols = [1.0] * len(shapes)
+        total_vol = sum(vols) or float(len(shapes))
+
+        base_shape = self._make_shape(shapes[0].get("type", "box"), shapes[0].get("params", {}), is_static=is_static)
+        if base_shape < 0:
+            return -1
+        link_shapes: list[int] = []
+        link_masses: list[float] = []
+        for s, v in zip(shapes[1:], vols[1:]):
+            try:
+                sid = self._make_shape(s.get("type", "box"), s.get("params", {}), is_static=is_static)
+            except Exception as e:
+                Logger.warning(f"Compound link failed, skipping: {e}")
+                continue
+            if sid < 0:
+                Logger.warning("Compound link failed, skipping")
+                continue
+            link_shapes.append(sid)
+            link_masses.append(0.0 if is_static else mass * v / total_vol)
+        n_links = len(link_shapes)
+        base_mass = 0.0 if (mass <= 0.0 or is_trigger or is_kinematic) else mass * vols[0] / total_vol
+        try:
+            body_id = p.createMultiBody(
+                baseMass=base_mass,
+                baseCollisionShapeIndex=base_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=position,
+                baseOrientation=p.getQuaternionFromEuler(rotation),
+                linkMasses=link_masses,
+                linkCollisionShapeIndices=link_shapes,
+                linkVisualShapeIndices=[-1] * n_links,
+                linkPositions=[[0.0, 0.0, 0.0]] * n_links,
+                linkOrientations=[[0.0, 0.0, 0.0, 1.0]] * n_links,
+                linkInertialFramePositions=[[0.0, 0.0, 0.0]] * n_links,
+                linkInertialFrameOrientations=[[0.0, 0.0, 0.0, 1.0]] * n_links,
+                linkParentIndices=[0] * n_links,
+                linkJointTypes=[p.JOINT_FIXED] * n_links,
+                linkJointAxis=[[0.0, 0.0, 1.0]] * n_links,
+                physicsClientId=cid,
+            )
+        except Exception as e:
+            Logger.warning(f"Compound body failed: {e}")
+            return -1
+        if body_id is None or body_id < 0:
+            return -1
+        self._body_count += 1
+        self._all_body_ids.append(body_id)
+        self._body_collision_info[body_id] = (collision_layer, collision_mask)
+        try:
+            p.changeDynamics(body_id, -1, lateralFriction=friction, restitution=restitution, activationState=1, physicsClientId=cid)
+            for li in range(n_links):
+                p.changeDynamics(body_id, li, lateralFriction=friction, restitution=restitution, physicsClientId=cid)
+        except Exception:
+            pass
+        try:
+            p.addUserData(body_id, "entity_id", entity_id, physicsClientId=cid)
+        except Exception:
+            pass
+        self._apply_collision_filters(body_id)
         return body_id
 
     def remove_rigid_body(self, body_id: int):

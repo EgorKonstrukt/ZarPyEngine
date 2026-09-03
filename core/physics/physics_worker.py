@@ -35,6 +35,98 @@ class PhysicsWorker(threading.Thread):
             except Exception as e:
                 Logger.error(f"PhysicsWorker cmd error: {e}")
 
+    def _create_worker_body(self, body: dict) -> int:
+        shapes = body.get("shapes")
+        if shapes is not None and len(shapes) > 1 and not body.get("is_2d", False):
+            from core.physics.shape_utils import partition_compound_shapes
+            dynamic = (body.get("mass", 0.0) > 0.0) and (not body.get("is_kinematic", False)) and (not shapes[0].get("is_trigger", False))
+            if not dynamic:
+                dynamic = bool(body.get("is_kinematic", False))
+            prims, separate = partition_compound_shapes(shapes, dynamic)
+            extras = list(separate)
+            if not prims:
+                prims = [shapes[0]]
+                extras = [s for s in extras if s is not shapes[0]]
+            if extras and not dynamic:
+                p0 = prims[0]
+                if len(prims) == 1:
+                    bid = self._solver.create_rigid_body(
+                        entity_id=body["entity_id"], shape_type=p0["type"], shape_params=p0["params"],
+                        position=body["position"], rotation=body["rotation"], mass=body["mass"],
+                        friction=p0.get("friction", 0.6), restitution=p0.get("restitution", 0.0),
+                        is_trigger=p0.get("is_trigger", False), is_kinematic=body.get("is_kinematic", False),
+                        collision_layer=p0.get("layer", 0), collision_mask=p0.get("mask", 0xFFFF),
+                    )
+                else:
+                    bid = self._solver.create_compound_rigid_body(
+                        entity_id=body["entity_id"], shapes=prims,
+                        position=body["position"], rotation=body["rotation"], mass=body["mass"],
+                        friction=p0.get("friction", 0.6), restitution=p0.get("restitution", 0.0),
+                        is_trigger=p0.get("is_trigger", False), is_kinematic=body.get("is_kinematic", False),
+                        collision_layer=p0.get("layer", 0), collision_mask=p0.get("mask", 0xFFFF),
+                    )
+                if bid is not None and bid >= 0:
+                    for extra in extras:
+                        try:
+                            ibid = self._solver.create_rigid_body(
+                                entity_id=body["entity_id"], shape_type=extra["type"], shape_params=extra["params"],
+                                position=body["position"], rotation=body["rotation"], mass=0.0,
+                                friction=extra.get("friction", 0.6), restitution=extra.get("restitution", 0.0),
+                                is_trigger=extra.get("is_trigger", False), is_kinematic=True,
+                                collision_layer=extra.get("layer", 0), collision_mask=extra.get("mask", 0xFFFF),
+                            )
+                        except Exception:
+                            ibid = -1
+                        if ibid is not None and ibid >= 0:
+                            self._physics_scene._body_to_entity[ibid] = body["entity_id"]
+                            self._physics_scene._entity_to_extra_bodies.setdefault(body["entity_id"], []).append(ibid)
+                return bid if bid is not None else -1
+            p0 = prims[0]
+            if p0.get("type") not in ("box", "sphere", "capsule", "cylinder"):
+                return self._solver.create_rigid_body(
+                    entity_id=body["entity_id"], shape_type=p0["type"], shape_params=p0["params"],
+                    position=body["position"], rotation=body["rotation"], mass=body["mass"],
+                    friction=p0.get("friction", 0.6), restitution=p0.get("restitution", 0.0),
+                    is_trigger=p0.get("is_trigger", False), is_kinematic=body.get("is_kinematic", False),
+                    collision_layer=p0.get("layer", 0), collision_mask=p0.get("mask", 0xFFFF),
+                )
+            return self._solver.create_compound_rigid_body(
+                entity_id=body["entity_id"], shapes=prims,
+                position=body["position"], rotation=body["rotation"], mass=body["mass"],
+                friction=p0.get("friction", 0.6), restitution=p0.get("restitution", 0.0),
+                is_trigger=p0.get("is_trigger", False), is_kinematic=body.get("is_kinematic", False),
+                collision_layer=p0.get("layer", 0), collision_mask=p0.get("mask", 0xFFFF),
+            )
+        return self._solver.create_rigid_body(
+            entity_id=body["entity_id"],
+            shape_type=body["shape_type"],
+            shape_params=body["shape_params"],
+            position=body["position"],
+            rotation=body["rotation"],
+            mass=body["mass"],
+            friction=body.get("friction", 0.6),
+            restitution=body.get("restitution", 0.0),
+            is_trigger=body.get("is_trigger", False),
+            is_kinematic=body.get("is_kinematic", False),
+            collision_layer=body.get("collision_layer", 0),
+            collision_mask=body.get("collision_mask", 0xFFFF),
+        )
+
+    def _drop_worker_bodies(self, entity_id: str):
+        bid = self._physics_scene._entity_to_body.pop(entity_id, None)
+        if bid is not None:
+            try:
+                self._solver.remove_rigid_body(bid)
+            except Exception:
+                pass
+            self._physics_scene._body_to_entity.pop(bid, None)
+        for ibid in self._physics_scene._entity_to_extra_bodies.pop(entity_id, []):
+            try:
+                self._solver.remove_rigid_body(ibid)
+            except Exception:
+                pass
+            self._physics_scene._body_to_entity.pop(ibid, None)
+
     def _process(self, cmd: dict):
         t = cmd["type"]
 
@@ -57,26 +149,14 @@ class PhysicsWorker(threading.Thread):
             self._solver.remove_all_bodies()
             self._physics_scene._entity_to_body.clear()
             self._physics_scene._body_to_entity.clear()
+            self._physics_scene._entity_to_extra_bodies.clear()
             self._physics_scene._entity_to_joint.clear()
             self._physics_scene._joint_to_entity.clear()
             self._physics_scene._cached_shape.clear()
             self._physics_scene._cached_shape_info.clear()
             self._physics_scene._prev_frame_contacts.clear()
             for body in cmd["bodies"]:
-                bid = self._solver.create_rigid_body(
-                    entity_id=body["entity_id"],
-                    shape_type=body["shape_type"],
-                    shape_params=body["shape_params"],
-                    position=body["position"],
-                    rotation=body["rotation"],
-                    mass=body["mass"],
-                    friction=body.get("friction", 0.6),
-                    restitution=body.get("restitution", 0.0),
-                    is_trigger=body.get("is_trigger", False),
-                    is_kinematic=body.get("is_kinematic", False),
-                    collision_layer=body.get("collision_layer", 0),
-                    collision_mask=body.get("collision_mask", 0xFFFF),
-                )
+                bid = self._create_worker_body(body)
                 if bid >= 0:
                     vel = body.get("velocity")
                     if vel:
@@ -179,27 +259,11 @@ class PhysicsWorker(threading.Thread):
 
         elif t == "remove_bodies":
             for eid in cmd["entity_ids"]:
-                bid = self._physics_scene._entity_to_body.pop(eid, None)
-                if bid is not None:
-                    self._solver.remove_rigid_body(bid)
-                    self._physics_scene._body_to_entity.pop(bid, None)
+                self._drop_worker_bodies(eid)
 
         elif t == "add_body":
             body = cmd["body"]
-            bid = self._solver.create_rigid_body(
-                entity_id=body["entity_id"],
-                shape_type=body["shape_type"],
-                shape_params=body["shape_params"],
-                position=body["position"],
-                rotation=body["rotation"],
-                mass=body["mass"],
-                friction=body.get("friction", 0.6),
-                restitution=body.get("restitution", 0.0),
-                is_trigger=body.get("is_trigger", False),
-                is_kinematic=body.get("is_kinematic", False),
-                collision_layer=body.get("collision_layer", 0),
-                collision_mask=body.get("collision_mask", 0xFFFF),
-            )
+            bid = self._create_worker_body(body)
             if bid >= 0:
                 vel = body.get("velocity")
                 if vel:
@@ -218,6 +282,7 @@ class PhysicsWorker(threading.Thread):
             if self._physics_scene:
                 self._physics_scene._entity_to_body.clear()
                 self._physics_scene._body_to_entity.clear()
+                self._physics_scene._entity_to_extra_bodies.clear()
                 self._physics_scene._entity_to_joint.clear()
                 self._physics_scene._joint_to_entity.clear()
                 self._physics_scene._cached_shape.clear()

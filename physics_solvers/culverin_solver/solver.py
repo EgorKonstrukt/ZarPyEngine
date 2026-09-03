@@ -93,7 +93,154 @@ _JOINT_TYPE_MAP = {
     "spring": CONSTRAINT_DISTANCE,
 }
 
-_LOADED_MESH_VERTS: dict[str, np.ndarray] = {}
+def _engine_project_root() -> str:
+    try:
+        from core.engine.engine import Engine
+        eng = Engine.instance()
+        if eng is not None and getattr(eng, "project_root", None):
+            return os.path.normpath(eng.project_root)
+    except Exception:
+        pass
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _resolve_mesh_file(path: str) -> Optional[str]:
+    if not path:
+        return None
+    if os.path.exists(path):
+        return os.path.normpath(path)
+    if os.path.isabs(path):
+        root = _engine_project_root()
+        if path[1:2] == ":":
+            parts = path.replace("\\", "/").split("/")
+            for i in range(len(parts)):
+                sub = "/".join(parts[i:])
+                if sub:
+                    candidate = os.path.normpath(os.path.join(root, sub))
+                    if os.path.exists(candidate):
+                        return candidate
+        return None
+    candidate = os.path.normpath(os.path.join(_engine_project_root(), path))
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
+def _layer_category(layer: int) -> int:
+    try:
+        return (1 << (int(layer) & 31)) & 0xFFFFFFFF
+    except Exception:
+        return 1
+
+
+def _mask_value(mask: int) -> int:
+    try:
+        return int(mask) & 0xFFFFFFFF
+    except Exception:
+        return 0xFFFF
+
+
+def _decimate_points(verts: np.ndarray, max_vertices: int) -> np.ndarray:
+    n = len(verts)
+    if n <= max_vertices or max_vertices < 4:
+        return verts
+    mins = verts.min(axis=0)
+    maxs = verts.max(axis=0)
+    extent = maxs - mins
+    extent = np.where(extent < 1e-8, 1.0, extent)
+    try:
+        target_cell_vol = float(np.prod(extent)) / float(max_vertices)
+    except Exception:
+        return verts
+    if not np.isfinite(target_cell_vol) or target_cell_vol <= 0.0:
+        return verts
+    cell_size = target_cell_vol ** (1.0 / 3.0)
+    grid_res = np.maximum(1, np.ceil(extent / cell_size).astype(np.int32))
+    indices = np.floor((verts - mins) / extent * grid_res).astype(np.int32)
+    indices = np.clip(indices, 0, grid_res - 1)
+    cell_ids = indices[:, 0] * grid_res[1] * grid_res[2] + indices[:, 1] * grid_res[2] + indices[:, 2]
+    unique_ids, inverse = np.unique(cell_ids, return_inverse=True)
+    centroids = np.zeros((len(unique_ids), 3), dtype=np.float32)
+    np.add.at(centroids, inverse, verts.astype(np.float32))
+    counts = np.bincount(inverse, minlength=len(unique_ids)).astype(np.float32)
+    counts[counts == 0.0] = 1.0
+    centroids /= counts[:, None]
+    return centroids
+
+
+def _unique_points(verts: np.ndarray) -> np.ndarray:
+    if len(verts) > 1:
+        try:
+            return np.unique(np.ascontiguousarray(verts, dtype=np.float32), axis=0)
+        except Exception:
+            return verts
+    return verts
+
+
+def _clean_triangle_indices(verts: np.ndarray, indices: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if indices is None:
+        return None
+    try:
+        tris = np.asarray(indices).reshape(-1, 3).astype(np.int64)
+    except Exception:
+        return None
+    n = len(verts)
+    if len(tris) == 0 or n == 0:
+        return None
+    tris = tris[((tris >= 0) & (tris < n)).all(axis=1)]
+    if len(tris) == 0:
+        return None
+    tris = tris[(tris[:, 0] != tris[:, 1]) & (tris[:, 1] != tris[:, 2]) & (tris[:, 2] != tris[:, 0])]
+    if len(tris) == 0:
+        return None
+    t = verts[tris]
+    area2 = np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+    try:
+        ref = float(np.max(np.abs(verts)))
+    except Exception:
+        ref = 1.0
+    if not np.isfinite(ref) or ref <= 0.0:
+        ref = 1.0
+    eps = max(1e-12, (ref * 1e-7) ** 2)
+    tris = tris[area2 > eps]
+    if len(tris) == 0:
+        return None
+    return np.ascontiguousarray(tris.astype(np.uint32)).reshape(-1)
+
+
+def _load_mesh_geometry(path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    try:
+        from core.components.physics.mesh_collider import load_collision_geometry
+        verts, indices, _ = load_collision_geometry(path)
+        if verts is not None and len(verts) > 0:
+            return verts, indices
+    except Exception:
+        pass
+    return None, None
+
+
+def _load_mesh_tscale(path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
+    try:
+        from core.components.physics.mesh_collider import load_collision_geometry
+        verts, indices, k = load_collision_geometry(path)
+        if verts is not None and len(verts) > 0:
+            return verts, indices, k
+    except Exception:
+        pass
+    return None, None, 1.0
+
+
+def _transform_scale(params_scale, import_scale: float) -> tuple[float, float, float]:
+    try:
+        k = float(import_scale or 1.0)
+    except Exception:
+        k = 1.0
+    if abs(k) < 1e-9:
+        k = 1.0
+    try:
+        return (float(params_scale[0]) / k, float(params_scale[1]) / k, float(params_scale[2]) / k)
+    except Exception:
+        return (1.0, 1.0, 1.0)
 
 
 def _quat_to_euler(q: tuple[float, float, float, float]) -> tuple[float, float, float]:
@@ -131,19 +278,42 @@ def _rotate_vector_by_quat(
     )
 
 
-def _load_mesh_verts(path: str) -> Optional[np.ndarray]:
-    key = path.lower().replace("\\", "/")
-    if key in _LOADED_MESH_VERTS:
-        return _LOADED_MESH_VERTS[key]
+def _rot_vec_by_quat_xyzw(
+    v: tuple[float, float, float],
+    q: tuple[float, float, float, float],
+) -> tuple[float, float, float]:
+    vx, vy, vz = v
+    qx, qy, qz, qw = q
+    uv_x = qy * vz - qz * vy
+    uv_y = qz * vx - qx * vz
+    uv_z = qx * vy - qy * vx
+    uv2_x = qy * uv_z - qz * uv_y
+    uv2_y = qz * uv_x - qx * uv_z
+    uv2_z = qx * uv_y - qy * uv_x
+    return (
+        vx + 2.0 * (qw * uv_x + uv2_x),
+        vy + 2.0 * (qw * uv_y + uv2_y),
+        vz + 2.0 * (qw * uv_z + uv2_z),
+    )
+
+
+def _shifted_pos(
+    position: tuple[float, float, float],
+    rot_q: tuple[float, float, float, float],
+    com: Optional[tuple[float, float, float]],
+    sign: float,
+) -> tuple[float, float, float]:
+    if com is None:
+        return position
     try:
-        from core.assets.asset_importer import load_mesh
-        data = load_mesh(path)
+        ox, oy, oz = _rot_vec_by_quat_xyzw((float(com[0]), float(com[1]), float(com[2])), rot_q)
     except Exception:
-        return None
-    if data is None or len(data.vertices) == 0:
-        return None
-    verts = data.vertices.reshape(-1, 3).astype(np.float32)
-    _LOADED_MESH_VERTS[key] = verts
+        return position
+    return (position[0] + sign * ox, position[1] + sign * oy, position[2] + sign * oz)
+
+
+def _load_mesh_verts(path: str) -> Optional[np.ndarray]:
+    verts, _ = _load_mesh_geometry(path)
     return verts
 
 
@@ -290,10 +460,10 @@ class CulverinSolver(IPhysicsSolver):
         rot_q = euler_to_quat(rotation[0], rotation[1], rotation[2])
 
         handle = -1
-        culv_shape = _SHAPE_TYPE_MAP.get(shape_type, SHAPE_BOX)
+        com = None
 
         if shape_type == "mesh":
-            handle = self._create_mesh_collider(
+            handle, com = self._create_mesh_collider(
                 position, rot_q, mass_val, motion, shape_params,
                 friction, restitution, is_trigger,
                 collision_layer, collision_mask, body_id,
@@ -304,21 +474,13 @@ class CulverinSolver(IPhysicsSolver):
                 friction, restitution, is_trigger,
                 collision_layer, collision_mask, body_id,
             )
+            com = None
         else:
-            size = self._shape_size(shape_type, shape_params)
-            handle = self._world.create_body(
-                pos=position,
-                rot=rot_q,
-                size=size,
-                shape=culv_shape,
-                motion=motion,
-                mass=mass_val,
-                friction=friction,
-                restitution=restitution,
-                category=collision_mask,
-                mask=collision_mask,
-                is_sensor=is_trigger,
-                user_data=body_id,
+            handle, com = self._create_primitive_body(
+                shape_type, shape_params, position, rot_q,
+                mass_val, motion, friction, restitution, is_trigger,
+                _layer_category(collision_layer), _mask_value(collision_mask),
+                body_id,
             )
 
         if handle is None or handle < 0:
@@ -344,9 +506,238 @@ class CulverinSolver(IPhysicsSolver):
             "restitution": restitution,
             "is_trigger": is_trigger,
             "is_kinematic": is_kinematic,
+            "com": com,
         }
 
         return body_id
+
+    def create_compound_rigid_body(
+        self,
+        entity_id: str,
+        shapes: list,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        mass: float,
+        friction: float = 0.6,
+        restitution: float = 0.0,
+        is_trigger: bool = False,
+        is_kinematic: bool = False,
+        collision_layer: int = 0,
+        collision_mask: int = 0xFFFF,
+    ) -> int:
+        if self._world is None or not shapes:
+            return -1
+
+        body_id = self._next_body_id
+        self._next_body_id += 1
+
+        if mass <= 0.0 or is_trigger:
+            motion = MOTION_STATIC
+            mass_val = 0.0
+        elif is_kinematic:
+            motion = MOTION_KINEMATIC
+            mass_val = mass
+        else:
+            motion = MOTION_DYNAMIC
+            mass_val = mass
+
+        try:
+            if any(bool(s.get("is_trigger", False)) != bool(is_trigger) for s in shapes):
+                Logger.warning("CulverinSolver: mixed trigger/solid colliders share one body, using the first")
+        except Exception:
+            pass
+
+        rot_q = euler_to_quat(rotation[0], rotation[1], rotation[2])
+        category = _layer_category(collision_layer)
+        mask = _mask_value(collision_mask)
+
+        try:
+            from core.physics.shape_utils import part_volume, part_center, capsule_part_quat, capsule_section_height
+        except Exception:
+            return -1
+
+        parts: list = []
+        total_vol = 0.0
+        com_acc = [0.0, 0.0, 0.0]
+        for s in shapes:
+            stype = s.get("type", "box")
+            params = s.get("params", {})
+            if stype not in ("box", "sphere", "capsule", "cylinder"):
+                continue
+            spec = self._compound_part_spec(stype, params, part_center, capsule_part_quat, capsule_section_height)
+            if spec is None:
+                continue
+            pquat, cshape, size = spec
+            cen = part_center(stype, params)
+            try:
+                vol = max(float(part_volume(stype, params)), 1e-9)
+            except Exception:
+                vol = 1.0
+            parts.append(((float(cen[0]), float(cen[1]), float(cen[2])), pquat, cshape, size))
+            total_vol += vol
+            com_acc[0] += vol * cen[0]
+            com_acc[1] += vol * cen[1]
+            com_acc[2] += vol * cen[2]
+
+        if not parts:
+            return -1
+
+        if total_vol > 0.0:
+            com = (com_acc[0] / total_vol, com_acc[1] / total_vol, com_acc[2] / total_vol)
+        else:
+            com = None
+        if motion == MOTION_STATIC:
+            com = None
+
+        try:
+            handle = self._world.create_compound_body(
+                parts=parts,
+                pos=position,
+                rot=rot_q,
+                motion=motion, mass=mass_val,
+                user_data=body_id, is_sensor=is_trigger,
+                category=category, mask=mask,
+                friction=friction, restitution=restitution,
+            )
+        except Exception as e:
+            Logger.warning(f"CulverinSolver: create_compound_body failed: {e}")
+            return -1
+        if handle is None or handle < 0:
+            return -1
+
+        if motion == MOTION_DYNAMIC and self._enable_sleeping:
+            self._world.set_linear_velocity(handle, 0.0, -0.001, 0.0)
+            self._world.set_linear_velocity(handle, 0.0, 0.0, 0.0)
+
+        self._body_count += 1
+        self._all_body_ids.append(body_id)
+        self._body_handles.append(handle)
+        self._handle_to_id[handle] = body_id
+        self._id_to_handle[body_id] = handle
+        if entity_id:
+            self._entity_to_body[entity_id] = body_id
+        self._body_to_entity[body_id] = entity_id
+        self._body_specs[body_id] = {
+            "entity_id": entity_id,
+            "shape_type": "compound",
+            "mass": mass_val,
+            "friction": friction,
+            "restitution": restitution,
+            "is_trigger": is_trigger,
+            "is_kinematic": is_kinematic,
+            "com": com,
+        }
+        return body_id
+
+    def _compound_part_spec(self, shape_type, params, part_center, capsule_part_quat, capsule_section_height):
+        try:
+            cen = part_center(shape_type, params)
+        except Exception:
+            cen = [0.0, 0.0, 0.0]
+        if shape_type == "box":
+            s = params.get("size", [1, 1, 1])
+            try:
+                half = (max(float(s[0]) * 0.5, 1e-4), max(float(s[1]) * 0.5, 1e-4), max(float(s[2]) * 0.5, 1e-4))
+            except Exception:
+                return None
+            return (0.0, 0.0, 0.0, 1.0), SHAPE_BOX, half
+        if shape_type == "sphere":
+            try:
+                r = max(float(params.get("radius", 0.5)), 1e-4)
+            except Exception:
+                return None
+            return (0.0, 0.0, 0.0, 1.0), SHAPE_SPHERE, r
+        if shape_type == "capsule":
+            try:
+                r, hsec = capsule_section_height(float(params.get("radius", 0.5)), float(params.get("height", 2.0)))
+            except Exception:
+                return None
+            try:
+                direction = int(params.get("direction", 1))
+            except Exception:
+                direction = 1
+            return capsule_part_quat(direction), SHAPE_CAPSULE, (r, hsec * 0.5)
+        if shape_type == "cylinder":
+            try:
+                r = max(float(params.get("radius", 0.5)), 1e-4)
+                h = max(float(params.get("height", 1.0)), 1e-4)
+            except Exception:
+                return None
+            return (0.0, 0.0, 0.0, 1.0), SHAPE_CYLINDER, (r, h * 0.5)
+        return None
+
+    def _create_primitive_body(
+        self, shape_type, shape_params, position, rot_q,
+        mass_val, motion, friction, restitution, is_trigger,
+        category, mask, body_id,
+    ):
+        culv_shape = _SHAPE_TYPE_MAP.get(shape_type, SHAPE_BOX)
+        try:
+            from core.physics.shape_utils import part_center, capsule_part_quat, capsule_section_height
+        except Exception:
+            return -1, None
+        if shape_type in ("box", "sphere", "capsule", "cylinder"):
+            try:
+                cen = part_center(shape_type, shape_params)
+            except Exception:
+                cen = [0.0, 0.0, 0.0]
+            spec = self._compound_part_spec(shape_type, shape_params, part_center, capsule_part_quat, capsule_section_height)
+            if spec is None:
+                return -1, None
+            pquat, cshape, size = spec
+            if abs(cen[0]) + abs(cen[1]) + abs(cen[2]) < 1e-9 and pquat == (0.0, 0.0, 0.0, 1.0):
+                try:
+                    handle = self._world.create_body(
+                        pos=position,
+                        rot=rot_q,
+                        size=size,
+                        shape=cshape,
+                        motion=motion,
+                        mass=mass_val,
+                        friction=friction,
+                        restitution=restitution,
+                        category=category,
+                        mask=mask,
+                        is_sensor=is_trigger,
+                        user_data=body_id,
+                    )
+                    return (handle if handle is not None else -1), None
+                except Exception:
+                    return -1, None
+            com = (float(cen[0]), float(cen[1]), float(cen[2])) if motion != MOTION_STATIC else None
+            try:
+                handle = self._world.create_compound_body(
+                    parts=[((float(cen[0]), float(cen[1]), float(cen[2])), pquat, cshape, size)],
+                    pos=position,
+                    rot=rot_q,
+                    motion=motion, mass=mass_val,
+                    user_data=body_id, is_sensor=is_trigger,
+                    category=category, mask=mask,
+                    friction=friction, restitution=restitution,
+                )
+                return (handle if handle is not None else -1), com
+            except Exception as e:
+                Logger.warning(f"CulverinSolver: offset primitive failed: {e}")
+                return -1, None
+        try:
+            size = self._shape_size(shape_type, shape_params)
+            handle = self._world.create_body(
+                pos=position,
+                rot=rot_q,
+                size=size,
+                shape=culv_shape,
+                motion=motion,
+                mass=mass_val,
+                friction=friction,
+                restitution=restitution,
+                category=category,
+                mask=mask,
+                is_sensor=is_trigger,
+                user_data=body_id,
+            )
+            return (handle if handle is not None else -1), None
+        except Exception:
+            return -1, None
 
     def _shape_size(self, shape_type: str, shape_params: dict):
         if shape_type == "box":
@@ -357,7 +748,12 @@ class CulverinSolver(IPhysicsSolver):
         if shape_type == "capsule":
             radius = shape_params.get("radius", 0.5)
             height = shape_params.get("height", 2.0)
-            return (radius, height / 2.0)
+            try:
+                from core.physics.shape_utils import capsule_section_height
+                _, hsec = capsule_section_height(float(radius), float(height))
+                return (max(float(radius), 1e-4), hsec * 0.5)
+            except Exception:
+                return (radius, height / 2.0)
         if shape_type == "cylinder":
             radius = shape_params.get("radius", 0.5)
             height = shape_params.get("height", 1.0)
@@ -370,65 +766,188 @@ class CulverinSolver(IPhysicsSolver):
     def _create_mesh_collider(
         self, position, rot_q, mass_val, motion, shape_params,
         friction, restitution, is_trigger, collision_layer, collision_mask, body_id,
-    ) -> int:
+    ):
         file_path = shape_params.get("file", "")
-        if not file_path:
-            return -1
-        resolved = file_path
-        if not os.path.isabs(resolved):
-            proj_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            candidate = os.path.normpath(os.path.join(proj_root, resolved))
-            if os.path.exists(candidate):
-                resolved = candidate
-        if not os.path.exists(resolved):
+        resolved = _resolve_mesh_file(file_path)
+        if resolved is None:
             Logger.warning(f"CulverinSolver: mesh file not found: {file_path}")
-            return -1
+            return -1, None
 
-        collision_mode = shape_params.get("collision_mode", "convex_hull")
-        verts = _load_mesh_verts(resolved)
-        scale = tuple(shape_params.get("scale", [1, 1, 1]))
-        if verts is not None and scale != (1.0, 1.0, 1.0):
-            verts = verts * np.array(scale, dtype=np.float32)
-
-        if motion == MOTION_STATIC and collision_mode == "mesh":
-            if verts is None:
-                return -1
-            try:
-                from core.assets.asset_importer import load_mesh
-                data = load_mesh(resolved)
-                if data is not None and hasattr(data, 'indices') and len(data.indices) > 0:
-                    indices = data.indices.reshape(-1).astype(np.uint32)
-                else:
-                    tri_count = len(verts) // 3
-                    indices = np.arange(tri_count * 3, dtype=np.uint32)
-                buf_verts = verts.reshape(-1).astype(np.float32).tobytes()
-                buf_indices = indices.tobytes()
-                return self._world.create_mesh_body(
-                    pos=position, rot=rot_q,
-                    vertices=buf_verts, indices=buf_indices,
-                    user_data=body_id,
-                    category=collision_mask, mask=collision_mask,
-                )
-            except Exception as e:
-                Logger.warning(f"CulverinSolver: create_mesh_body failed: {e}")
-                return -1
-
-        if verts is None:
-            return -1
-
+        raw_mode = shape_params.get("collision_mode", "auto")
         try:
-            buf = verts.reshape(-1).astype(np.float32).tobytes()
+            mode = str(raw_mode or "auto").lower()
+        except Exception:
+            mode = "auto"
+        if mode not in ("auto", "mesh", "convex_hull", "box", "sphere"):
+            Logger.warning(f"CulverinSolver: unknown collision_mode '{raw_mode}', using 'auto'")
+            mode = "auto"
+        try:
+            max_vertices = int(shape_params.get("max_vertices", 0) or 0)
+        except Exception:
+            max_vertices = 0
+
+        scale = shape_params.get("scale", [1.0, 1.0, 1.0])
+        try:
+            sx, sy, sz = float(scale[0]), float(scale[1]), float(scale[2])
+        except Exception:
+            sx = sy = sz = 1.0
+        if not all(np.isfinite((sx, sy, sz))) or min(abs(sx), abs(sy), abs(sz)) < 1e-9:
+            Logger.warning(f"CulverinSolver: degenerate scale for mesh '{file_path}'")
+            return -1, None
+        center = shape_params.get("center", [0.0, 0.0, 0.0])
+        try:
+            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+        except Exception:
+            cx = cy = cz = 0.0
+        if not all(np.isfinite((cx, cy, cz))):
+            cx = cy = cz = 0.0
+
+        category = _layer_category(collision_layer)
+        mask = _mask_value(collision_mask)
+
+        if mode == "auto":
+            mode = "mesh" if motion == MOTION_STATIC else "convex_hull"
+        elif mode == "mesh" and motion != MOTION_STATIC:
+            Logger.warning(f"CulverinSolver: concave mesh '{file_path}' requires a static body, using convex hull")
+            mode = "convex_hull"
+
+        verts, indices, import_scale = _load_mesh_tscale(resolved)
+        if verts is None or len(verts) == 0:
+            Logger.warning(f"CulverinSolver: could not read mesh '{file_path}'")
+            return -1, None
+        tx, ty, tz = _transform_scale(scale, import_scale)
+        if not all(np.isfinite((tx, ty, tz))) or min(abs(tx), abs(ty), abs(tz)) < 1e-9:
+            Logger.warning(f"CulverinSolver: degenerate scale for mesh '{file_path}'")
+            return -1, None
+        shaped = verts * np.array([tx, ty, tz], dtype=np.float32)
+        if cx != 0.0 or cy != 0.0 or cz != 0.0:
+            shaped = shaped + np.array([cx, cy, cz], dtype=np.float32)
+        if not np.all(np.isfinite(shaped)):
+            Logger.warning(f"CulverinSolver: mesh '{file_path}' contains invalid vertices")
+            return -1, None
+
+        if mode == "mesh":
+            tris = _clean_triangle_indices(shaped, indices)
+            if tris is None:
+                Logger.warning(f"CulverinSolver: mesh '{file_path}' has no usable triangles, using convex hull")
+            else:
+                try:
+                    buf_verts = np.ascontiguousarray(shaped, dtype=np.float32).tobytes()
+                    buf_indices = np.ascontiguousarray(tris, dtype=np.uint32).tobytes()
+                    handle = self._world.create_mesh_body(
+                        pos=position, rot=rot_q,
+                        vertices=buf_verts, indices=buf_indices,
+                        user_data=body_id,
+                        category=category, mask=mask,
+                    )
+                    return (handle if handle is not None else -1), None
+                except Exception as e:
+                    Logger.warning(f"CulverinSolver: create_mesh_body failed for '{file_path}': {e}")
+                    return -1, None
+
+        if mode == "box":
+            return self._create_box_approx(
+                shaped, position, rot_q, mass_val, motion,
+                friction, restitution, is_trigger,
+                category, mask, body_id, file_path,
+            )
+
+        if mode == "sphere":
+            return self._create_sphere_approx(
+                shaped, position, rot_q, mass_val, motion,
+                friction, restitution, is_trigger,
+                category, mask, body_id, file_path,
+            )
+
+        points = _unique_points(shaped)
+        if max_vertices >= 4 and len(points) > max_vertices:
+            points = _decimate_points(points, max_vertices)
+        if len(points) < 4:
+            Logger.warning(f"CulverinSolver: mesh '{file_path}' is degenerate, using box approximation")
+            return self._create_box_approx(
+                shaped, position, rot_q, mass_val, motion,
+                friction, restitution, is_trigger,
+                category, mask, body_id, file_path,
+            )
+        try:
+            com = None
+            if motion != MOTION_STATIC and len(points) > 0:
+                try:
+                    mean = points.astype(np.float64).mean(axis=0)
+                    if np.all(np.isfinite(mean)):
+                        com = (float(mean[0]), float(mean[1]), float(mean[2]))
+                except Exception:
+                    com = None
+            buf = np.ascontiguousarray(points, dtype=np.float32).tobytes()
             handle = self._world.create_convex_hull(
                 pos=position, rot=rot_q, points=buf,
                 motion=motion, mass=mass_val,
                 user_data=body_id, is_sensor=is_trigger,
-                category=collision_mask, mask=collision_mask,
+                category=category, mask=mask,
                 friction=friction, restitution=restitution,
             )
-            return handle
+            return (handle if handle is not None else -1), com
         except Exception as e:
-            Logger.warning(f"CulverinSolver: create_convex_hull failed: {e}")
-            return -1
+            Logger.warning(f"CulverinSolver: create_convex_hull failed for '{file_path}': {e}, using box approximation")
+            return self._create_box_approx(
+                shaped, position, rot_q, mass_val, motion,
+                friction, restitution, is_trigger,
+                category, mask, body_id, file_path,
+            )
+
+    def _create_box_approx(
+        self, shaped, position, rot_q, mass_val, motion,
+        friction, restitution, is_trigger, category, mask, body_id, file_path,
+    ):
+        try:
+            mins = shaped.min(axis=0).astype(np.float64)
+            maxs = shaped.max(axis=0).astype(np.float64)
+        except Exception:
+            return -1, None
+        half = np.maximum((maxs - mins) * 0.5, 1e-4)
+        off = (mins + maxs) * 0.5
+        com = (float(off[0]), float(off[1]), float(off[2])) if motion != MOTION_STATIC else None
+        try:
+            handle = self._world.create_compound_body(
+                parts=[((float(off[0]), float(off[1]), float(off[2])),
+                        (0.0, 0.0, 0.0, 1.0), SHAPE_BOX,
+                        (float(half[0]), float(half[1]), float(half[2])))],
+                pos=position, rot=rot_q,
+                motion=motion, mass=mass_val,
+                user_data=body_id, is_sensor=is_trigger,
+                category=category, mask=mask,
+                friction=friction, restitution=restitution,
+            )
+            return (handle if handle is not None else -1), com
+        except Exception as e:
+            Logger.warning(f"CulverinSolver: box approximation failed for '{file_path}': {e}")
+            return -1, None
+
+    def _create_sphere_approx(
+        self, shaped, position, rot_q, mass_val, motion,
+        friction, restitution, is_trigger, category, mask, body_id, file_path,
+    ):
+        try:
+            sc = shaped.mean(axis=0).astype(np.float64)
+            radius = float(np.max(np.linalg.norm(shaped.astype(np.float64) - sc, axis=1)))
+        except Exception:
+            return -1, None
+        radius = max(radius, 1e-4)
+        com = (float(sc[0]), float(sc[1]), float(sc[2])) if motion != MOTION_STATIC else None
+        try:
+            handle = self._world.create_compound_body(
+                parts=[((float(sc[0]), float(sc[1]), float(sc[2])),
+                        (0.0, 0.0, 0.0, 1.0), SHAPE_SPHERE, radius)],
+                pos=position, rot=rot_q,
+                motion=motion, mass=mass_val,
+                user_data=body_id, is_sensor=is_trigger,
+                category=category, mask=mask,
+                friction=friction, restitution=restitution,
+            )
+            return (handle if handle is not None else -1), com
+        except Exception as e:
+            Logger.warning(f"CulverinSolver: sphere approximation failed for '{file_path}': {e}")
+            return -1, None
 
     def _create_heightfield_collider(
         self, position, rot_q, mass_val, motion, shape_params,
@@ -454,7 +973,6 @@ class CulverinSolver(IPhysicsSolver):
             sz = size[2] / max(1, res - 1)
             verts = []
             indices = []
-            vid = 0
             for z in range(0, res, step):
                 for x in range(0, res, step):
                     px = (x - (res - 1) * 0.5) * sx
@@ -462,8 +980,6 @@ class CulverinSolver(IPhysicsSolver):
                     verts.append(px)
                     verts.append(float(arr[z, x]))
                     verts.append(pz)
-                    indices.append(vid)
-                    vid += 1
             w = (res + step - 1) // step
             for r in range(w - 1):
                 for c in range(w - 1):
@@ -483,7 +999,7 @@ class CulverinSolver(IPhysicsSolver):
                 pos=position, rot=rot_q,
                 vertices=buf_verts, indices=buf_indices,
                 user_data=body_id,
-                category=collision_mask, mask=collision_mask,
+                category=_layer_category(collision_layer), mask=_mask_value(collision_mask),
             )
         except Exception as e:
             Logger.warning(f"CulverinSolver: heightfield body failed: {e}")
@@ -515,6 +1031,15 @@ class CulverinSolver(IPhysicsSolver):
         self._body_specs.clear()
         self._body_count = 0
 
+    def _body_com(self, body_id: int) -> Optional[tuple[float, float, float]]:
+        try:
+            spec = self._body_specs.get(body_id)
+            if spec is None:
+                return None
+            return spec.get("com")
+        except Exception:
+            return None
+
     def set_body_transform(
         self,
         body_id: int,
@@ -541,14 +1066,8 @@ class CulverinSolver(IPhysicsSolver):
     def get_body_transform(
         self, body_id: int
     ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-        handle = self._id_to_handle.get(body_id)
-        if handle is None or self._world is None:
-            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        pos = self._world.get_position(handle)
-        rot = self._world.get_rotation(handle)
-        if pos is None or rot is None:
-            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        euler = _quat_to_euler((rot[0], rot[1], rot[2], rot[3]))
+        pos, quat = self.get_body_transform_quat(body_id)
+        euler = _quat_to_euler((quat[0], quat[1], quat[2], quat[3]))
         return (pos, euler)
 
     def get_body_transform_quat(
@@ -561,7 +1080,9 @@ class CulverinSolver(IPhysicsSolver):
         rot = self._world.get_rotation(handle)
         if pos is None or rot is None:
             return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
-        return (pos, (rot[0], rot[1], rot[2], rot[3]))
+        quat = (rot[0], rot[1], rot[2], rot[3])
+        pos = _shifted_pos((pos[0], pos[1], pos[2]), quat, self._body_com(body_id), -1.0)
+        return (pos, quat)
 
     def apply_force(
         self, body_id: int, force: tuple[float, float, float], local: bool = False
@@ -849,6 +1370,39 @@ class CulverinSolver(IPhysicsSolver):
             self._joint_id_to_handle[constraint_id] = new_handle
             self._joint_handle_to_id[new_handle] = constraint_id
             spec["params"] = new_params
+
+    def set_motor_target(self, constraint_id: int, target: float):
+        if self._world is None:
+            return
+        c_handle = self._joint_id_to_handle.get(constraint_id)
+        if c_handle is None:
+            return
+        try:
+            self._world.set_constraint_target(c_handle, float(target))
+        except Exception as e:
+            Logger.debug(f"CulverinSolver.set_motor_target({constraint_id}) failed: {e}")
+
+    def enable_constraint(self, constraint_id: int, motor: Optional[dict]) -> bool:
+        if self._world is None:
+            return False
+        spec = self._joint_specs.get(constraint_id)
+        if spec is None:
+            return False
+        old = self._joint_id_to_handle.get(constraint_id)
+        if old is None:
+            return False
+        self._world.destroy_constraint(old)
+        self._joint_handle_to_id.pop(old, None)
+        spec["motor"] = motor
+        new_handle = self._world.create_constraint(
+            spec["type"], spec["body_a"], spec["body_b"],
+            params=spec["params"], motor=motor,
+        )
+        if new_handle is None or new_handle < 0:
+            return False
+        self._joint_id_to_handle[constraint_id] = new_handle
+        self._joint_handle_to_id[new_handle] = constraint_id
+        return True
 
     def create_character(
         self,

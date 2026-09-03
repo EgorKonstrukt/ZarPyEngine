@@ -13,6 +13,7 @@ from core.components.inspector_meta import FieldType, InspectorField
 @ComponentRegistry.register
 class CapsuleCollider(Component):
     _icon = "CapsuleCollider.png"
+    _allow_multiple = True
     _gizmo_icon_color = (200, 80, 80)
     _gizmo_icon_label = "C"
     _show_gizmo_icon: bool = False

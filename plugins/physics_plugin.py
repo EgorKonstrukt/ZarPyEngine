@@ -14,7 +14,7 @@ from core.physics import PhysicsProcess, PhysicsScene
 from core.physics.shared_buffer import MAX_ENTITIES
 from core.physics.physics_solver import IPhysicsSolver
 from core.maths.math3d import Vec2, Vec3
-from core.physics.shape_utils import find_shape_info
+from core.physics.shape_utils import find_shapes_info
 from core.config.config import get_project_config
 
 if TYPE_CHECKING:
@@ -198,9 +198,10 @@ class PhysicsPlugin(PluginBase):
     def _body_with_slot_in_process(self, entity, tr, proc: PhysicsProcess) -> Optional[dict]:
         rb = entity._components.get("Rigidbody")
         rb2d = entity._components.get("Rigidbody2D")
-        shape_info = find_shape_info(entity, tr)
-        if not shape_info:
+        shapes = find_shapes_info(entity, tr)
+        if not shapes:
             return None
+        shape_info = shapes[0]
         is_2d = rb2d is not None
         lp = tr._local_pos
         q = tr._local_rot
@@ -226,6 +227,7 @@ class PhysicsPlugin(PluginBase):
             "is_2d": is_2d,
             "shape_type": shape_info["type"],
             "shape_params": shape_info["params"],
+            "shapes": shapes,
             "position": pos,
             "rotation": rot,
             "mass": mass,

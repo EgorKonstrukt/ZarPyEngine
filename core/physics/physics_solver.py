@@ -46,6 +46,38 @@ class IPhysicsSolver(ABC):
     ) -> int:
         ...
 
+    def create_compound_rigid_body(
+        self,
+        entity_id: str,
+        shapes: list,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        mass: float,
+        friction: float = 0.6,
+        restitution: float = 0.0,
+        is_trigger: bool = False,
+        is_kinematic: bool = False,
+        collision_layer: int = 0,
+        collision_mask: int = 0xFFFF,
+    ) -> int:
+        if not shapes:
+            return -1
+        first = shapes[0]
+        return self.create_rigid_body(
+            entity_id=entity_id,
+            shape_type=first.get("type", "box"),
+            shape_params=first.get("params", {}),
+            position=position,
+            rotation=rotation,
+            mass=mass,
+            friction=friction,
+            restitution=restitution,
+            is_trigger=is_trigger,
+            is_kinematic=is_kinematic,
+            collision_layer=collision_layer,
+            collision_mask=collision_mask,
+        )
+
     @abstractmethod
     def remove_rigid_body(self, body_id: int):
         ...
@@ -203,6 +235,12 @@ class IPhysicsSolver(ABC):
         pivot: tuple[float, float, float],
         max_force: float = 500,
     ):
+        ...
+
+    def set_motor_target(self, constraint_id: int, target: float):
+        ...
+
+    def enable_constraint(self, constraint_id: int, motor: Optional[dict]) -> bool:
         ...
 
     @abstractmethod

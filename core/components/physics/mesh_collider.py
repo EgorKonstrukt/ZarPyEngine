@@ -76,7 +76,12 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     resolved = _resolve_mesh_path(path)
     if not resolved:
         return None
-    cache_key = resolved.lower()
+    try:
+        from core.assets.asset_importer import _import_meta_signature
+        sig = _import_meta_signature(resolved)
+    except Exception:
+        sig = None
+    cache_key = resolved.lower() + "|" + (sig[1] if sig else "-")
     cached = _mesh_data.get(cache_key)
     if cached is not _SENTINEL:
         return cached
@@ -90,6 +95,7 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     except Exception:
         return None
     scale = 1.0
+    center_pivot = False
     from core.assets.asset_importer import _resolve_mesh_import_path
     import_path = _resolve_mesh_import_path(resolved)
     if os.path.exists(import_path):
@@ -97,22 +103,38 @@ def _load_mesh_data(path: str) -> Optional[dict]:
             with open(import_path) as f:
                 settings = json.load(f)
             scale = settings.get("scale", 1.0)
+            center_pivot = bool(settings.get("center_pivot", False))
         except Exception:
             pass
     if data is None or len(data.vertices) == 0:
-        result = {"verts": np.empty((0, 3), dtype=np.float32), "edges": [], "num_verts": 0}
+        result = {"verts": np.empty((0, 3), dtype=np.float32), "edges": [], "num_verts": 0, "indices": None, "import_scale": scale,
+                  "mins": np.zeros(3, dtype=np.float32), "maxs": np.zeros(3, dtype=np.float32),
+                  "center": np.zeros(3, dtype=np.float32), "radius": 0.0}
         _mesh_data.set(cache_key, result)
         return result
-    verts = data.vertices.reshape(-1, 3)
+    verts = data.vertices.reshape(-1, 3).astype(np.float32)
     if scale != 1.0:
         verts = verts * scale
+    if center_pivot and len(verts) > 0:
+        try:
+            mean = verts.mean(axis=0)
+            if np.all(np.isfinite(mean)):
+                verts = verts - mean
+        except Exception:
+            pass
+    try:
+        raw_idx = np.asarray(data.indices)
+        indices = np.ascontiguousarray(raw_idx.reshape(-1).astype(np.int64)) if raw_idx.size >= 3 else None
+    except Exception:
+        indices = None
     mins = verts.min(axis=0)
     maxs = verts.max(axis=0)
     center = verts.mean(axis=0)
     radius = float(np.max(np.linalg.norm(verts - center, axis=1)))
     if len(data.indices) == 0:
         result = {"verts": verts, "edges": [], "edge_verts_np": np.empty((0, 2, 3), dtype=np.float32),
-                  "mins": mins, "maxs": maxs, "num_verts": len(verts), "center": center, "radius": radius}
+                  "mins": mins, "maxs": maxs, "num_verts": len(verts), "center": center, "radius": radius,
+                  "indices": indices, "import_scale": scale}
         _mesh_data.set(cache_key, result)
         return result
     idxs = data.indices
@@ -126,7 +148,8 @@ def _load_mesh_data(path: str) -> Optional[dict]:
     edge_indices = np.array(list(edges_set), dtype=np.int32)
     edge_verts_np = verts[edge_indices]
     result = {"verts": verts, "edge_verts_np": edge_verts_np,
-              "mins": mins, "maxs": maxs, "num_verts": len(verts), "center": center, "radius": radius}
+              "mins": mins, "maxs": maxs, "num_verts": len(verts), "center": center, "radius": radius,
+              "indices": indices, "import_scale": scale}
     _mesh_data.set(cache_key, result)
     return result
 
@@ -171,8 +194,53 @@ def _compute_hull_edges_np(verts: np.ndarray) -> Optional[np.ndarray]:
         return None
 
 
+def _import_sig_of(path: str) -> str:
+    try:
+        from core.assets.asset_importer import _import_meta_signature, _resolve_mesh_import_path
+        resolved = _resolve_mesh_path(path)
+        if resolved:
+            sig = _import_meta_signature(resolved)
+            if sig:
+                return sig[1]
+            ip = _resolve_mesh_import_path(resolved)
+            if not os.path.exists(ip):
+                return "-"
+    except Exception:
+        pass
+    return "-"
+
+
+def load_collision_geometry(path: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray], float]:
+    try:
+        md = _load_mesh_data(path)
+    except Exception:
+        return None, None, 1.0
+    if md is None or md.get("num_verts", 0) == 0:
+        return None, None, 1.0
+    try:
+        k = float(md.get("import_scale", 1.0) or 1.0)
+    except Exception:
+        k = 1.0
+    if abs(k) < 1e-9:
+        k = 1.0
+    try:
+        verts = np.ascontiguousarray(md["verts"].reshape(-1, 3), dtype=np.float32)
+    except Exception:
+        return None, None, k
+    indices = md.get("indices")
+    try:
+        if indices is not None:
+            raw = np.asarray(indices)
+            indices = np.ascontiguousarray(raw.reshape(-1).astype(np.int64)) if raw.size >= 3 else None
+        else:
+            indices = None
+    except Exception:
+        indices = None
+    return verts, indices, k
+
+
 def _get_convex_hull_edges_np(path: str) -> Optional[np.ndarray]:
-    cache_key = path.lower().replace("\\", "/")
+    cache_key = (path.lower().replace("\\", "/"), _import_sig_of(path))
     cached = _convex_hull_cache_np.get(cache_key)
     if cached is not _SENTINEL:
         return cached
@@ -185,7 +253,7 @@ def _get_convex_hull_edges_np(path: str) -> Optional[np.ndarray]:
 
 
 def _get_decimated_hull_edges_np(path: str, max_verts: int) -> Optional[np.ndarray]:
-    cache_key = (path.lower().replace("\\", "/"), max_verts)
+    cache_key = (path.lower().replace("\\", "/"), max_verts, _import_sig_of(path))
     cached = _decimated_hull_cache_np.get(cache_key)
     if cached is not _SENTINEL:
         return cached
@@ -206,6 +274,55 @@ def _get_decimated_hull_edges_np(path: str, max_verts: int) -> Optional[np.ndarr
     except Exception:
         _decimated_hull_cache_np.set(cache_key, None)
         return None
+
+
+def _triangle_edges_np(verts: np.ndarray, indices: np.ndarray, max_tris: int = 15000) -> Optional[np.ndarray]:
+    try:
+        tris = np.asarray(indices).reshape(-1, 3)
+        if len(tris) == 0:
+            return None
+        n = len(verts)
+        tris = tris[((tris >= 0) & (tris < n)).all(axis=1)]
+        if len(tris) == 0:
+            return None
+        if len(tris) > max_tris:
+            tris = tris[::int(np.ceil(len(tris) / max_tris))]
+        pairs = np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]], axis=0)
+        return np.ascontiguousarray(verts[pairs].astype(np.float32))
+    except Exception:
+        return None
+
+
+def _box_edges_np(mins: np.ndarray, maxs: np.ndarray) -> np.ndarray:
+    x0, y0, z0 = float(mins[0]), float(mins[1]), float(mins[2])
+    x1, y1, z1 = float(maxs[0]), float(maxs[1]), float(maxs[2])
+    corners = np.array([
+        [x0, y0, z0], [x1, y0, z0], [x0, y1, z0], [x1, y1, z0],
+        [x0, y0, z1], [x1, y0, z1], [x0, y1, z1], [x1, y1, z1],
+    ], dtype=np.float32)
+    pairs = np.array([
+        [0, 1], [1, 3], [3, 2], [2, 0],
+        [4, 5], [5, 7], [7, 6], [6, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+    ], dtype=np.int64)
+    return np.ascontiguousarray(corners[pairs])
+
+
+def _sphere_edges_np(center: np.ndarray, radius: float, segments: int = 24) -> np.ndarray:
+    r = max(float(radius), 1e-6)
+    t = np.linspace(0.0, 2.0 * math.pi, segments, endpoint=False, dtype=np.float32)
+    c = np.cos(t) * r
+    s = np.sin(t) * r
+    z = np.zeros_like(t)
+    rings = [
+        np.stack([center[0] + c, center[1] + z, center[2] + s], axis=1),
+        np.stack([center[0] + c, center[1] + s, center[2] + z], axis=1),
+        np.stack([center[0] + z, center[1] + s, center[2] + c], axis=1),
+    ]
+    out = []
+    for ring in rings:
+        out.append(np.stack([ring, np.roll(ring, -1, axis=0)], axis=1))
+    return np.ascontiguousarray(np.concatenate(out, axis=0).astype(np.float32))
 
 
 def _edge_pairs_np(edge_verts_np: np.ndarray, color: list, pos, rot, sc):
@@ -232,6 +349,7 @@ def _edge_pairs_np(edge_verts_np: np.ndarray, color: list, pos, rot, sc):
 @ComponentRegistry.register
 class MeshCollider(Component):
     _icon = "MeshCollider.png"
+    _allow_multiple = True
     _gizmo_icon_color = (200, 80, 80)
     _gizmo_icon_label = "C"
     _show_gizmo_icon: bool = False
@@ -267,6 +385,30 @@ class MeshCollider(Component):
         c = self.center if isinstance(self.center, Vec3) else Vec3(*self.center)
         return Vec3(c.x * s.x, c.y * s.y, c.z * s.z)
 
+    def _is_dynamic_body(self) -> bool:
+        try:
+            if self.is_trigger:
+                return False
+            ent = self.entity
+            if ent is None:
+                return False
+            from core.components.physics.rigidbody import Rigidbody
+            rb = ent.get_component(Rigidbody)
+            if rb is None or not getattr(rb, "enabled", True):
+                return False
+            if getattr(rb, "is_kinematic", False):
+                return True
+            return float(getattr(rb, "mass", 0.0) or 0.0) > 0.0
+        except Exception:
+            return False
+
+    def _effective_mode(self) -> CollisionMode:
+        if self.collision_mode == CollisionMode.AUTO:
+            return CollisionMode.MESH if not self._is_dynamic_body() else CollisionMode.CONVEX_HULL
+        if self.collision_mode == CollisionMode.MESH and self._is_dynamic_body():
+            return CollisionMode.CONVEX_HULL
+        return self.collision_mode
+
     def _gizmo_sig(self):
         tr = self.transform
         if tr is None:
@@ -278,7 +420,7 @@ class MeshCollider(Component):
             cx, cy, cz = c[0], c[1], c[2]
         return (
             self.mesh_path, self.collision_mode.value, self.max_vertices,
-            cx, cy, cz,
+            cx, cy, cz, self._is_dynamic_body(),
             tr.local_position.x, tr.local_position.y, tr.local_position.z,
             tr.local_rotation.x, tr.local_rotation.y, tr.local_rotation.z, tr.local_rotation.w,
             tr.local_scale.x, tr.local_scale.y, tr.local_scale.z,
@@ -295,12 +437,34 @@ class MeshCollider(Component):
         if cached is not None and cached[0] == sig:
             return cached[1]
         path = self.mesh_path
-        if self.collision_mode == CollisionMode.CONVEX_HULL and self.max_vertices > 0:
-            edges_np = _get_decimated_hull_edges_np(path, self.max_vertices)
+        md = _load_mesh_data(path)
+        if md is None or md["num_verts"] == 0:
+            return None
+        c = self.center
+        if isinstance(c, Vec3):
+            co = np.array([c.x, c.y, c.z], dtype=np.float32)
         else:
-            edges_np = _get_convex_hull_edges_np(path)
+            co = np.array([c[0], c[1], c[2]], dtype=np.float32)
+        mode = self._effective_mode()
+        edges_np = None
+        if mode == CollisionMode.MESH:
+            idx = md.get("indices")
+            if idx is not None and len(idx) >= 3:
+                edges_np = _triangle_edges_np(md["verts"], idx)
+            if edges_np is None:
+                edges_np = _get_convex_hull_edges_np(path)
+        elif mode == CollisionMode.BOX:
+            edges_np = _box_edges_np(md["mins"], md["maxs"])
+        elif mode == CollisionMode.SPHERE:
+            edges_np = _sphere_edges_np(md["center"], md["radius"])
+        else:
+            if self.max_vertices > 0:
+                edges_np = _get_decimated_hull_edges_np(path, self.max_vertices)
+            if edges_np is None:
+                edges_np = _get_convex_hull_edges_np(path)
         if edges_np is None or len(edges_np) == 0:
             return None
+        edges_np = np.ascontiguousarray(edges_np.astype(np.float32) + co)
         color = [0.0, 1.0, 0.0, 0.6]
         result = _edge_pairs_np(edges_np, color, tr.local_position, tr.local_rotation, tr.local_scale)
         self._mc_gizmo_cache = (sig, result)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from typing import Optional, TYPE_CHECKING
 from core.foundation.logger import Logger
-from core.physics.shape_utils import find_shape_info, make_shape_key
+from core.physics.shape_utils import find_shape_info, find_shapes_info, make_shape_key, make_shapes_key, partition_compound_shapes
 
 if TYPE_CHECKING:
     from core.ecs.ecs import Entity, Scene
@@ -23,11 +23,12 @@ class PhysicsScene:
         self._solver = solver
         self._entity_to_body: dict[str, int] = {}
         self._body_to_entity: dict[int, str] = {}
+        self._entity_to_extra_bodies: dict[str, list[int]] = {}
         self._entity_body_cache: dict[str, tuple] = {}
         self._entity_to_joint: dict[str, int] = {}
         self._joint_to_entity: dict[int, str] = {}
         self._cached_shape: dict[str, tuple] = {}
-        self._cached_shape_info: dict[str, dict] = {}
+        self._cached_shape_info: dict[str, list] = {}
         self._prev_frame_contacts: set[frozenset[int]] = set()
         self._scene: Optional[Scene] = None
         self._2d_bodies: set[int] = set()
@@ -52,6 +53,7 @@ class PhysicsScene:
         self._solver.remove_all_bodies()
         self._entity_to_body.clear()
         self._body_to_entity.clear()
+        self._entity_to_extra_bodies.clear()
         self._entity_body_cache.clear()
         self._entity_to_joint.clear()
         self._joint_to_entity.clear()
@@ -69,6 +71,7 @@ class PhysicsScene:
         self._solver.remove_all_bodies()
         self._entity_to_body.clear()
         self._body_to_entity.clear()
+        self._entity_to_extra_bodies.clear()
         self._entity_body_cache.clear()
         self._entity_to_joint.clear()
         self._joint_to_entity.clear()
@@ -95,8 +98,8 @@ class PhysicsScene:
         is_2d = rb2d is not None
         effective_rb = rb2d if is_2d else rb
 
-        shape_info = find_shape_info(entity, tr)
-        if not shape_info:
+        shapes = find_shapes_info(entity, tr)
+        if not shapes:
             return
 
         if entity.id in self._entity_to_body:
@@ -118,20 +121,76 @@ class PhysicsScene:
             mass = 0.0 if rb.is_kinematic else rb.mass
             is_kinematic = rb.is_kinematic
 
-        body_id = self._solver.create_rigid_body(
-            entity_id=entity.id,
-            shape_type=shape_info["type"],
-            shape_params=shape_info["params"],
-            position=pos,
-            rotation=rot,
-            mass=mass,
-            friction=shape_info.get("friction", 0.6),
-            restitution=shape_info.get("restitution", 0.0),
-            is_trigger=shape_info.get("is_trigger", False),
-            is_kinematic=is_kinematic,
-            collision_layer=shape_info.get("layer", 0),
-            collision_mask=shape_info.get("mask", 0xFFFF),
-        )
+        if is_2d or len(shapes) == 1:
+            shape_info = shapes[0]
+            body_id = self._solver.create_rigid_body(
+                entity_id=entity.id,
+                shape_type=shape_info["type"],
+                shape_params=shape_info["params"],
+                position=pos,
+                rotation=rot,
+                mass=mass,
+                friction=shape_info.get("friction", 0.6),
+                restitution=shape_info.get("restitution", 0.0),
+                is_trigger=shape_info.get("is_trigger", False),
+                is_kinematic=is_kinematic,
+                collision_layer=shape_info.get("layer", 0),
+                collision_mask=shape_info.get("mask", 0xFFFF),
+            )
+            extra_shapes: list[dict] = []
+        else:
+            dynamic = (mass > 0.0) and (not is_kinematic) and (not shapes[0].get("is_trigger", False))
+            prims, extra_shapes = partition_compound_shapes(shapes, dynamic)
+            if len(prims) == 1 and not extra_shapes:
+                shape_info = prims[0]
+                body_id = self._solver.create_rigid_body(
+                    entity_id=entity.id,
+                    shape_type=shape_info["type"],
+                    shape_params=shape_info["params"],
+                    position=pos,
+                    rotation=rot,
+                    mass=mass,
+                    friction=shape_info.get("friction", 0.6),
+                    restitution=shape_info.get("restitution", 0.0),
+                    is_trigger=shape_info.get("is_trigger", False),
+                    is_kinematic=is_kinematic,
+                    collision_layer=shape_info.get("layer", 0),
+                    collision_mask=shape_info.get("mask", 0xFFFF),
+                )
+            else:
+                first = shapes[0]
+                if not prims:
+                    shape_info = first
+                    body_id = self._solver.create_rigid_body(
+                        entity_id=entity.id,
+                        shape_type=shape_info["type"],
+                        shape_params=shape_info["params"],
+                        position=pos,
+                        rotation=rot,
+                        mass=mass,
+                        friction=shape_info.get("friction", 0.6),
+                        restitution=shape_info.get("restitution", 0.0),
+                        is_trigger=shape_info.get("is_trigger", False),
+                        is_kinematic=is_kinematic,
+                        collision_layer=shape_info.get("layer", 0),
+                        collision_mask=shape_info.get("mask", 0xFFFF),
+                    )
+                    extra_shapes = [s for s in shapes if s is not first]
+                else:
+                    anchor = prims[0]
+                    body_id = self._solver.create_compound_rigid_body(
+                        entity_id=entity.id,
+                        shapes=prims,
+                        position=pos,
+                        rotation=rot,
+                        mass=mass,
+                        friction=anchor.get("friction", 0.6),
+                        restitution=anchor.get("restitution", 0.0),
+                        is_trigger=anchor.get("is_trigger", False),
+                        is_kinematic=is_kinematic,
+                        collision_layer=anchor.get("layer", 0),
+                        collision_mask=anchor.get("mask", 0xFFFF),
+                    )
         if body_id >= 0:
             self._entity_to_body[entity.id] = body_id
             self._body_to_entity[body_id] = entity.id
@@ -140,12 +199,72 @@ class PhysicsScene:
             self._mark_body_items_dirty()
             if is_2d:
                 self._2d_bodies.add(body_id)
-            key = self._make_shape_key(entity, shape_info)
+            key = make_shapes_key(shapes)
             self._cached_shape[entity.id] = key
-            self._cached_shape_info[entity.id] = shape_info
+            self._cached_shape_info[entity.id] = shapes
+            if extra_shapes:
+                body_static = (mass <= 0.0) or is_kinematic or shapes[0].get("is_trigger", False)
+                for extra in extra_shapes:
+                    self._create_extra_body(entity, extra, pos, rot, mass, is_kinematic, body_static)
+
+    def _create_extra_body(self, entity, shape_info: dict, pos, rot, mass: float, is_kinematic: bool, body_static: bool):
+        extra_static = body_static or shape_info["type"] == "heightfield"
+        try:
+            extra_id = self._solver.create_rigid_body(
+                entity_id=entity.id,
+                shape_type=shape_info["type"],
+                shape_params=shape_info["params"],
+                position=pos,
+                rotation=rot,
+                mass=0.0 if extra_static else (0.0 if is_kinematic else mass),
+                friction=shape_info.get("friction", 0.6),
+                restitution=shape_info.get("restitution", 0.0),
+                is_trigger=shape_info.get("is_trigger", False),
+                is_kinematic=True if extra_static else is_kinematic,
+                collision_layer=shape_info.get("layer", 0),
+                collision_mask=shape_info.get("mask", 0xFFFF),
+            )
+        except Exception:
+            return
+        if extra_id is not None and extra_id >= 0:
+            self._body_to_entity[extra_id] = entity.id
+            self._entity_to_extra_bodies.setdefault(entity.id, []).append(extra_id)
+
+    def _sync_extra_bodies(self):
+        if not self._entity_to_extra_bodies:
+            return
+        try:
+            from core.math_helpers import quat_to_euler_rad
+        except ImportError:
+            return
+        for entity_id, extras in self._entity_to_extra_bodies.items():
+            cached = self._entity_body_cache.get(entity_id)
+            if not cached:
+                continue
+            entity, rb, tr, is_2d = cached
+            if not entity._active:
+                continue
+            if not getattr(tr, "_physics_dirty", False):
+                continue
+            p = tr._local_pos
+            if is_2d:
+                bpos = (p._x, p._y, 0.0)
+                brot = (0.0, 0.0, quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)[2])
+            else:
+                e = quat_to_euler_rad(tr._local_rot._x, tr._local_rot._y, tr._local_rot._z, tr._local_rot._w)
+                bpos = (p._x, p._y, p._z)
+                brot = e
+            for extra_id in extras:
+                try:
+                    self._solver.set_body_transform(extra_id, bpos, brot)
+                except Exception:
+                    pass
 
     def _find_shape(self, entity: Entity, transform=None) -> Optional[dict]:
         return find_shape_info(entity, transform)
+
+    def _find_shapes(self, entity: Entity, transform=None) -> list[dict]:
+        return find_shapes_info(entity, transform)
 
     def _make_shape_key(self, entity: Entity, shape_info: dict) -> tuple:
         return make_shape_key(entity, shape_info)
@@ -156,6 +275,13 @@ class PhysicsScene:
             self._solver.remove_rigid_body(body_id)
             self._body_to_entity.pop(body_id, None)
             self._2d_bodies.discard(body_id)
+        for extra_id in self._entity_to_extra_bodies.pop(entity_id, []):
+            try:
+                self._solver.remove_rigid_body(extra_id)
+            except Exception:
+                pass
+            self._body_to_entity.pop(extra_id, None)
+            self._2d_bodies.discard(extra_id)
         self._entity_body_cache.pop(entity_id, None)
         self._mark_body_items_dirty()
         joint_id = self._entity_to_joint.pop(entity_id, None)
@@ -342,10 +468,10 @@ class PhysicsScene:
             entity = self._get_entity(entity_id)
             if not entity:
                 continue
-            shape_info = self._find_shape(entity, entity.transform)
-            if shape_info is None:
+            shapes = self._find_shapes(entity, entity.transform)
+            if not shapes:
                 continue
-            current_key = self._make_shape_key(entity, shape_info)
+            current_key = make_shapes_key(shapes)
             cached = self._cached_shape.get(entity_id)
             if cached is not None and current_key != cached:
                 self.rebuild_entity(entity)
@@ -362,6 +488,7 @@ class PhysicsScene:
     def _sync_ecs_to_physics(self):
         try:
             from core._physics_sync import batch_sync_ecs_to_physics
+            self._sync_extra_bodies()
             cache = self._entity_body_cache
             items = []
             for entity_id, body_id in self._entity_to_body.items():
@@ -393,6 +520,7 @@ class PhysicsScene:
                 tr._physics_dirty = False
         except ImportError:
             from core.math_helpers import quat_to_euler_rad
+            self._sync_extra_bodies()
             cache = self._entity_body_cache
             for entity_id, body_id in self._entity_to_body.items():
                 cached = cache.get(entity_id)
