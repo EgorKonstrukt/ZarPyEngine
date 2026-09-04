@@ -15,7 +15,6 @@ from typing import Optional
 from core.maths.math3d import Vec3
 from core.ecs.ecs import Component, ComponentRegistry, GizmoPrimitive
 from core.components.inspector_meta import FieldType, InspectorField
-from core.engine.engine import Engine
 
 
 class CollisionMode(Enum):
@@ -54,21 +53,36 @@ def _resolve_mesh_path(path: str) -> Optional[str]:
         return None
     if os.path.exists(path):
         return path
-    if os.path.isabs(path):
+    try:
+        from core.engine.engine import Engine
         eng = Engine.instance()
-        root = eng.project_root if eng and eng.project_root else _PROJECT_ROOT
-        if path[1:2] == ":":
+        project_root = eng.project_root if eng and getattr(eng, "project_root", None) else ""
+    except Exception:
+        project_root = ""
+    if os.path.isabs(path):
+        if project_root and path[1:2] == ":":
             parts = path.replace("\\", "/").split("/")
             for i in range(len(parts)):
                 sub = "/".join(parts[i:])
                 if sub:
-                    c = os.path.normpath(os.path.join(root, sub))
+                    c = os.path.normpath(os.path.join(project_root, sub))
                     if os.path.exists(c):
                         return c.replace("\\", "/")
         return path if os.path.exists(path) else None
-    resolved = os.path.normpath(os.path.join(_PROJECT_ROOT, path))
-    if os.path.exists(resolved):
-        return resolved
+    candidates = []
+    if project_root:
+        candidates.append(os.path.normpath(os.path.join(project_root, path)))
+    candidates.append(os.path.normpath(os.path.join(os.getcwd(), path)))
+    candidates.append(os.path.normpath(os.path.join(_PROJECT_ROOT, path)))
+    base = os.path.basename(path)
+    for root in ([project_root] if project_root else []):
+        for sub in ("", "assets/", "assets/models/", "models/"):
+            candidates.append(os.path.normpath(os.path.join(root, sub, path)))
+            if base != path:
+                candidates.append(os.path.normpath(os.path.join(root, sub, base)))
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
     return None
 
 

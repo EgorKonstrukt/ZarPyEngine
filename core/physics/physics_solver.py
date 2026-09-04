@@ -253,6 +253,66 @@ class IPhysicsSolver(ABC):
     ) -> int:
         ...
 
+    def create_soft_body(
+        self,
+        entity_id: str,
+        vertices,
+        indices,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        mass: float = 1.0,
+        compliance: float = 0.001,
+        bend_mode: int = 1,
+        pressure: float = 0.0,
+        damping: float = 0.1,
+        iterations: int = 10,
+        gravity_factor: float = 1.0,
+        friction: float = 0.2,
+        restitution: float = 0.0,
+        vertex_radius: float = 0.05,
+        max_velocity: float = 500.0,
+        max_vertices: int = 0,
+        pin_mode: str = "none",
+        pin_fraction: float = 0.1,
+        double_sided: bool = True,
+        update_com: bool = True,
+        collision_layer: int = 0,
+        collision_mask: int = 0xFFFF,
+    ) -> int:
+        return -1
+
+    def remove_soft_body(self, soft_id: int):
+        ...
+
+    def remove_all_soft_bodies(self):
+        ...
+
+    def get_soft_body_count(self, soft_id: int) -> int:
+        return 0
+
+    def get_soft_body_world_vertices(self, soft_id: int):
+        return None
+
+    def get_soft_body_geometry(self, soft_id: int):
+        return None
+
+    def get_soft_body_com(
+        self, soft_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+
+    def apply_soft_body_force(self, soft_id: int, force: tuple[float, float, float]):
+        ...
+
+    def set_soft_body_velocity(self, soft_id: int, velocity: tuple[float, float, float]):
+        ...
+
+    def get_soft_body_velocity(self, soft_id: int) -> tuple[float, float, float]:
+        return (0.0, 0.0, 0.0)
+
+    def get_soft_body_sample(self, soft_id: int):
+        return None
+
     @property
     @abstractmethod
     def body_count(self) -> int:

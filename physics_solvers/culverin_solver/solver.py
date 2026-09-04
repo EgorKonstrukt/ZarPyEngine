@@ -18,6 +18,7 @@ try:
     import culverin
     from culverin import (
         PhysicsWorld,
+        SoftBodySharedSettings,
         SHAPE_BOX,
         SHAPE_SPHERE,
         SHAPE_CAPSULE,
@@ -34,11 +35,15 @@ try:
         CONSTRAINT_SLIDER,
         CONSTRAINT_DISTANCE,
         CONSTRAINT_CONE,
+        BEND_NONE,
+        BEND_DISTANCE,
+        BEND_DIHEDRAL,
         euler_to_quat,
     )
     _HAS_CULVERIN = True
 except ImportError:
     PhysicsWorld = None
+    SoftBodySharedSettings = None
     _HAS_CULVERIN = False
 
     SHAPE_BOX = 0
@@ -57,6 +62,9 @@ except ImportError:
     CONSTRAINT_SLIDER = 3
     CONSTRAINT_DISTANCE = 4
     CONSTRAINT_CONE = 5
+    BEND_NONE = 0
+    BEND_DISTANCE = 1
+    BEND_DIHEDRAL = 2
 
     def euler_to_quat(roll: float, pitch: float, yaw: float):
         cx, sx = math.cos(roll / 2), math.sin(roll / 2)
@@ -109,6 +117,13 @@ def _resolve_mesh_file(path: str) -> Optional[str]:
         return None
     if os.path.exists(path):
         return os.path.normpath(path)
+    try:
+        from core.components.physics.mesh_collider import _resolve_mesh_path
+        resolved = _resolve_mesh_path(path)
+        if resolved and os.path.exists(resolved):
+            return os.path.normpath(resolved)
+    except Exception:
+        pass
     if os.path.isabs(path):
         root = _engine_project_root()
         if path[1:2] == ":":
@@ -243,6 +258,143 @@ def _transform_scale(params_scale, import_scale: float) -> tuple[float, float, f
         return (1.0, 1.0, 1.0)
 
 
+_SOFT_SETTINGS_CACHE: dict = {}
+
+
+def _soft_digest(verts: np.ndarray, faces: np.ndarray) -> tuple:
+    try:
+        v = np.ascontiguousarray(verts, dtype=np.float32)
+        f = np.ascontiguousarray(faces, dtype=np.uint32)
+        return (v.shape, f.shape, int(v.nbytes + f.nbytes), float(np.sum(v)) + float(np.sum(f)))
+    except Exception:
+        return (0, 0, 0, 0.0)
+
+
+def _compact_soft_mesh(verts: np.ndarray, faces: np.ndarray, max_vertices: int):
+    try:
+        tris = np.asarray(faces).reshape(-1, 3).astype(np.int64)
+    except Exception:
+        return None, None
+    try:
+        n = len(verts)
+    except Exception:
+        return None, None
+    if len(tris) == 0 or n == 0:
+        return None, None
+    tris = tris[((tris >= 0) & (tris < n)).all(axis=1)]
+    tris = tris[(tris[:, 0] != tris[:, 1]) & (tris[:, 1] != tris[:, 2]) & (tris[:, 2] != tris[:, 0])]
+    if len(tris) == 0:
+        return None, None
+    try:
+        maxv = int(max_vertices or 0)
+    except Exception:
+        maxv = 0
+    if maxv < 4:
+        return _finalize_compact(verts, tris)
+    if _unique_count(tris) <= maxv:
+        return _finalize_compact(verts, tris)
+    try:
+        v = np.ascontiguousarray(np.asarray(verts, dtype=np.float32).reshape(-1, 3))
+    except Exception:
+        return None, None
+    try:
+        mins = v.min(axis=0).astype(np.float64)
+        maxs = v.max(axis=0).astype(np.float64)
+    except Exception:
+        return None, None
+    extent = maxs - mins
+    extent = np.where(np.isfinite(extent) & (extent > 1e-9), extent, 1.0)
+    try:
+        vol = float(np.prod(extent))
+    except Exception:
+        vol = 1.0
+    if not np.isfinite(vol) or vol <= 0.0:
+        vol = 1.0
+    base_cell = (vol / float(maxv)) ** (1.0 / 3.0)
+    if not np.isfinite(base_cell) or base_cell <= 0.0:
+        base_cell = 1.0
+    cell = base_cell
+    best = None
+    for _ in range(12):
+        try:
+            rel = (v.astype(np.float64) - mins) / cell
+            ijk = np.floor(rel).astype(np.int64)
+            lo = ijk.min(axis=0)
+            ijk = ijk - lo
+            key = (ijk[:, 0].astype(np.int64) * np.int64(73856093)) ^ (ijk[:, 1].astype(np.int64) * np.int64(19349663)) ^ (ijk[:, 2].astype(np.int64) * np.int64(83492791))
+            ukey, rep = np.unique(key, return_inverse=True)
+            nrep = int(len(ukey))
+        except Exception:
+            return None, None
+        if nrep > maxv:
+            try:
+                grow = (float(nrep) / float(maxv)) ** (1.0 / 3.0)
+            except Exception:
+                grow = 2.0
+            if not np.isfinite(grow) or grow < 1.05:
+                grow = 1.5
+            cell = cell * grow
+            continue
+        try:
+            sums = np.zeros((nrep, 3), dtype=np.float64)
+            np.add.at(sums, rep, v.astype(np.float64))
+            counts = np.bincount(rep, minlength=nrep).astype(np.float64)
+            counts[counts <= 0.0] = 1.0
+            cents = (sums / counts[:, None]).astype(np.float32)
+            mapped = rep[tris]
+            keep = (mapped[:, 0] != mapped[:, 1]) & (mapped[:, 1] != mapped[:, 2]) & (mapped[:, 2] != mapped[:, 0])
+            kt = mapped[keep]
+            if len(kt) == 0:
+                cell = cell * 0.5
+                best = None
+                continue
+            out = _finalize_compact(cents, kt)
+            if out[0] is None:
+                cell = cell * 0.5
+                continue
+            if len(out[0]) <= maxv:
+                return out
+            best = out
+            cell = cell * 0.85
+        except Exception:
+            return None, None
+    if best is not None:
+        return best
+    return _finalize_compact(verts, tris[:max(1, maxv // 2)])
+
+
+def _unique_count(tris) -> int:
+    try:
+        return int(np.unique(tris.reshape(-1)).size)
+    except Exception:
+        return 0
+
+
+def _finalize_compact(verts: np.ndarray, tris: np.ndarray):
+    try:
+        used, remap = np.unique(tris.reshape(-1), return_inverse=True)
+    except Exception:
+        return None, None
+    try:
+        out_verts = np.ascontiguousarray(np.asarray(verts)[used].astype(np.float32))
+        out_faces = np.ascontiguousarray(remap.reshape(-1, 3).astype(np.uint32))
+    except Exception:
+        return None, None
+    if len(out_verts) < 3 or len(out_faces) == 0:
+        return None, None
+    return out_verts, out_faces
+
+
+def _soft_vertex_precision() -> tuple[bool, object]:
+    try:
+        import culverin as _culv
+        if bool(getattr(_culv, "USE_DOUBLE_PRECISION", False)):
+            return True, np.float64
+    except Exception:
+        pass
+    return False, np.float32
+
+
 def _quat_to_euler(q: tuple[float, float, float, float]) -> tuple[float, float, float]:
     qx, qy, qz, qw = q
     sinr_cosp = 2.0 * (qw * qx + qy * qz)
@@ -331,6 +483,13 @@ class CulverinSolver(IPhysicsSolver):
         self._entity_to_body: dict[str, int] = {}
         self._body_to_entity: dict[int, str] = {}
         self._body_specs: dict[int, dict] = {}
+        self._next_soft_id = -1
+        self._soft_handles: list[int] = []
+        self._soft_handle_to_id: dict[int, int] = {}
+        self._soft_id_to_handle: dict[int, int] = {}
+        self._soft_to_entity: dict[int, str] = {}
+        self._entity_to_soft: dict[str, int] = {}
+        self._soft_specs: dict[int, dict] = {}
         self._gravity: tuple[float, float, float] = (0.0, -9.81, 0.0)
         self._debug_enabled = False
         self._next_joint_id = 1
@@ -399,6 +558,13 @@ class CulverinSolver(IPhysicsSolver):
         self._entity_to_body.clear()
         self._body_to_entity.clear()
         self._body_specs.clear()
+        self._next_soft_id = -1
+        self._soft_handles.clear()
+        self._soft_handle_to_id.clear()
+        self._soft_id_to_handle.clear()
+        self._soft_to_entity.clear()
+        self._entity_to_soft.clear()
+        self._soft_specs.clear()
         self._next_joint_id = 1
         self._joint_id_to_handle.clear()
         self._joint_handle_to_id.clear()
@@ -1005,6 +1171,353 @@ class CulverinSolver(IPhysicsSolver):
             Logger.warning(f"CulverinSolver: heightfield body failed: {e}")
             return -1
 
+    def _resolve_soft_id(self, soft_id: int) -> Optional[int]:
+        try:
+            return self._soft_id_to_handle.get(int(soft_id))
+        except Exception:
+            return None
+
+    def create_soft_body(
+        self,
+        entity_id: str,
+        vertices,
+        indices,
+        position: tuple[float, float, float],
+        rotation: tuple[float, float, float],
+        mass: float = 1.0,
+        compliance: float = 0.001,
+        bend_mode: int = 1,
+        pressure: float = 0.0,
+        damping: float = 0.1,
+        iterations: int = 10,
+        gravity_factor: float = 1.0,
+        friction: float = 0.2,
+        restitution: float = 0.0,
+        vertex_radius: float = 0.05,
+        max_velocity: float = 500.0,
+        max_vertices: int = 0,
+        pin_mode: str = "none",
+        pin_fraction: float = 0.1,
+        double_sided: bool = True,
+        update_com: bool = True,
+        collision_layer: int = 0,
+        collision_mask: int = 0xFFFF,
+    ) -> int:
+        if self._world is None or SoftBodySharedSettings is None:
+            return -1
+        try:
+            verts = np.ascontiguousarray(np.asarray(vertices, dtype=np.float32).reshape(-1, 3))
+            faces = np.ascontiguousarray(np.asarray(indices, dtype=np.uint32).reshape(-1))
+        except Exception:
+            return -1
+        if len(verts) < 3 or faces.size < 3 or faces.size % 3 != 0:
+            return -1
+        if not np.all(np.isfinite(verts)):
+            return -1
+        try:
+            mv = int(max_vertices or 0)
+        except Exception:
+            mv = 0
+        if mv >= 4:
+            verts, faces = _compact_soft_mesh(verts, faces, mv)
+            if verts is None or faces is None:
+                return -1
+        try:
+            n = len(verts)
+            total_mass = max(float(mass), 1e-6)
+            pinned_set: set[int] = set()
+            try:
+                pmode = str(pin_mode or "none").lower()
+            except Exception:
+                pmode = "none"
+            if pmode in ("top", "bottom"):
+                try:
+                    frac = max(0.0, min(0.5, float(pin_fraction)))
+                except Exception:
+                    frac = 0.1
+                ys = verts[:, 1]
+                lo, hi = float(ys.min()), float(ys.max())
+                band = (hi - lo) * frac
+                if pmode == "top":
+                    pinned_set = set(int(i) for i in np.where(ys >= hi - band)[0].tolist())
+                else:
+                    pinned_set = set(int(i) for i in np.where(ys <= lo + band)[0].tolist())
+            inv = np.full(n, float(n) / total_mass, dtype=np.float32)
+            for i in pinned_set:
+                if 0 <= i < n:
+                    inv[i] = 0.0
+        except Exception:
+            return -1
+        try:
+            comp_val = max(float(compliance), 0.0)
+        except Exception:
+            comp_val = 0.001
+        try:
+            bend_val = int(bend_mode)
+        except Exception:
+            try:
+                bend_val = {"none": BEND_NONE, "distance": BEND_DISTANCE, "dihedral": BEND_DIHEDRAL}.get(
+                    str(bend_mode or "").lower(), BEND_DISTANCE)
+            except Exception:
+                bend_val = BEND_DISTANCE
+        if bend_val not in (BEND_NONE, BEND_DISTANCE, BEND_DIHEDRAL):
+            bend_val = BEND_DISTANCE
+        digest = (_soft_digest(verts, faces), comp_val, bend_val, inv.tobytes())
+        settings = _SOFT_SETTINGS_CACHE.get(digest)
+        if settings is None:
+            try:
+                settings = SoftBodySharedSettings()
+                settings.add_vertices(verts.tobytes(), inv_masses=inv.tobytes())
+                settings.add_faces(faces.tobytes())
+                settings.create_constraints(comp_val, bend_val)
+                settings.optimize()
+            except Exception as e:
+                Logger.warning(f"CulverinSolver: soft body settings failed: {e}")
+                return -1
+            _SOFT_SETTINGS_CACHE[digest] = settings
+            if len(_SOFT_SETTINGS_CACHE) > 32:
+                _SOFT_SETTINGS_CACHE.pop(next(iter(_SOFT_SETTINGS_CACHE)))
+        try:
+            rot_q = euler_to_quat(rotation[0], rotation[1], rotation[2])
+        except Exception:
+            rot_q = (0.0, 0.0, 0.0, 1.0)
+        try:
+            bmin = verts.min(axis=0).astype(np.float64)
+            bmax = verts.max(axis=0).astype(np.float64)
+            diag = float(np.linalg.norm(bmax - bmin))
+        except Exception:
+            diag = 0.0
+        try:
+            eff_radius = max(float(vertex_radius), 1e-4)
+            if diag > 1e-9 and n > 0:
+                spacing = diag / max(1.0, float(n) ** (1.0 / 3.0))
+                if np.isfinite(spacing):
+                    eff_radius = max(eff_radius, float(spacing) * 0.5)
+        except Exception:
+            try:
+                eff_radius = max(float(vertex_radius), 1e-4)
+            except Exception:
+                eff_radius = 0.05
+        try:
+            handle = self._world.create_soft_body(
+                shared_settings=settings,
+                pos=(float(position[0]), float(position[1]), float(position[2])),
+                rot=rot_q,
+                pressure=max(float(pressure), 0.0),
+                vertex_radius=max(float(eff_radius), 1e-4),
+                linear_damping=max(float(damping), 0.0),
+                num_iterations=max(int(iterations), 1),
+                max_linear_velocity=max(float(max_velocity), 1.0),
+                gravity_factor=float(gravity_factor),
+                friction=float(friction),
+                restitution=float(restitution),
+                faces_double_sided=bool(double_sided),
+                update_position=bool(update_com),
+                user_data=0,
+                category=_layer_category(collision_layer),
+                mask=_mask_value(collision_mask),
+            )
+        except Exception as e:
+            Logger.warning(f"CulverinSolver: create_soft_body failed: {e}")
+            return -1
+        if handle is None or handle < 0:
+            return -1
+        soft_id = self._next_soft_id
+        self._next_soft_id -= 1
+        try:
+            self._world.set_user_data(handle, soft_id)
+        except Exception:
+            pass
+        self._soft_handles.append(handle)
+        self._soft_handle_to_id[handle] = soft_id
+        self._soft_id_to_handle[soft_id] = handle
+        if entity_id:
+            self._soft_to_entity[soft_id] = entity_id
+            self._entity_to_soft[entity_id] = soft_id
+        try:
+            layer_i = int(collision_layer)
+        except Exception:
+            layer_i = 0
+        try:
+            mask_i = int(collision_mask) & 0xFFFFFFFF
+        except Exception:
+            mask_i = 0xFFFF
+        self._soft_specs[soft_id] = {
+            "entity_id": entity_id,
+            "count": n,
+            "pinned": sorted(pinned_set),
+            "verts": np.ascontiguousarray(verts.astype(np.float32)).copy(),
+            "faces": np.ascontiguousarray(faces.reshape(-1).astype(np.int32)).copy(),
+            "radius": float(eff_radius),
+            "layer": layer_i,
+            "mask": mask_i,
+            "mass": max(float(mass), 1e-6),
+        }
+        return soft_id
+
+    def get_soft_body_geometry(self, soft_id: int):
+        try:
+            spec = self._soft_specs.get(soft_id)
+            if not spec:
+                return None
+            return spec.get("verts"), spec.get("faces")
+        except Exception:
+            return None
+
+    def remove_soft_body(self, soft_id: int):
+        handle = self._soft_id_to_handle.pop(soft_id, None)
+        if handle is not None:
+            if handle in self._soft_handles:
+                self._soft_handles.remove(handle)
+            self._soft_handle_to_id.pop(handle, None)
+            if self._world is not None:
+                try:
+                    self._world.destroy_body(handle)
+                except Exception:
+                    pass
+        self._soft_specs.pop(soft_id, None)
+        entity_id = self._soft_to_entity.pop(soft_id, None)
+        if entity_id and self._entity_to_soft.get(entity_id) == soft_id:
+            self._entity_to_soft.pop(entity_id, None)
+
+    def remove_all_soft_bodies(self):
+        if self._world is not None:
+            for handle in list(self._soft_handles):
+                try:
+                    self._world.destroy_body(handle)
+                except Exception:
+                    pass
+        self._next_soft_id = -1
+        self._soft_handles.clear()
+        self._soft_handle_to_id.clear()
+        self._soft_id_to_handle.clear()
+        self._soft_to_entity.clear()
+        self._entity_to_soft.clear()
+        self._soft_specs.clear()
+
+    def get_soft_body_count(self, soft_id: int) -> int:
+        try:
+            return int(self._soft_specs.get(soft_id, {}).get("count", 0))
+        except Exception:
+            return 0
+
+    def get_soft_body_world_vertices(self, soft_id: int):
+        handle = self._resolve_soft_id(soft_id)
+        if handle is None or self._world is None:
+            return None
+        try:
+            view = self._world.get_soft_body_vertices(handle)
+        except Exception:
+            return None
+        if view is None:
+            return None
+        try:
+            is_double, _ = _soft_vertex_precision()
+            raw = np.frombuffer(view, dtype=np.float64 if is_double else np.float32)
+        except Exception:
+            return None
+        if raw.size < 4 or raw.size % 4 != 0:
+            return None
+        try:
+            out = np.ascontiguousarray(raw.reshape(-1, 4)[:, :3].astype(np.float32))
+        except Exception:
+            return None
+        try:
+            want = int(self._soft_specs.get(soft_id, {}).get("count", 0))
+        except Exception:
+            want = 0
+        if want > 0 and len(out) != want:
+            return None
+        return out
+
+    def get_soft_body_com(
+        self, soft_id: int
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        handle = self._resolve_soft_id(soft_id)
+        if handle is None or self._world is None:
+            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        try:
+            pos = self._world.get_position(handle)
+            rot = self._world.get_rotation(handle)
+        except Exception:
+            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        if pos is None or rot is None:
+            return ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+        return ((pos[0], pos[1], pos[2]), (rot[0], rot[1], rot[2], rot[3]))
+
+    def apply_soft_body_force(self, soft_id: int, force: tuple[float, float, float]):
+        handle = self._resolve_soft_id(soft_id)
+        if handle is None or self._world is None:
+            return
+        try:
+            self._world.apply_force(handle, float(force[0]), float(force[1]), float(force[2]))
+        except Exception:
+            pass
+
+    def set_soft_body_velocity(self, soft_id: int, velocity: tuple[float, float, float]):
+        handle = self._resolve_soft_id(soft_id)
+        if handle is None or self._world is None:
+            return
+        try:
+            self._world.set_linear_velocity(handle, float(velocity[0]), float(velocity[1]), float(velocity[2]))
+        except Exception:
+            pass
+
+    def get_soft_body_velocity(self, soft_id: int) -> tuple[float, float, float]:
+        handle = self._resolve_soft_id(soft_id)
+        if handle is None or self._world is None:
+            return (0.0, 0.0, 0.0)
+        try:
+            v = self._world.get_velocity(handle)
+        except Exception:
+            return (0.0, 0.0, 0.0)
+        if v is None:
+            return (0.0, 0.0, 0.0)
+        return (v[0], v[1], v[2])
+
+    def get_soft_body_sample(self, soft_id: int):
+        try:
+            sid = int(soft_id)
+        except Exception:
+            return None
+        spec = self._soft_specs.get(sid)
+        if not spec:
+            return None
+        verts = self.get_soft_body_world_vertices(sid)
+        if verts is None or len(verts) == 0:
+            return None
+        try:
+            v = np.asarray(verts, dtype=np.float64)
+            center = v.mean(axis=0)
+            bmin = v.min(axis=0)
+            bmax = v.max(axis=0)
+        except Exception:
+            return None
+        try:
+            base_r = float(spec.get("radius", 0.05))
+        except Exception:
+            base_r = 0.05
+        if not np.isfinite(base_r) or base_r <= 0.0:
+            base_r = 0.05
+        vel = self.get_soft_body_velocity(sid)
+        try:
+            pinned = spec.get("pinned", None)
+            is_pinned = bool(pinned) and len(pinned) > 0
+        except Exception:
+            is_pinned = False
+        try:
+            mass = max(float(spec.get("mass", 1.0)), 1e-6)
+        except Exception:
+            mass = 1.0
+        return {
+            "center": (float(center[0]), float(center[1]), float(center[2])),
+            "aabb_min": (float(bmin[0]) - base_r, float(bmin[1]) - base_r, float(bmin[2]) - base_r),
+            "aabb_max": (float(bmax[0]) + base_r, float(bmax[1]) + base_r, float(bmax[2]) + base_r),
+            "velocity": (float(vel[0]), float(vel[1]), float(vel[2])),
+            "pinned": is_pinned,
+            "mass": float(mass),
+        }
+
     def remove_rigid_body(self, body_id: int):
         handle = self._id_to_handle.pop(body_id, None)
         if handle is not None and self._world is not None:
@@ -1022,6 +1535,11 @@ class CulverinSolver(IPhysicsSolver):
         if self._world is not None:
             for handle in list(self._body_handles):
                 self._world.destroy_body(handle)
+            for handle in list(self._soft_handles):
+                try:
+                    self._world.destroy_body(handle)
+                except Exception:
+                    pass
         self._body_handles.clear()
         self._handle_to_id.clear()
         self._id_to_handle.clear()
@@ -1029,6 +1547,13 @@ class CulverinSolver(IPhysicsSolver):
         self._entity_to_body.clear()
         self._body_to_entity.clear()
         self._body_specs.clear()
+        self._next_soft_id = -1
+        self._soft_handles.clear()
+        self._soft_handle_to_id.clear()
+        self._soft_id_to_handle.clear()
+        self._soft_to_entity.clear()
+        self._entity_to_soft.clear()
+        self._soft_specs.clear()
         self._body_count = 0
 
     def _body_com(self, body_id: int) -> Optional[tuple[float, float, float]]:
@@ -1179,6 +1704,15 @@ class CulverinSolver(IPhysicsSolver):
         av = self._world.get_angular_velocity(handle)
         return av if av is not None else (0.0, 0.0, 0.0)
 
+    def _resolve_any_id(self, handle: int) -> int:
+        try:
+            bid = self._handle_to_id.get(handle)
+            if bid is not None:
+                return bid
+            return self._soft_handle_to_id.get(handle, -1)
+        except Exception:
+            return -1
+
     def ray_cast(
         self,
         origin: tuple[float, float, float],
@@ -1195,7 +1729,7 @@ class CulverinSolver(IPhysicsSolver):
         if result is None:
             return None
         handle, fraction, position = result[0], result[1], result[2]
-        body_id = self._handle_to_id.get(handle, -1)
+        body_id = self._resolve_any_id(handle)
         return {
             "body_id": body_id,
             "position": position,
@@ -1209,9 +1743,9 @@ class CulverinSolver(IPhysicsSolver):
         raw = self._world.get_contact_events()
         out = []
         for ev in raw:
-            ba = self._handle_to_id.get(ev[0], -1)
-            bb = self._handle_to_id.get(ev[1], -1)
-            if ba < 0 or bb < 0:
+            ba = self._resolve_any_id(ev[0])
+            bb = self._resolve_any_id(ev[1])
+            if ba == -1 or bb == -1:
                 continue
             out.append({"body_a": ba, "body_b": bb})
         return out

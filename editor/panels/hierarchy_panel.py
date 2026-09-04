@@ -767,7 +767,7 @@ class HierarchyPanel(QDockWidget):
             audio_menu.addAction(act)
 
         physics_menu = menu.addMenu("Physics")
-        for label, comp_cls in [("Rigidbody", "Rigidbody"), ("Box Collider", "BoxCollider"), ("Sphere Collider", "SphereCollider"), ("Capsule Collider", "CapsuleCollider"), ("Mesh Collider", "MeshCollider"), ("Character Controller", "CharacterController"), ("Joint", "Joint")]:
+        for label, comp_cls in [("Rigidbody", "Rigidbody"), ("Box Collider", "BoxCollider"), ("Sphere Collider", "SphereCollider"), ("Capsule Collider", "CapsuleCollider"), ("Mesh Collider", "MeshCollider"), ("Soft Body", "SoftBody"), ("Character Controller", "CharacterController"), ("Joint", "Joint")]:
             act = QAction(label, self)
             act.triggered.connect(lambda checked=False, n=label, cc=comp_cls: self._create_from_component(n, cc, None))
             physics_menu.addAction(act)

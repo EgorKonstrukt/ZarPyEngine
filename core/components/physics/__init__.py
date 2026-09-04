@@ -13,9 +13,10 @@ from core.components.physics.terrain_collider import TerrainCollider
 from core.components.physics.character_controller import CharacterController
 from core.components.physics.joint import Joint, JointType
 from core.components.physics.buoyancy import Buoyancy
+from core.components.physics.soft_body import SoftBody, SoftBendMode, SoftPinMode
 
 __all__ = [
     "Rigidbody", "BoxCollider", "SphereCollider", "CapsuleCollider",
     "MeshCollider", "CollisionMode", "TerrainCollider", "CharacterController", "Joint", "JointType",
-    "Buoyancy"
+    "Buoyancy", "SoftBody", "SoftBendMode", "SoftPinMode",
 ]

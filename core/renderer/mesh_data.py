@@ -62,6 +62,7 @@ class MeshData:
         self.bone_count: int = 0
         self._bone_vbo: Optional[Any] = None
         self._color_vbo: Optional[Any] = None
+        self._gpu_version: int = 0
 
     def compute_aabb(self):
         verts = self.vertices
@@ -84,6 +85,28 @@ class MeshData:
             self.compute_aabb()
         return self._bounding_radius
 
+    def _invalidate_vaos(self):
+        for v in self._vao_cache.values():
+            if v:
+                try:
+                    v.release()
+                except Exception:
+                    pass
+        self._vao_cache.clear()
+        self._vao = None
+        if self._outline_vao is not None:
+            try:
+                self._outline_vao.release()
+            except Exception:
+                pass
+            self._outline_vao = None
+        if self._outline_vbo is not None:
+            try:
+                self._outline_vbo.release()
+            except Exception:
+                pass
+            self._outline_vbo = None
+
     def build_gl(self, ctx: moderngl.Context, program: moderngl.Program):
         self._ctx = ctx
         verts = self.vertices
@@ -105,8 +128,10 @@ class MeshData:
         else:
             data[:, 6:8] = 0.0
         b = data.tobytes()
+        _buffers_recreated = False
         if self._vbo is None:
             self._vbo = ctx.buffer(b)
+            _buffers_recreated = True
         else:
             if self._vbo.size != len(b):
                 try:
@@ -114,6 +139,7 @@ class MeshData:
                 except Exception:
                     pass
                 self._vbo = ctx.buffer(b)
+                _buffers_recreated = True
             else:
                 self._vbo.write(b)
         idx = self.indices
@@ -121,6 +147,7 @@ class MeshData:
             ib = idx.astype(np.uint32, copy=False).tobytes()
             if self._ibo is None:
                 self._ibo = ctx.buffer(ib)
+                _buffers_recreated = True
             else:
                 if self._ibo.size != len(ib):
                     try:
@@ -128,8 +155,16 @@ class MeshData:
                     except Exception:
                         pass
                     self._ibo = ctx.buffer(ib)
+                    _buffers_recreated = True
                 else:
                     self._ibo.write(ib)
+        elif self._ibo is not None:
+            try:
+                self._ibo.release()
+            except Exception:
+                pass
+            self._ibo = None
+            _buffers_recreated = True
         if self.has_skeleton and self.bone_indices.size > 0:
             nb = self.bone_indices.shape[0]
             bone_data = np.empty((nb, 8), dtype=np.float32)
@@ -153,6 +188,7 @@ class MeshData:
             cb = cols.astype(np.float32, copy=False).tobytes()
             if self._color_vbo is None:
                 self._color_vbo = ctx.buffer(cb)
+                _buffers_recreated = True
             else:
                 if self._color_vbo.size != len(cb):
                     try:
@@ -160,8 +196,12 @@ class MeshData:
                     except Exception:
                         pass
                     self._color_vbo = ctx.buffer(cb)
+                    _buffers_recreated = True
                 else:
                     self._color_vbo.write(cb)
+        if _buffers_recreated:
+            self._invalidate_vaos()
+            self._gpu_version += 1
         self._build_vao_for_program(program)
         self._vao = self._vao_cache.get(id(program))
 
@@ -233,15 +273,39 @@ class MeshData:
         if len(self.vertices) == 0:
             return
         pos_data = self.vertices.copy()
+        raw = pos_data.tobytes()
         if self._outline_vbo is None:
-            self._outline_vbo = ctx.buffer(pos_data.tobytes())
+            self._outline_vbo = ctx.buffer(raw)
         else:
-            self._outline_vbo.write(pos_data.tobytes())
-        self._outline_vao = ctx.vertex_array(
-            program,
-            [(self._outline_vbo, "3f", "in_position")],
-            self._ibo
-        )
+            try:
+                if self._outline_vbo.size != len(raw):
+                    try:
+                        self._outline_vbo.release()
+                    except Exception:
+                        pass
+                    self._outline_vbo = ctx.buffer(raw)
+                else:
+                    self._outline_vbo.write(raw)
+            except Exception:
+                try:
+                    self._outline_vbo.release()
+                except Exception:
+                    pass
+                self._outline_vbo = ctx.buffer(raw)
+        try:
+            if self._outline_vao is not None:
+                try:
+                    self._outline_vao.release()
+                except Exception:
+                    pass
+                self._outline_vao = None
+            self._outline_vao = ctx.vertex_array(
+                program,
+                [(self._outline_vbo, "3f", "in_position")],
+                self._ibo
+            )
+        except Exception:
+            pass
 
     def render_outline(self):
         if not self._outline_vao:

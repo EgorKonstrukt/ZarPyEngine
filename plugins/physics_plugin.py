@@ -58,6 +58,7 @@ class PhysicsPlugin(PluginBase):
         self._collision_listener_sig: tuple = None
         self._has_collision_cache: bool = False
         self._collision_cache_valid: bool = False
+        self._soft_warned: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -198,6 +199,16 @@ class PhysicsPlugin(PluginBase):
     def _body_with_slot_in_process(self, entity, tr, proc: PhysicsProcess) -> Optional[dict]:
         rb = entity._components.get("Rigidbody")
         rb2d = entity._components.get("Rigidbody2D")
+        try:
+            from core.components.physics.soft_body import SoftBody
+            soft = entity.get_component(SoftBody)
+            if soft is not None and getattr(soft, "enabled", True):
+                if entity.id not in self._soft_warned:
+                    self._soft_warned.add(entity.id)
+                    Logger.warning(f"SoftBody on '{getattr(entity, 'name', entity.id)}' needs single-threaded physics mode")
+                return None
+        except Exception:
+            pass
         shapes = find_shapes_info(entity, tr)
         if not shapes:
             return None
@@ -247,6 +258,7 @@ class PhysicsPlugin(PluginBase):
 
     def on_scene_loaded(self, scene):
         self._scanned_entity_ids.clear()
+        self._soft_warned.clear()
         self._last_entity_count = -1
         self._prev_frame_contacts.clear()
         self._step_caches.clear()
@@ -450,6 +462,12 @@ class PhysicsPlugin(PluginBase):
                     if eid in scanned:
                         continue
                     scanned.add(eid)
+                    # Soft-only entities have no Rigidbody: they must still get
+                    # a soft body (otherwise they never simulate / never fall).
+                    try:
+                        self._physics_scene._create_entity_soft(entity)
+                    except Exception:
+                        pass
                     rb = entity._components.get("Rigidbody")
                     rb2d = entity._components.get("Rigidbody2D")
                     tr = entity._components.get("Transform")

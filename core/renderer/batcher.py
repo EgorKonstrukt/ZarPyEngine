@@ -270,7 +270,17 @@ class RenderBatcher:
         return self._shared_inst_vbo
 
     def _get_vao(self, prog: moderngl.Program, mesh) -> moderngl.VertexArray:
-        key = (id(mesh), id(prog))
+        try:
+            gpu_ver = int(getattr(mesh, "_gpu_version", 0) or 0)
+        except Exception:
+            gpu_ver = 0
+        try:
+            vbo_id = id(getattr(mesh, "_vbo", None))
+            ibo_id = id(getattr(mesh, "_ibo", None))
+        except Exception:
+            vbo_id = 0
+            ibo_id = 0
+        key = (id(mesh), id(prog), gpu_ver, vbo_id, ibo_id)
         cached = self._vao_cache.get(key)
         if cached is not None:
             self._vao_cache.move_to_end(key)
