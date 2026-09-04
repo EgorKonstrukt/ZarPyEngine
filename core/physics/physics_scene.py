@@ -16,6 +16,74 @@ if TYPE_CHECKING:
     from core.physics.physics_solver import IPhysicsSolver
 
 
+def create_soft_body_in_solver(solver, *, vertices, indices, scale_xyz, pos_xyz,
+                               euler_rad_xyz, params, entity_id=""):
+    try:
+        sx, sy, sz = float(scale_xyz[0]), float(scale_xyz[1]), float(scale_xyz[2])
+        lv = (np.asarray(vertices).reshape(-1, 3).astype(np.float64)
+              * np.array([sx, sy, sz], dtype=np.float64)).astype(np.float32)
+        if not np.all(np.isfinite(lv)):
+            return None, 0, None, None
+        p = params or {}
+        bend = p.get("bend_mode", "distance")
+        bend = bend.value if hasattr(bend, "value") else str(bend)
+        pin = p.get("pin_mode", "none")
+        pin = pin.value if hasattr(pin, "value") else str(pin)
+        sid = solver.create_soft_body(
+            entity_id=entity_id,
+            vertices=lv,
+            indices=np.asarray(indices).reshape(-1),
+            position=(float(pos_xyz[0]), float(pos_xyz[1]), float(pos_xyz[2])),
+            rotation=(float(euler_rad_xyz[0]), float(euler_rad_xyz[1]), float(euler_rad_xyz[2])),
+            mass=p.get("mass", 1.0),
+            compliance=p.get("compliance", 0.001),
+            bend_mode=bend,
+            pressure=p.get("pressure", 0.0),
+            damping=p.get("damping", 0.1),
+            iterations=p.get("iterations", 10),
+            gravity_factor=p.get("gravity_factor", 1.0),
+            friction=p.get("friction", 0.6),
+            restitution=p.get("restitution", 0.0),
+            vertex_radius=p.get("vertex_radius", 0.05),
+            max_velocity=p.get("max_velocity", 500.0),
+            max_vertices=p.get("max_vertices", 0),
+            pin_mode=pin,
+            pin_fraction=p.get("pin_fraction", 0.1),
+            double_sided=p.get("double_sided", True),
+            update_com=p.get("update_com", True),
+            collision_layer=p.get("layer", 0),
+            collision_mask=p.get("mask", 0xFFFF),
+        )
+    except Exception as e:
+        Logger.warning(f"[SoftBody] '{entity_id}' creation exception: {e}")
+        return None, 0, None, None
+    if sid is None or sid >= 0:
+        Logger.warning(f"[SoftBody] '{entity_id}' solver returned invalid id: {sid}")
+        return None, 0, None, None
+    try:
+        n = solver.get_soft_body_count(sid)
+    except Exception:
+        n = 0
+    if not n or n <= 0:
+        Logger.warning(f"[SoftBody] '{entity_id}' solver returned 0 vertices, removing")
+        try:
+            solver.remove_soft_body(sid)
+        except Exception:
+            pass
+        return None, 0, None, None
+    try:
+        geom = solver.get_soft_body_geometry(sid)
+    except Exception:
+        geom = None
+    sverts, sfaces = None, None
+    if geom is not None:
+        try:
+            sverts, sfaces = geom
+        except Exception:
+            sverts, sfaces = None, None
+    return sid, int(n), sverts, sfaces
+
+
 class PhysicsScene:
     _ZERO_VEC3 = None
     _ZERO_VEC2 = None
@@ -294,7 +362,8 @@ class PhysicsScene:
                 except Exception:
                     pass
 
-    def _soft_sig(self, entity, soft, tr) -> Optional[tuple]:
+    @staticmethod
+    def _soft_sig(entity, soft, tr) -> Optional[tuple]:
         try:
             from core.components.rendering.renderers.mesh_filter import MeshFilter
             mf = entity.get_component(MeshFilter)
@@ -313,7 +382,8 @@ class PhysicsScene:
         except Exception:
             return None
 
-    def _soft_applied_pose(self, tr):
+    @staticmethod
+    def _soft_applied_pose(tr):
         try:
             p = tr._local_pos
             q = tr._local_rot
@@ -378,7 +448,8 @@ class PhysicsScene:
             pass
         return False
 
-    def _soft_pin_active(self, soft) -> bool:
+    @staticmethod
+    def _soft_pin_active(soft) -> bool:
         try:
             pm = getattr(soft, "pin_mode", None)
             v = pm.value if hasattr(pm, "value") else pm
@@ -386,7 +457,7 @@ class PhysicsScene:
         except Exception:
             return False
 
-    def _soft_apply_com(self, entity, soft, tr, sid) -> bool:
+    def _soft_apply_com(self, entity, soft, tr, sid=None, com=None) -> bool:
         try:
             if not bool(getattr(soft, "update_com", True)):
                 return False
@@ -394,10 +465,13 @@ class PhysicsScene:
             return False
         if self._soft_pin_active(soft):
             return False
-        try:
-            com = self._solver.get_soft_body_com(sid)
-        except Exception:
-            return False
+        if com is None:
+            if sid is None:
+                return False
+            try:
+                com = self._solver.get_soft_body_com(sid)
+            except Exception:
+                return False
         try:
             pos, rot = com
             cx, cy, cz = float(pos[0]), float(pos[1]), float(pos[2])
@@ -479,11 +553,7 @@ class PhysicsScene:
             return
         if len(items) < 2:
             return
-        try:
-            step_dt = max(float(dt), 1e-6)
-        except Exception:
-            step_dt = 1.0 / 60.0
-        infos = {}
+        infos = []
         for entity_id, sid in items:
             try:
                 entity = self._get_entity(entity_id)
@@ -515,28 +585,75 @@ class PhysicsScene:
             except Exception:
                 lay = 0
                 msk = 0xFFFF
-            infos[entity_id] = (sid, soft, sample, lay, msk)
-        keys = list(infos.keys())
-        for i in range(len(keys)):
-            for j in range(i + 1, len(keys)):
-                a = infos[keys[i]]
-                b = infos[keys[j]]
-                try:
-                    cat_a = (1 << (int(a[3]) & 31)) & 0xFFFFFFFF
-                    cat_b = (1 << (int(b[3]) & 31)) & 0xFFFFFFFF
-                    if (int(a[4]) & cat_b) == 0 or (int(b[4]) & cat_a) == 0:
-                        continue
-                except Exception:
+            try:
+                maxv = float(getattr(soft, "max_velocity", 50.0))
+            except Exception:
+                maxv = 50.0
+            infos.append({
+                "key": entity_id,
+                "center": sample.get("center", (0.0, 0.0, 0.0)),
+                "aabb_min": sample.get("aabb_min", (0.0, 0.0, 0.0)),
+                "aabb_max": sample.get("aabb_max", (0.0, 0.0, 0.0)),
+                "velocity": sample.get("velocity", (0.0, 0.0, 0.0)),
+                "pinned": bool(sample.get("pinned", False)),
+                "mass": sample.get("mass", 1.0),
+                "max_velocity": maxv,
+                "layer": lay,
+                "mask": msk,
+            })
+        try:
+            out = PhysicsScene._soft_separation_corrections(infos, dt)
+        except Exception:
+            return
+        for key, vel in out.items():
+            try:
+                sid = self._entity_to_soft.get(key)
+                if sid is None:
                     continue
-                sa = a[2]
-                sb = b[2]
+                self._solver.set_soft_body_velocity(sid, vel)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _soft_separation_corrections(items, dt: float):
+        out = {}
+        try:
+            step_dt = max(float(dt), 1e-6)
+        except Exception:
+            step_dt = 1.0 / 60.0
+        try:
+            n = len(items)
+        except Exception:
+            return out
+        if n < 2:
+            return out
+        vel = {}
+        for it in items:
+            try:
+                v = it.get("velocity", (0.0, 0.0, 0.0))
+                vel[it["key"]] = [float(v[0]), float(v[1]), float(v[2])]
+            except Exception:
+                continue
+        changed = set()
+        for i in range(n):
+            for j in range(i + 1, n):
                 try:
-                    if bool(sa.get("pinned", False)) and bool(sb.get("pinned", False)):
+                    a = items[i]
+                    b = items[j]
+                    ka = a["key"]
+                    kb = b["key"]
+                    if ka not in vel or kb not in vel:
                         continue
-                    amn = sa["aabb_min"]
-                    amx = sa["aabb_max"]
-                    bmn = sb["aabb_min"]
-                    bmx = sb["aabb_max"]
+                    cat_a = (1 << (int(a.get("layer", 0)) & 31)) & 0xFFFFFFFF
+                    cat_b = (1 << (int(b.get("layer", 0)) & 31)) & 0xFFFFFFFF
+                    if (int(a.get("mask", 0xFFFF)) & cat_b) == 0 or (int(b.get("mask", 0xFFFF)) & cat_a) == 0:
+                        continue
+                    if bool(a.get("pinned", False)) and bool(b.get("pinned", False)):
+                        continue
+                    amn = a["aabb_min"]
+                    amx = a["aabb_max"]
+                    bmn = b["aabb_min"]
+                    bmx = b["aabb_max"]
                     ox = min(float(amx[0]), float(bmx[0])) - max(float(amn[0]), float(bmn[0]))
                     oy = min(float(amx[1]), float(bmx[1])) - max(float(amn[1]), float(bmn[1]))
                     oz = min(float(amx[2]), float(bmx[2])) - max(float(amn[2]), float(bmn[2]))
@@ -547,17 +664,19 @@ class PhysicsScene:
                 if ox <= 0.0 or oy <= 0.0 or oz <= 0.0:
                     continue
                 try:
+                    ca = a["center"]
+                    cb = b["center"]
                     if ox <= oy and ox <= oz:
-                        nx, ny, nz = (1.0, 0.0, 0.0) if float(sb["center"][0]) >= float(sa["center"][0]) else (-1.0, 0.0, 0.0)
+                        nx, ny, nz = (1.0, 0.0, 0.0) if float(cb[0]) >= float(ca[0]) else (-1.0, 0.0, 0.0)
                         overlap = ox
                     elif oy <= oz:
-                        nx, ny, nz = (0.0, 1.0, 0.0) if float(sb["center"][1]) >= float(sa["center"][1]) else (0.0, -1.0, 0.0)
+                        nx, ny, nz = (0.0, 1.0, 0.0) if float(cb[1]) >= float(ca[1]) else (0.0, -1.0, 0.0)
                         overlap = oy
                     else:
-                        nx, ny, nz = (0.0, 0.0, 1.0) if float(sb["center"][2]) >= float(sa["center"][2]) else (0.0, 0.0, -1.0)
+                        nx, ny, nz = (0.0, 0.0, 1.0) if float(cb[2]) >= float(ca[2]) else (0.0, 0.0, -1.0)
                         overlap = oz
-                    va = sa["velocity"]
-                    vb = sb["velocity"]
+                    va = vel[ka]
+                    vb = vel[kb]
                     rvx = float(vb[0]) - float(va[0])
                     rvy = float(vb[1]) - float(va[1])
                     rvz = float(vb[2]) - float(va[2])
@@ -567,38 +686,41 @@ class PhysicsScene:
                         continue
                     corr = bias - vn
                     try:
-                        ma = max(float(sa.get("mass", 1.0)), 1e-6)
-                        mb = max(float(sb.get("mass", 1.0)), 1e-6)
+                        ma = max(float(a.get("mass", 1.0)), 1e-6)
+                        mb = max(float(b.get("mass", 1.0)), 1e-6)
                     except Exception:
                         ma, mb = 1.0, 1.0
-                    ima = 0.0 if bool(sa.get("pinned", False)) else 1.0 / ma
-                    imb = 0.0 if bool(sb.get("pinned", False)) else 1.0 / mb
+                    ima = 0.0 if bool(a.get("pinned", False)) else 1.0 / ma
+                    imb = 0.0 if bool(b.get("pinned", False)) else 1.0 / mb
                     denom = ima + imb
                     if denom <= 0.0:
                         continue
                     wa = ima / denom
                     wb = imb / denom
                     try:
-                        maxv = 50.0
-                        try:
-                            maxv = max(float(getattr(a[1], "max_velocity", 50.0)), 1.0)
-                        except Exception:
-                            pass
+                        maxv = max(float(a.get("max_velocity", 50.0)), 1.0)
                         corr = min(corr, maxv)
                     except Exception:
                         pass
-                    nva = (float(va[0]) - nx * corr * wa, float(va[1]) - ny * corr * wa, float(va[2]) - nz * corr * wa)
-                    nvb = (float(vb[0]) + nx * corr * wb, float(vb[1]) + ny * corr * wb, float(vb[2]) + nz * corr * wb)
-                    try:
-                        self._solver.set_soft_body_velocity(a[0], nva)
-                    except Exception:
-                        pass
-                    try:
-                        self._solver.set_soft_body_velocity(b[0], nvb)
-                    except Exception:
-                        pass
+                    va[0] -= nx * corr * wa
+                    va[1] -= ny * corr * wa
+                    va[2] -= nz * corr * wa
+                    vb[0] += nx * corr * wb
+                    vb[1] += ny * corr * wb
+                    vb[2] += nz * corr * wb
+                    changed.add(ka)
+                    changed.add(kb)
                 except Exception:
                     continue
+        for k in changed:
+            try:
+                v = vel.get(k)
+                if v is None:
+                    continue
+                out[k] = (float(v[0]), float(v[1]), float(v[2]))
+            except Exception:
+                pass
+        return out
 
     def _create_entity_soft(self, entity):
         if entity.id in self._entity_to_soft:
@@ -646,66 +768,43 @@ class PhysicsScene:
                 return False
             Logger.info(f"[SoftBody] '{getattr(entity, 'name', entity.id)}' loaded {len(verts)} verts, {len(indices)} indices")
             s = tr.local_scale
-            lv = (verts.reshape(-1, 3).astype(np.float64) * np.array([s.x, s.y, s.z], dtype=np.float64)).astype(np.float32)
-            if not np.all(np.isfinite(lv)):
-                return False
+            euler = tr.local_euler_angles
             bend = soft.bend_mode.value if hasattr(soft.bend_mode, "value") else str(soft.bend_mode)
             pin = soft.pin_mode.value if hasattr(soft.pin_mode, "value") else str(soft.pin_mode)
-            euler = tr.local_euler_angles
-            sid = self._solver.create_soft_body(
+            params = {
+                "mass": soft.mass, "compliance": soft.compliance, "bend_mode": bend,
+                "pressure": soft.pressure, "damping": soft.damping, "iterations": soft.iterations,
+                "gravity_factor": soft.gravity_scale, "friction": soft.material_friction,
+                "restitution": soft.material_bounciness, "vertex_radius": soft.vertex_radius,
+                "max_velocity": soft.max_velocity, "max_vertices": soft.max_vertices,
+                "pin_mode": pin, "pin_fraction": soft.pin_fraction,
+                "double_sided": soft.double_sided, "update_com": soft.update_com,
+                "layer": soft.layer, "mask": soft.mask,
+            }
+            sid, n, sverts, sfaces = create_soft_body_in_solver(
+                self._solver,
+                vertices=verts,
+                indices=indices,
+                scale_xyz=(s.x, s.y, s.z),
+                pos_xyz=(tr.local_position.x, tr.local_position.y, tr.local_position.z),
+                euler_rad_xyz=(math.radians(euler.x), math.radians(euler.y), math.radians(euler.z)),
+                params=params,
                 entity_id=entity.id,
-                vertices=lv,
-                indices=np.asarray(indices).reshape(-1),
-                position=(tr.local_position.x, tr.local_position.y, tr.local_position.z),
-                rotation=(math.radians(euler.x), math.radians(euler.y), math.radians(euler.z)),
-                mass=soft.mass,
-                compliance=soft.compliance,
-                bend_mode=bend,
-                pressure=soft.pressure,
-                damping=soft.damping,
-                iterations=soft.iterations,
-                gravity_factor=soft.gravity_scale,
-                friction=soft.material_friction,
-                restitution=soft.material_bounciness,
-                vertex_radius=soft.vertex_radius,
-                max_velocity=soft.max_velocity,
-                max_vertices=soft.max_vertices,
-                pin_mode=pin,
-                pin_fraction=soft.pin_fraction,
-                double_sided=soft.double_sided,
-                update_com=soft.update_com,
-                collision_layer=soft.layer,
-                collision_mask=soft.mask,
             )
         except Exception as e:
             Logger.warning(f"[SoftBody] '{getattr(entity, 'name', entity.id)}' creation exception: {e}")
             return False
-        if sid is None or sid >= 0:
-            Logger.warning(f"[SoftBody] '{getattr(entity, 'name', entity.id)}' solver returned invalid id: {sid}")
-            return False
-        n = self._solver.get_soft_body_count(sid)
-        if n <= 0:
-            Logger.warning(f"[SoftBody] '{getattr(entity, 'name', entity.id)}' solver returned 0 vertices, removing")
-            try:
-                self._solver.remove_soft_body(sid)
-            except Exception:
-                pass
+        if sid is None or n <= 0:
             return False
         self._entity_to_soft[entity.id] = sid
         self._body_to_entity[sid] = entity.id
         try:
-            geom = self._solver.get_soft_body_geometry(sid)
+            if sverts is not None and len(sverts) >= 3:
+                soft._soft_verts = np.ascontiguousarray(sverts, dtype=np.float32)
+            if sfaces is not None and len(sfaces) >= 3:
+                soft._soft_faces = np.ascontiguousarray(sfaces, dtype=np.int64)
         except Exception:
-            geom = None
-        if geom is not None:
-            try:
-                sverts, sfaces = geom
-                if sverts is not None and len(sverts) >= 3:
-                    soft._soft_verts = np.ascontiguousarray(sverts, dtype=np.float32)
-                if sfaces is not None and len(sfaces) >= 3:
-                    soft._soft_faces = np.ascontiguousarray(sfaces, dtype=np.int64)
-            except Exception:
-                pass
+            pass
         try:
             Logger.info(f"SoftBody on '{getattr(entity, 'name', entity.id)}' simulating {n} vertices")
         except Exception:
@@ -758,7 +857,8 @@ class PhysicsScene:
                 self._remove_entity_soft(entity_id)
                 self._create_entity_soft(entity)
 
-    def _entity_frame_inv(self, tr):
+    @staticmethod
+    def _entity_frame_inv(tr):
         import numpy as np
         try:
             wm = tr.world_matrix
@@ -845,127 +945,135 @@ class PhysicsScene:
             if not np.all(np.isfinite(local)):
                 self._diag_soft_once(f"sync '{entity_id}': local has NaN/inf")
                 continue
+            self._sync_soft_mesh(entity_id, soft, local)
+
+    def _sync_soft_mesh(self, entity_id: str, soft, local):
+        import numpy as np
+        try:
+            local = np.ascontiguousarray(local, dtype=np.float32)
+        except Exception:
+            return
+        try:
+            soft._soft_latest_local = np.ascontiguousarray(local, dtype=np.float32)
+        except Exception:
+            pass
+        ov = getattr(soft, "_render_mesh", None)
+        if ov is None:
+            self._diag_soft_once(f"sync '{entity_id}': soft._render_mesh is None (renderer override not built)")
+            return
+        try:
+            sk_idx = getattr(soft, "_soft_skin_idx", None)
+            sk_w = getattr(soft, "_soft_skin_w", None)
+            sk_nsim = int(getattr(soft, "_soft_skin_nsim", -1))
+            sk_nfull = int(getattr(soft, "_soft_skin_nfull", -1))
+            sk_rows = int(np.asarray(sk_idx).shape[0]) if sk_idx is not None else -1
+            sk_cols = int(np.asarray(sk_idx).shape[1]) if sk_idx is not None else -1
+            ov_rows = int(len(np.asarray(ov.vertices).reshape(-1, 3)))
+            skin_valid = (
+                sk_idx is not None and sk_w is not None
+                and np.asarray(sk_w).shape == np.asarray(sk_idx).shape
+                and sk_rows == sk_nfull and sk_nsim == len(local)
+                and ov_rows == sk_rows and sk_cols >= 1
+            )
+        except Exception:
+            skin_valid = False
+        if skin_valid:
             try:
-                soft._soft_latest_local = np.ascontiguousarray(local, dtype=np.float32)
+                L = np.ascontiguousarray(local, dtype=np.float32)
+                ii = np.asarray(sk_idx, dtype=np.int64)
+                ww = np.ascontiguousarray(sk_w, dtype=np.float32)
+                full = np.zeros((len(ii), 3), dtype=np.float32)
+                for c in range(ii.shape[1]):
+                    full += ww[:, c:c + 1] * L[ii[:, c]]
             except Exception:
-                pass
-            ov = getattr(soft, "_render_mesh", None)
-            if ov is None:
-                self._diag_soft_once(f"sync '{entity_id}': soft._render_mesh is None (renderer override not built)")
-                continue
+                return
+            if not np.all(np.isfinite(full)):
+                return
             try:
-                sk_idx = getattr(soft, "_soft_skin_idx", None)
-                sk_w = getattr(soft, "_soft_skin_w", None)
-                sk_nsim = int(getattr(soft, "_soft_skin_nsim", -1))
-                sk_nfull = int(getattr(soft, "_soft_skin_nfull", -1))
-                sk_rows = int(np.asarray(sk_idx).shape[0]) if sk_idx is not None else -1
-                sk_cols = int(np.asarray(sk_idx).shape[1]) if sk_idx is not None else -1
-                ov_rows = int(len(np.asarray(ov.vertices).reshape(-1, 3)))
-                skin_valid = (
-                    sk_idx is not None and sk_w is not None
-                    and np.asarray(sk_w).shape == np.asarray(sk_idx).shape
-                    and sk_rows == sk_nfull and sk_nsim == len(local)
-                    and ov_rows == sk_rows and sk_cols >= 1
-                )
-            except Exception:
-                skin_valid = False
-            if skin_valid:
-                try:
-                    L = np.ascontiguousarray(local, dtype=np.float32)
-                    ii = np.asarray(sk_idx, dtype=np.int64)
-                    ww = np.ascontiguousarray(sk_w, dtype=np.float32)
-                    full = np.zeros((len(ii), 3), dtype=np.float32)
-                    for c in range(ii.shape[1]):
-                        full += ww[:, c:c + 1] * L[ii[:, c]]
-                except Exception:
-                    continue
-                if not np.all(np.isfinite(full)):
-                    continue
-                try:
-                    ov.vertices = np.ascontiguousarray(full.reshape(-1))
-                    if getattr(soft, "recompute_normals", True):
-                        try:
-                            from core.assets.asset_importer import _compute_smooth_normals
-                            faces = getattr(ov, "_soft_faces", None)
-                            if faces is not None:
-                                ov.normals = np.ascontiguousarray(
-                                    _compute_smooth_normals(full.astype(np.float32), np.asarray(faces)).reshape(-1))
-                        except Exception:
-                            pass
-                    ov.compute_aabb()
+                ov.vertices = np.ascontiguousarray(full.reshape(-1))
+                if getattr(soft, "recompute_normals", True):
                     try:
-                        ov._soft_dirty = True
-                        ov._soft_version = int(getattr(ov, "_soft_version", 0) or 0) + 1
+                        from core.assets.asset_importer import _compute_smooth_normals
+                        faces = getattr(ov, "_soft_faces", None)
+                        if faces is not None:
+                            ov.normals = np.ascontiguousarray(
+                                _compute_smooth_normals(full.astype(np.float32), np.asarray(faces)).reshape(-1))
                     except Exception:
                         pass
-                    self._diag_frame(entity_id, np.asarray(full, dtype=np.float32))
+                ov.compute_aabb()
+                try:
+                    ov._soft_dirty = True
+                    ov._soft_version = int(getattr(ov, "_soft_version", 0) or 0) + 1
                 except Exception:
                     pass
-                continue
-            try:
-                use_skin = getattr(soft, "_soft_use_skin", None)
-            except Exception:
-                use_skin = None
-            if use_skin is False:
-                try:
-                    ov_n = len(np.asarray(ov.vertices).reshape(-1, 3))
-                except Exception:
-                    ov_n = -1
-                if ov_n != len(local):
-                    self._diag_soft_once(f"sync '{entity_id}': count mismatch render={ov_n} physics={len(local)}, rebuilding render mesh to physics count")
-                try:
-                    if len(local) != len(np.asarray(ov.vertices).reshape(-1, 3)):
-                        sv_compact = getattr(soft, "_soft_verts", None)
-                        sf_compact = getattr(soft, "_soft_faces", None)
-                        if sv_compact is not None and len(sv_compact) == len(local):
-                            ov.vertices = np.ascontiguousarray(sv_compact, dtype=np.float32).reshape(-1).copy()
-                            ov.normals = np.zeros_like(ov.vertices)
-                            n_verts = len(local)
-                            try:
-                                ov.uvs = np.zeros((n_verts * 2,), dtype=np.float32)
-                            except Exception:
-                                pass
-                            try:
-                                ov.sub_mesh_ranges = []
-                                ov.sub_mesh_names = []
-                            except Exception:
-                                pass
-                            if sf_compact is not None and len(sf_compact) >= 3:
-                                ov.indices = np.ascontiguousarray(sf_compact, dtype=np.uint32).reshape(-1).copy()
-                                ov._soft_faces = np.ascontiguousarray(sf_compact, dtype=np.int64).reshape(-1).copy()
-                            ov._soft_n = len(local)
-                        else:
-                            sv_len = len(sv_compact) if sv_compact is not None else -1
-                            self._diag_soft_once(f"sync '{entity_id}': cannot rebuild (sv_compact={sv_len} local={len(local)})")
-                            continue
-                except Exception:
-                    self._diag_soft_once(f"sync '{entity_id}': rebuild exception")
-                    continue
-                try:
-                    ov.vertices = np.ascontiguousarray(local.reshape(-1))
-                    if getattr(soft, "recompute_normals", True):
-                        try:
-                            from core.assets.asset_importer import _compute_smooth_normals
-                            faces = getattr(ov, "_soft_faces", None)
-                            if faces is not None:
-                                ov.normals = np.ascontiguousarray(
-                                    _compute_smooth_normals(local.astype(np.float32), np.asarray(faces)).reshape(-1))
-                        except Exception:
-                            pass
-                    ov.compute_aabb()
-                    try:
-                        ov._soft_dirty = True
-                        ov._soft_version = int(getattr(ov, "_soft_version", 0) or 0) + 1
-                    except Exception:
-                        pass
-                    self._diag_frame(entity_id, np.asarray(local, dtype=np.float32))
-                except Exception:
-                    pass
-                continue
-            try:
-                soft._soft_needs_rebuild = True
+                self._diag_frame(entity_id, np.asarray(full, dtype=np.float32))
             except Exception:
                 pass
+            return
+        try:
+            use_skin = getattr(soft, "_soft_use_skin", None)
+        except Exception:
+            use_skin = None
+        if use_skin is False:
+            try:
+                ov_n = len(np.asarray(ov.vertices).reshape(-1, 3))
+            except Exception:
+                ov_n = -1
+            if ov_n != len(local):
+                self._diag_soft_once(f"sync '{entity_id}': count mismatch render={ov_n} physics={len(local)}, rebuilding render mesh to physics count")
+            try:
+                if len(local) != len(np.asarray(ov.vertices).reshape(-1, 3)):
+                    sv_compact = getattr(soft, "_soft_verts", None)
+                    sf_compact = getattr(soft, "_soft_faces", None)
+                    if sv_compact is not None and len(sv_compact) == len(local):
+                        ov.vertices = np.ascontiguousarray(sv_compact, dtype=np.float32).reshape(-1).copy()
+                        ov.normals = np.zeros_like(ov.vertices)
+                        n_verts = len(local)
+                        try:
+                            ov.uvs = np.zeros((n_verts * 2,), dtype=np.float32)
+                        except Exception:
+                            pass
+                        try:
+                            ov.sub_mesh_ranges = []
+                            ov.sub_mesh_names = []
+                        except Exception:
+                            pass
+                        if sf_compact is not None and len(sf_compact) >= 3:
+                            ov.indices = np.ascontiguousarray(sf_compact, dtype=np.uint32).reshape(-1).copy()
+                            ov._soft_faces = np.ascontiguousarray(sf_compact, dtype=np.int64).reshape(-1).copy()
+                        ov._soft_n = len(local)
+                    else:
+                        sv_len = len(sv_compact) if sv_compact is not None else -1
+                        self._diag_soft_once(f"sync '{entity_id}': cannot rebuild (sv_compact={sv_len} local={len(local)})")
+                        return
+            except Exception:
+                self._diag_soft_once(f"sync '{entity_id}': rebuild exception")
+                return
+            try:
+                ov.vertices = np.ascontiguousarray(local.reshape(-1))
+                if getattr(soft, "recompute_normals", True):
+                    try:
+                        from core.assets.asset_importer import _compute_smooth_normals
+                        faces = getattr(ov, "_soft_faces", None)
+                        if faces is not None:
+                            ov.normals = np.ascontiguousarray(
+                                _compute_smooth_normals(local.astype(np.float32), np.asarray(faces)).reshape(-1))
+                    except Exception:
+                        pass
+                ov.compute_aabb()
+                try:
+                    ov._soft_dirty = True
+                    ov._soft_version = int(getattr(ov, "_soft_version", 0) or 0) + 1
+                except Exception:
+                    pass
+                self._diag_frame(entity_id, np.asarray(local, dtype=np.float32))
+            except Exception:
+                pass
+            return
+        try:
+            soft._soft_needs_rebuild = True
+        except Exception:
+            pass
 
     def _diag_frame(self, entity_id: str, local):
         seen = getattr(self, "_diag_seen", {})

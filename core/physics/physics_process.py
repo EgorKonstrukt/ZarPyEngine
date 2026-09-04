@@ -12,6 +12,7 @@ import os
 import time
 from typing import Optional
 from core.physics.shared_buffer import SharedPhysicsBuffer, MAX_ENTITIES
+from core.physics.soft_shared_buffer import SoftSharedBuffer
 
 
 class PhysicsProcess:
@@ -24,20 +25,36 @@ class PhysicsProcess:
         self._solver_class: str = ""
         self._shared = SharedPhysicsBuffer()
         self._shared.create()
+        self._soft_shared = SoftSharedBuffer()
+        self._soft_shared.create()
         self._entity_to_slot: dict[str, int] = {}
         self._slot_free: list[int] = []
+        self._entity_to_soft_slot: dict[str, int] = {}
+        self._soft_slot_free: list[int] = []
 
     @property
     def shared(self) -> SharedPhysicsBuffer:
         return self._shared
 
     @property
+    def soft_shared(self) -> SoftSharedBuffer:
+        return self._soft_shared
+
+    @property
     def entity_slot_map(self) -> dict[str, int]:
         return self._entity_to_slot
+
+    @property
+    def entity_soft_slot_map(self) -> dict[str, int]:
+        return self._entity_to_soft_slot
 
     def clear_slots(self):
         self._entity_to_slot.clear()
         self._slot_free.clear()
+
+    def clear_soft_slots(self):
+        self._entity_to_soft_slot.clear()
+        self._soft_slot_free.clear()
 
     def alloc_slot(self) -> int:
         if self._slot_free:
@@ -51,6 +68,22 @@ class PhysicsProcess:
         self._slot_free.append(slot)
         self._shared.set_active(slot, False)
 
+    def alloc_soft_slot(self) -> int:
+        from core.physics.soft_shared_buffer import MAX_SOFT_BODIES
+        if self._soft_slot_free:
+            return self._soft_slot_free.pop()
+        slot = len(self._entity_to_soft_slot)
+        if slot >= MAX_SOFT_BODIES:
+            raise RuntimeError(f"Max {MAX_SOFT_BODIES} soft bodies exceeded")
+        return slot
+
+    def free_soft_slot(self, slot: int):
+        self._soft_slot_free.append(slot)
+        try:
+            self._soft_shared.clear_slot(slot)
+        except Exception:
+            pass
+
     def start(self, solver_module: str, solver_class: str, settings: dict) -> bool:
         self._solver_module = solver_module
         self._solver_class = solver_class
@@ -59,7 +92,7 @@ class PhysicsProcess:
         self._process = multiprocessing.Process(
             target=_physics_loop,
             args=(self._cmd_queue, self._result_queue,
-                  self._shared.name,
+                  self._shared.name, self._soft_shared.name,
                   self._project_root, solver_module, solver_class, settings),
             daemon=True,
         )
@@ -74,6 +107,8 @@ class PhysicsProcess:
             self._process = None
             self._shared.close()
             self._shared.unlink()
+            self._soft_shared.close()
+            self._soft_shared.unlink()
         return ok
 
     def send(self, cmd: dict):
@@ -112,6 +147,8 @@ class PhysicsProcess:
             self._process = None
             self._shared.close()
             self._shared.unlink()
+            self._soft_shared.close()
+            self._soft_shared.unlink()
             return
         try:
             self._cmd_queue.put({"type": "shutdown"})
@@ -124,12 +161,15 @@ class PhysicsProcess:
         self._process = None
         self._shared.close()
         self._shared.unlink()
+        self._soft_shared.close()
+        self._soft_shared.unlink()
 
 
 def _physics_loop(
     cmd_queue: multiprocessing.Queue,
     result_queue: multiprocessing.Queue,
     shared_name: str,
+    soft_shared_name: str,
     project_root: str,
     solver_module: str,
     solver_class_name: str,
@@ -148,6 +188,10 @@ def _physics_loop(
     shared = SharedPhysicsBuffer()
     shared.attach(shared_name)
 
+    from core.physics.soft_shared_buffer import SoftSharedBuffer
+    soft_shared = SoftSharedBuffer()
+    soft_shared.attach(soft_shared_name)
+
     try:
         mod = importlib.import_module(solver_module)
         SolverCls = getattr(mod, solver_class_name)
@@ -155,6 +199,7 @@ def _physics_loop(
         Logger.error(f"PhysicsProcess: cannot import solver: {e}")
         result_queue.put({"type": "init", "success": False})
         shared.close()
+        soft_shared.close()
         return
 
     solver = SolverCls()
@@ -162,11 +207,14 @@ def _physics_loop(
         Logger.error("PhysicsProcess: solver init failed")
         result_queue.put({"type": "init", "success": False})
         shared.close()
+        soft_shared.close()
         return
 
     from core.physics.physics_scene import PhysicsScene
     physics_scene = PhysicsScene(solver)
     _slot_to_body: dict[int, int] = {}
+    _soft_states: dict[str, dict] = {}
+    _pending_soft_created: list[dict] = []
     result_queue.put({"type": "init", "success": True})
 
     running = True
@@ -194,7 +242,8 @@ def _physics_loop(
                         cmd_queue.put(nxt)
                         break
                 cmd["dt"] = dt
-                _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body)
+                _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body,
+                                     soft_shared, _soft_states, _pending_soft_created)
 
             elif t == "load_bodies":
                 _slot_to_body.clear()
@@ -216,17 +265,45 @@ def _physics_loop(
             elif t == "add_body":
                 _create_body(cmd["body"], solver, physics_scene, shared, _slot_to_body)
 
+            elif t == "load_soft_bodies":
+                _soft_states.clear()
+                _pending_soft_created.clear()
+                try:
+                    solver.remove_all_soft_bodies()
+                except Exception:
+                    pass
+                created = []
+                for soft in cmd.get("softs", []):
+                    created.append(_create_soft_worker(solver, soft, _soft_states))
+                _pending_soft_created.extend(created)
+                result_queue.put({"type": "soft_loaded", "soft_created": created})
+
+            elif t == "add_soft_body":
+                _pending_soft_created.append(_create_soft_worker(solver, cmd["soft"], _soft_states))
+
+            elif t == "update_soft_body":
+                soft = cmd["soft"]
+                _drop_entity_soft(_soft_states, solver, soft.get("entity_id", ""))
+                _pending_soft_created.append(_create_soft_worker(solver, soft, _soft_states))
+
             elif t == "remove_bodies":
                 for eid in cmd.get("entity_ids", []):
                     _drop_entity_bodies(physics_scene, solver, eid)
+                    _drop_entity_soft(_soft_states, solver, eid)
                 for slot in cmd.get("slots", []):
                     _slot_to_body.pop(slot, None)
                     shared.set_active(slot, False)
 
             elif t == "unload_all":
                 _slot_to_body.clear()
+                _soft_states.clear()
+                _pending_soft_created.clear()
                 solver.remove_all_joints()
                 solver.remove_all_bodies()
+                try:
+                    solver.remove_all_soft_bodies()
+                except Exception:
+                    pass
                 physics_scene._entity_to_body.clear()
                 physics_scene._body_to_entity.clear()
                 if hasattr(physics_scene, "_entity_to_extra_bodies"):
@@ -249,6 +326,7 @@ def _physics_loop(
 
     solver.shutdown()
     shared.close()
+    soft_shared.close()
 
 
 def _create_body(body: dict, solver, physics_scene, shared, _slot_to_body: dict):
@@ -404,7 +482,105 @@ def _drop_entity_bodies(physics_scene, solver, entity_id: str):
         physics_scene._body_to_entity.pop(ibid, None)
 
 
-def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body):
+def _create_soft_worker(solver, soft: dict, soft_states: dict) -> dict:
+    from core.physics.physics_scene import create_soft_body_in_solver
+    import numpy as np
+    entity_id = soft.get("entity_id", "")
+    slot = int(soft.get("slot", -1))
+    try:
+        verts = np.frombuffer(soft["verts_b"], dtype=np.float32).reshape(-1, 3).copy()
+        indices = np.frombuffer(soft["indices_b"], dtype=np.int64).reshape(-1).copy()
+    except Exception as e:
+        return {"entity_id": entity_id, "slot": slot, "ok": False, "error": f"bad mesh data: {e}"}
+    params = {
+        "mass": soft.get("mass", 1.0), "compliance": soft.get("compliance", 0.001),
+        "bend_mode": soft.get("bend_mode", "distance"), "pressure": soft.get("pressure", 0.0),
+        "damping": soft.get("damping", 0.1), "iterations": soft.get("iterations", 10),
+        "gravity_factor": soft.get("gravity_factor", 1.0), "friction": soft.get("friction", 0.2),
+        "restitution": soft.get("restitution", 0.0), "vertex_radius": soft.get("vertex_radius", 0.05),
+        "max_velocity": soft.get("max_velocity", 500.0), "max_vertices": soft.get("max_vertices", 0),
+        "pin_mode": soft.get("pin_mode", "none"), "pin_fraction": soft.get("pin_fraction", 0.1),
+        "double_sided": soft.get("double_sided", True), "update_com": soft.get("update_com", True),
+        "layer": soft.get("layer", 0), "mask": soft.get("mask", 0xFFFF),
+    }
+    try:
+        sid, count, rest_verts, rest_faces = create_soft_body_in_solver(
+            solver,
+            vertices=verts,
+            indices=indices,
+            scale_xyz=soft.get("scale", (1.0, 1.0, 1.0)),
+            pos_xyz=soft.get("position", (0.0, 0.0, 0.0)),
+            euler_rad_xyz=soft.get("rotation", (0.0, 0.0, 0.0)),
+            params=params,
+            entity_id=entity_id,
+        )
+    except Exception as e:
+        return {"entity_id": entity_id, "slot": slot, "ok": False, "error": str(e)}
+    if sid is None or count <= 0 or rest_verts is None:
+        try:
+            if sid is not None:
+                solver.remove_soft_body(sid)
+        except Exception:
+            pass
+        return {"entity_id": entity_id, "slot": slot, "ok": False, "error": "solver rejected soft body"}
+    soft_states[entity_id] = {"sid": sid, "slot": slot}
+    try:
+        stored_mass = max(float(params.get("mass", 1.0)), 1e-6)
+    except Exception:
+        stored_mass = 1.0
+    soft_states[entity_id]["mass"] = stored_mass
+    try:
+        rad = float(params.get("vertex_radius", 0.05))
+    except Exception:
+        rad = 0.05
+    try:
+        spec_rad = solver.get_soft_body_radius(sid)
+        if spec_rad and spec_rad > 0.0:
+            rad = float(spec_rad)
+    except Exception:
+        pass
+    try:
+        rv = np.ascontiguousarray(rest_verts, dtype=np.float32)
+        rf = np.ascontiguousarray(rest_faces, dtype=np.int32)
+        item = {"entity_id": entity_id, "slot": slot, "ok": True, "count": int(count),
+                "verts_b": rv.tobytes(), "faces_b": rf.tobytes(), "radius": float(rad)}
+    except Exception as e:
+        return {"entity_id": entity_id, "slot": slot, "ok": False, "error": f"readback failed: {e}"}
+    return item
+
+
+def _drop_entity_soft(soft_states: dict, solver, entity_id: str):
+    st = soft_states.pop(entity_id, None)
+    if st is not None:
+        try:
+            solver.remove_soft_body(st["sid"])
+        except Exception:
+            pass
+
+
+def _write_soft_results(soft_states: dict, solver, soft_shared):
+    for st in soft_states.values():
+        try:
+            verts = solver.get_soft_body_world_vertices(st["sid"])
+        except Exception:
+            verts = None
+        try:
+            com = solver.get_soft_body_com(st["sid"])
+            pos, quat = com
+        except Exception:
+            pos, quat = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)
+        try:
+            vel = solver.get_soft_body_velocity(st["sid"])
+        except Exception:
+            vel = (0.0, 0.0, 0.0)
+        try:
+            soft_shared.write_soft(st["slot"], verts, pos, quat, vel)
+        except Exception:
+            pass
+
+
+def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot_to_body,
+                           soft_shared=None, soft_states=None, pending_soft_created=None):
     dt = cmd["dt"]
     num = shared.get_num_entities()
     result_ver = shared.get_result_version()
@@ -443,6 +619,26 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
             if tx or ty or tz:
                 solver.apply_torque(bid, (tx, ty, tz))
 
+    if soft_states and cmd.get("soft_velocities"):
+        try:
+            fdt = max(float(cmd.get("dt", 1.0 / 60.0)), 1e-6)
+        except Exception:
+            fdt = 1.0 / 60.0
+        for eid, vel in cmd["soft_velocities"].items():
+            try:
+                st = soft_states.get(eid)
+                if st is None:
+                    continue
+                cur = solver.get_soft_body_velocity(st["sid"])
+                m = max(float(st.get("mass", 1.0)), 1e-6)
+                solver.apply_soft_body_force(st["sid"], (
+                    (float(vel[0]) - float(cur[0])) * m / fdt,
+                    (float(vel[1]) - float(cur[1])) * m / fdt,
+                    (float(vel[2]) - float(cur[2])) * m / fdt,
+                ))
+            except Exception:
+                pass
+
     solver.step_simulation(dt)
 
     for slot in range(num):
@@ -479,6 +675,12 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
 
     shared.set_result_version(result_ver + 1)
 
+    if soft_states is not None and soft_shared is not None and len(soft_states) > 0:
+        try:
+            _write_soft_results(soft_states, solver, soft_shared)
+        except Exception:
+            pass
+
     need_coll = bool(cmd.get("need_collisions", True))
     if need_coll:
         raw_events = solver.get_collision_events() if hasattr(solver, 'get_collision_events') else []
@@ -498,4 +700,10 @@ def _process_step_shared(cmd, solver, physics_scene, result_queue, shared, _slot
     else:
         events = []
 
-    result_queue.put({"type": "step_result", "collision_events": events, "version": result_ver + 1})
+    result_queue.put({"type": "step_result", "collision_events": events, "version": result_ver + 1,
+                      "soft_created": list(pending_soft_created) if pending_soft_created else []})
+    if pending_soft_created:
+        try:
+            pending_soft_created.clear()
+        except Exception:
+            pass

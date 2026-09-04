@@ -1513,10 +1513,21 @@ class CulverinSolver(IPhysicsSolver):
             "center": (float(center[0]), float(center[1]), float(center[2])),
             "aabb_min": (float(bmin[0]) - base_r, float(bmin[1]) - base_r, float(bmin[2]) - base_r),
             "aabb_max": (float(bmax[0]) + base_r, float(bmax[1]) + base_r, float(bmax[2]) + base_r),
+            "radius": float(base_r),
             "velocity": (float(vel[0]), float(vel[1]), float(vel[2])),
             "pinned": is_pinned,
             "mass": float(mass),
         }
+
+    def get_soft_body_radius(self, soft_id: int) -> float:
+        try:
+            spec = self._soft_specs.get(int(soft_id))
+            if not spec:
+                return 0.0
+            r = float(spec.get("radius", 0.0))
+            return r if r > 0.0 else 0.0
+        except Exception:
+            return 0.0
 
     def remove_rigid_body(self, body_id: int):
         handle = self._id_to_handle.pop(body_id, None)

@@ -313,6 +313,9 @@ class IPhysicsSolver(ABC):
     def get_soft_body_sample(self, soft_id: int):
         return None
 
+    def get_soft_body_radius(self, soft_id: int) -> float:
+        return 0.0
+
     @property
     @abstractmethod
     def body_count(self) -> int:
