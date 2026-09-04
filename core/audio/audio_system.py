@@ -7,15 +7,15 @@
 from __future__ import annotations
 import math
 import os
-import shutil
-import subprocess
-import io
-import wave
-import tempfile
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
 from core.ecs.pool import audio as _get_audio_pool
 from core.foundation.progress import task_complete, task_start
+from core.audio.miniaudio_decoder import (
+    decode_audio, decode_audio_stereo, decode_audio_channels,
+    miniaudio_available, AUDIO_EXTENSIONS,
+    _detect_openal_format,
+)
 
 try:
     import openal as al
@@ -75,8 +75,8 @@ class AudioClip:
         self._buffer: Optional[al.Buffer] = None
         self._source: Optional[Any] = None
         self._path: str = ""
-        self._vis_pcm: Any = None
-        self._vis_stereo: Any = None
+        self._pcm_mono: Any = None
+        self._pcm_stereo: Any = None
         self._vis_rate: int = 0
 
     @property
@@ -89,8 +89,8 @@ class AudioClip:
     def buffer(self): return self._buffer
 
     def ensure_pcm(self):
-        if self._vis_pcm is not None:
-            return self._vis_pcm
+        if self._pcm_mono is not None:
+            return self._pcm_mono
         if self._data is not None:
             raw = np.frombuffer(self._data, dtype=np.int16)
             pcm = raw.astype(np.float32) / 32768.0
@@ -98,33 +98,49 @@ class AudioClip:
                 if pcm.size % 2:
                     pcm = pcm[:pcm.size - pcm.size % 2]
                 pcm = pcm.reshape(-1, 2).mean(axis=1)
-            self._vis_pcm = np.ascontiguousarray(pcm, dtype=np.float32)
+            self._pcm_mono = np.ascontiguousarray(pcm, dtype=np.float32)
             self._vis_rate = self._sample_rate
-            return self._vis_pcm
-        if self._path and self._source is not None:
+            return self._pcm_mono
+        if self._path:
             ext = os.path.splitext(self._path)[1].lower()
-            if ext in (".ogg", ".vorbis"):
+            if ext in (".wav", ".wave"):
                 try:
-                    from pyogg import VorbisFile
-                    vf = VorbisFile(self._path)
-                    raw = np.frombuffer(vf.buffer, dtype=np.int16)
-                    pcm = raw.astype(np.float32) / 32768.0
-                    if vf.channels == 2:
-                        if pcm.size % 2:
-                            pcm = pcm[:pcm.size - pcm.size % 2]
-                        pcm = pcm.reshape(-1, 2).mean(axis=1)
-                    self._sample_rate = vf.frequency
-                    self._channels = vf.channels
-                    self._vis_pcm = np.ascontiguousarray(pcm, dtype=np.float32)
-                    self._vis_rate = vf.frequency
-                    return self._vis_pcm
+                    import wave
+                    with wave.open(self._path, "rb") as wf:
+                        nch = wf.getnchannels()
+                        sw = wf.getsampwidth()
+                        sr = wf.getframerate()
+                        raw = wf.readframes(wf.getnframes())
+                    if sw == 2:
+                        d = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    elif sw == 4:
+                        d = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+                    else:
+                        return None
+                    if nch > 1:
+                        d = d.reshape(-1, nch).mean(axis=1)
+                    self._sample_rate = sr
+                    self._channels = nch
+                    self._pcm_mono = np.ascontiguousarray(d, dtype=np.float32)
+                    self._vis_rate = sr
+                    return self._pcm_mono
                 except Exception:
                     return None
+            if miniaudio_available():
+                decoded = decode_audio(self._path)
+                if decoded is not None:
+                    raw = np.frombuffer(decoded.pcm_int16, dtype=np.int16)
+                    pcm = raw.astype(np.float32) / 32768.0
+                    self._sample_rate = decoded.sample_rate
+                    self._channels = decoded.channels
+                    self._pcm_mono = np.ascontiguousarray(pcm, dtype=np.float32)
+                    self._vis_rate = decoded.sample_rate
+                    return self._pcm_mono
         return None
 
     def ensure_stereo_pcm(self):
-        if self._vis_stereo is not None:
-            return self._vis_stereo
+        if self._pcm_stereo is not None:
+            return self._pcm_stereo
         if self._data is not None:
             raw = np.frombuffer(self._data, dtype=np.int16)
             pcm = raw.astype(np.float32) / 32768.0
@@ -134,38 +150,53 @@ class AudioClip:
                 pcm = pcm.reshape(-1, 2)
             else:
                 pcm = np.column_stack([pcm, pcm])
-            self._vis_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
+            self._pcm_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
             self._vis_rate = self._sample_rate
-            return self._vis_stereo
-        if self._path and self._source is not None:
+            return self._pcm_stereo
+        if self._path:
             ext = os.path.splitext(self._path)[1].lower()
-            if ext in (".ogg", ".vorbis"):
+            if ext in (".wav", ".wave"):
                 try:
-                    from pyogg import VorbisFile
-                    vf = VorbisFile(self._path)
-                    raw = np.frombuffer(vf.buffer, dtype=np.int16)
+                    import wave
+                    with wave.open(self._path, "rb") as wf:
+                        nch = wf.getnchannels()
+                        sw = wf.getsampwidth()
+                        sr = wf.getframerate()
+                        raw = wf.readframes(wf.getnframes())
+                    if sw == 2:
+                        d = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    elif sw == 4:
+                        d = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+                    else:
+                        return None
+                    if nch >= 2:
+                        d = d.reshape(-1, nch)[:, :2]
+                    else:
+                        d = np.column_stack([d, d])
+                    self._sample_rate = sr
+                    self._channels = nch
+                    self._pcm_stereo = np.ascontiguousarray(d, dtype=np.float32)
+                    self._vis_rate = sr
+                    return self._pcm_stereo
+                except Exception:
+                    return None
+            if miniaudio_available():
+                decoded = decode_audio_stereo(self._path)
+                if decoded is not None:
+                    raw = np.frombuffer(decoded.pcm_int16, dtype=np.int16)
                     pcm = raw.astype(np.float32) / 32768.0
-                    if vf.channels == 2:
+                    if decoded.channels == 2:
                         if pcm.size % 2:
                             pcm = pcm[:pcm.size - pcm.size % 2]
                         pcm = pcm.reshape(-1, 2)
                     else:
                         pcm = np.column_stack([pcm, pcm])
-                    self._sample_rate = vf.frequency
-                    self._channels = vf.channels
-                    self._vis_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
-                    self._vis_rate = vf.frequency
-                    return self._vis_stereo
-                except Exception:
-                    return None
+                    self._sample_rate = decoded.sample_rate
+                    self._channels = decoded.channels
+                    self._pcm_stereo = np.ascontiguousarray(pcm, dtype=np.float32)
+                    self._vis_rate = decoded.sample_rate
+                    return self._pcm_stereo
         return None
-
-    def _detect_format(self, num_channels: int, sample_width: int) -> int:
-        if num_channels == 1:
-            if sample_width == 2: return al.AL_FORMAT_MONO16
-        elif num_channels == 2:
-            if sample_width == 2: return al.AL_FORMAT_STEREO16
-        raise ValueError(f"Unsupported audio format: {num_channels}ch, {sample_width}bytes")
 
     def load_from_file(self, path: str):
         import json
@@ -181,19 +212,24 @@ class AudioClip:
                 pass
 
         ext = os.path.splitext(path)[1].lower()
-        if ext in (".ogg", ".vorbis"):
-            self._load_ogg(path)
-        elif ext in (".wav", ".wave"):
-            self._load_wav(path)
-        elif ext == ".mp3":
-            self._load_mp3(path)
-        else:
+        if ext not in AUDIO_EXTENSIONS:
             raise ValueError(f"Unsupported audio format: {ext}")
+
+        if ext in (".wav", ".wave"):
+            self._load_wav(path)
+        elif miniaudio_available():
+            self._load_with_miniaudio(path)
+        else:
+            raise RuntimeError(
+                f"miniaudio not available; cannot load '{ext}' files. "
+                "Install miniaudio: pip install miniaudio"
+            )
 
         if quality is not None:
             self._resample(quality)
 
     def _load_wav(self, path: str):
+        import wave
         with wave.open(path, "rb") as wf:
             num_channels = wf.getnchannels()
             sample_width = wf.getsampwidth()
@@ -202,83 +238,21 @@ class AudioClip:
             raw_data = wf.readframes(frames)
         self._sample_rate = sample_rate
         self._channels = num_channels
-        self._format = self._detect_format(num_channels, sample_width)
+        self._format = _detect_openal_format(num_channels, sample_width)
         self._data = memoryview(bytearray(raw_data))
 
-    def _load_ogg(self, path: str):
-        al.oalInit()
-        source = al.oalOpen(path)
-        if not source:
-            raise RuntimeError(f"Failed to load OGG file '{path}'")
-        self._source = source
-        self._buffer = source.buffer
-
-    def _load_mp3(self, path: str):
-        if self._decode_mp3_ffmpeg(path):
-            return
-        try:
-            from pydub import AudioSegment
-        except ImportError:
-            raise RuntimeError("MP3 support requires ffmpeg (or install pydub)")
-        segment = AudioSegment.from_mp3(path)
-        raw_data = segment.raw_data
-        self._sample_rate = segment.frame_rate
-        self._channels = segment.channels
-        self._format = self._detect_format(segment.channels, segment.sample_width)
-        self._data = memoryview(bytearray(raw_data))
-
-    @staticmethod
-    def _find_ffmpeg() -> Optional[str]:
-        exe = shutil.which("ffmpeg")
-        if exe:
-            return exe
-        candidates = [
-            r"C:\ffmpeg\bin\ffmpeg.exe",
-            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
-        ]
-        for c in candidates:
-            if c and os.path.exists(c):
-                return c
-        return None
-
-    def _decode_mp3_ffmpeg(self, path: str) -> bool:
-        ffmpeg = self._find_ffmpeg()
-        if not ffmpeg:
-            return False
-        fd, tmp = tempfile.mkstemp(suffix=".wav")
-        os.close(fd)
-        try:
-            result = subprocess.run(
-                [ffmpeg, "-v", "error", "-y", "-i", path, tmp],
-                capture_output=True,
-                timeout=120,
-            )
-            if result.returncode != 0:
-                return False
-            with wave.open(tmp, "rb") as wf:
-                num_channels = wf.getnchannels()
-                sample_width = wf.getsampwidth()
-                sample_rate = wf.getframerate()
-                frames = wf.getnframes()
-                raw_data = wf.readframes(frames)
-            self._sample_rate = sample_rate
-            self._channels = num_channels
-            self._format = self._detect_format(num_channels, sample_width)
-            self._data = memoryview(bytearray(raw_data))
-            return True
-        except Exception:
-            return False
-        finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+    def _load_with_miniaudio(self, path: str):
+        decoded = decode_audio_channels(path, 1)
+        if decoded is None:
+            raise RuntimeError(f"Failed to decode audio file '{path}' with miniaudio")
+        self._sample_rate = decoded.sample_rate
+        self._channels = decoded.channels
+        self._format = _detect_openal_format(decoded.channels, 2)
+        self._data = memoryview(bytearray(decoded.pcm_int16))
 
     def _resample(self, quality: int):
         if quality >= 100 or self._data is None:
             return
-        import numpy as np
         old_rate = self._sample_rate
         new_rate = max(8000, int(old_rate * quality / 100))
         if new_rate >= old_rate:

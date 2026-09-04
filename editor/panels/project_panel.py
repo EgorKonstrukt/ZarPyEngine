@@ -621,7 +621,7 @@ class _FilePane(QWidget):
                             ".mat": "Material", ".obj": "OBJ Model", ".fbx": "FBX Model",
                             ".stl": "3D Model", ".gltf": "3D Model", ".glb": "3D Model", ".usdz": "3D Model",
                             ".png": "PNG Image", ".jpg": "JPEG Image", ".jpeg": "JPEG Image",
-                            ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio",
+                            ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio", ".flac": "FLAC Audio",
                             ".txt": "Text Document", ".json": "JSON File",
                             ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
                             ".zterr": "Terrain Graph",
@@ -862,7 +862,7 @@ class _FilePane(QWidget):
                     ".mat": "Material", ".obj": "OBJ Model", ".fbx": "FBX Model",
                     ".stl": "3D Model", ".gltf": "3D Model", ".glb": "3D Model", ".usdz": "3D Model",
                     ".png": "PNG Image", ".jpg": "JPEG Image", ".jpeg": "JPEG Image",
-                    ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio",
+                    ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio", ".flac": "FLAC Audio",
                     ".txt": "Text Document", ".json": "JSON File",
                     ".xml": "XML File", ".csv": "CSV File",
                     ".toml": "TOML File", ".yaml": "YAML File", ".yml": "YAML File",
@@ -1727,7 +1727,7 @@ class ProjectPanel(QDockWidget):
                         ".mat": "Material", ".obj": "OBJ Model", ".fbx": "FBX Model",
                         ".stl": "3D Model", ".gltf": "3D Model", ".glb": "3D Model", ".usdz": "3D Model",
                         ".png": "PNG Image", ".jpg": "JPEG Image", ".jpeg": "JPEG Image",
-                        ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio",
+                        ".wav": "WAV Audio", ".mp3": "MP3 Audio", ".ogg": "OGG Audio", ".flac": "FLAC Audio",
                         ".txt": "Text Document", ".json": "JSON File",
                         ".animclip": "Animation Clip", ".animcontroller": "Animator Controller",
                         ".zterr": "Terrain Graph",
@@ -1871,7 +1871,7 @@ class ProjectPanel(QDockWidget):
                     act = QAction("Run Script", self)
                     act.triggered.connect(lambda: self.file_double_clicked.emit(path))
                     menu.addAction(act)
-                elif ext in (".wav", ".mp3", ".ogg"):
+                elif ext in (".wav", ".mp3", ".ogg", ".flac"):
                     act = QAction("Play", self)
                     act.triggered.connect(lambda: self.file_double_clicked.emit(path))
                     menu.addAction(act)
@@ -1958,7 +1958,7 @@ class ProjectPanel(QDockWidget):
                 actions.append(("Add to Scene", lambda p=path: self.import_model_requested.emit(p)))
             elif ext == ".py":
                 actions.append(("Run Script", lambda: self.file_double_clicked.emit(path)))
-            elif ext in (".wav", ".mp3", ".ogg"):
+            elif ext in (".wav", ".mp3", ".ogg", ".flac"):
                 actions.append(("Play", lambda: self.file_double_clicked.emit(path)))
             elif ext in (".png", ".jpg", ".jpeg"):
                 actions.append(("View Image", lambda: self.file_double_clicked.emit(path)))

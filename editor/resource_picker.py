@@ -9,7 +9,6 @@ import os
 import json
 import math
 import re
-import wave
 import struct
 import threading
 import numpy as np

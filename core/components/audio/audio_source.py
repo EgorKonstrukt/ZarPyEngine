@@ -25,7 +25,7 @@ class AudioSource(Component):
     @classmethod
     def _inspector_fields(cls) -> list[InspectorField]:
         return [
-            InspectorField("clip_path", "Clip", FieldType.RESOURCE_PATH, file_filter="Audio (*.wav *.mp3 *.ogg)"),
+            InspectorField("clip_path", "Clip", FieldType.RESOURCE_PATH, file_filter="Audio (*.wav *.mp3 *.ogg *.flac)"),
             InspectorField("volume", "Volume", FieldType.FLOAT, min_val=0.0, max_val=1.0, step=0.01),
             InspectorField("pitch", "Pitch", FieldType.FLOAT, min_val=-3.0, max_val=3.0, step=0.01),
             InspectorField("loop", "Loop", FieldType.BOOL),

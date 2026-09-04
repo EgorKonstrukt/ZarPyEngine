@@ -19,7 +19,6 @@ import os
 import sys
 import math
 import struct
-import wave
 import io
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -182,8 +181,9 @@ def _render_mesh(path: str, size: int, settings: Optional[dict] = None):
 def _load_audio_mono(path: str, max_samples: int = 500000):
     ext = os.path.splitext(path)[1].lower()
     data = None
-    if ext == ".wav":
+    if ext in (".wav", ".wave"):
         try:
+            import wave
             with wave.open(path, "rb") as wf:
                 nframes = wf.getnframes()
                 sw = wf.getsampwidth()
@@ -207,22 +207,17 @@ def _load_audio_mono(path: str, max_samples: int = 500000):
             return None
     else:
         try:
-            import subprocess, tempfile
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = tmp.name
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", path, "-ac", "1", "-ar", "22050",
-                 "-f", "wav", tmp_path],
-                capture_output=True, timeout=20,
-            )
-            with wave.open(tmp_path, "rb") as wf:
-                raw = wf.readframes(wf.getnframes())
-            d = np.frombuffer(raw, dtype="<i2").astype(np.float32)
-            maxv = np.max(np.abs(d)) if d.size else 1.0
+            from core.audio.miniaudio_decoder import decode_audio
+            decoded = decode_audio(path)
+            if decoded is None:
+                return None
+            raw = np.frombuffer(decoded.pcm_int16, dtype=np.int16).astype(np.float32)
+            if decoded.channels > 1:
+                raw = raw.reshape(-1, decoded.channels).mean(axis=1)
+            maxv = np.max(np.abs(raw)) if raw.size else 1.0
             if maxv > 0:
-                d = d / maxv
-            data = d
-            os.unlink(tmp_path)
+                raw = raw / maxv
+            data = raw
         except Exception:
             return None
     if data is None or data.size == 0:

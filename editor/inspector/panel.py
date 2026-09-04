@@ -318,7 +318,7 @@ class InspectorPanel(QDockWidget):
             self._build_mesh_import_settings()
         elif ext in (".png", ".jpg", ".jpeg", ".svg"):
             self._build_texture_import_settings()
-        elif ext in (".wav", ".mp3", ".ogg"):
+        elif ext in (".wav", ".mp3", ".ogg", ".flac"):
             self._build_audio_import_settings()
         elif ext == ".zpem" or ext == ".mat":
             self._build_material_editor()
