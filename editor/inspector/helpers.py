@@ -185,6 +185,7 @@ _COMMON_EXT = (".fbx", ".obj", ".stl", ".gltf", ".glb", ".usdz",
                ".wav", ".mp3", ".ogg",
                ".py",
                ".mat",
+               ".zphysmat",
                ".shader", ".vert", ".frag")
 
 def _is_path_valid(p: str) -> bool:
@@ -494,7 +495,7 @@ def _create_asset_dialog(parent, asset_type: str, callback: Callable[[str], None
     if not ok or not name.strip():
         return
     fname = name.strip()
-    exts = {"animclip": ".animclip", "animcontroller": ".animcontroller"}
+    exts = {"animclip": ".animclip", "animcontroller": ".animcontroller", "physicmaterial": ".zphysmat"}
     ext = exts.get(asset_type, ".asset")
     if not fname.endswith(ext):
         fname += ext
@@ -511,6 +512,10 @@ def _create_asset_dialog(parent, asset_type: str, callback: Callable[[str], None
         from core.components.animation.animator_controller import AnimatorController
         ctrl = AnimatorController(name.strip())
         ctrl.save(path)
+    elif asset_type == "physicmaterial":
+        from core.assets.physics_material import PhysicsMaterial
+        mat = PhysicsMaterial(name.strip())
+        mat.save(path)
     callback(path)
 
 def make_vec2_row(label: str, vec: Vec2, callback) -> tuple[QWidget, list[QDoubleSpinBox]]:

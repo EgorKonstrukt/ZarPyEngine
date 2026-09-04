@@ -1188,6 +1188,7 @@ class ProjectPanel(QDockWidget):
             ("Folder", self._create_new_folder),
             ("Scene", self._create_new_scene),
             ("Material", self._create_new_material),
+            ("Physic Material", self._create_new_physic_material),
             ("Animation Clip", self._create_new_animclip),
             ("Animator Controller", self._create_new_animcontroller),
             ("Python Script", self._create_new_script),
@@ -2288,6 +2289,17 @@ class ProjectPanel(QDockWidget):
         from core.assets.material import Material
         mat = Material(os.path.splitext(os.path.basename(path))[0])
         mat.save(path, self._engine.project_root)
+        self._refresh()
+
+    def _create_new_physic_material(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Create Physic Material", self._current_dir(), "Physics Materials (*.zphysmat)")
+        if not path:
+            return
+        if not path.endswith(".zphysmat"):
+            path += ".zphysmat"
+        from core.assets.physics_material import PhysicsMaterial
+        mat = PhysicsMaterial(os.path.splitext(os.path.basename(path))[0])
+        mat.save(path)
         self._refresh()
 
     def _create_new_animclip(self):

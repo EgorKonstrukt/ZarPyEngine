@@ -322,6 +322,8 @@ class InspectorPanel(QDockWidget):
             self._build_audio_import_settings()
         elif ext == ".zpem" or ext == ".mat":
             self._build_material_editor()
+        elif ext == ".zphysmat":
+            self._build_physic_material_editor()
         else:
             lbl = QLabel("No import settings for this file type.")
             self._add_asset_widget(lbl)
@@ -1056,6 +1058,94 @@ class InspectorPanel(QDockWidget):
             gle.gradientChanged.connect(_on_gradient)
             rl.addWidget(gle, 1)
             self._add_asset_widget(row)
+
+    def _build_physic_material_editor(self):
+        from core.assets.physics_material import PhysicsMaterial, PhysicCombineMode
+        eng = self._engine
+        root = eng.project_root if eng else ""
+        if root and not os.path.isabs(self._asset_path):
+            abs_path = os.path.normpath(os.path.join(root, self._asset_path))
+        else:
+            abs_path = os.path.normpath(self._asset_path)
+        mat = PhysicsMaterial.load(self._asset_path, root)
+        if mat is None:
+            lbl = QLabel("Failed to load physic material.")
+            lbl.setStyleSheet(f"color: {_FUSION_ACCENT_RED};")
+            self._add_asset_widget(lbl)
+            return
+
+        def _save():
+            mat.save(self._asset_path, root)
+
+        def _make_row(label_text: str, widget: QWidget) -> QWidget:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 2, 0, 2)
+            rl.setSpacing(4)
+            lbl = QLabel(label_text)
+            lbl_min = _smart_label_width(lbl)
+            lbl.setMinimumWidth(lbl_min)
+            lbl.setMaximumWidth(int(lbl_min * 1.8))
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+            rl.addWidget(lbl, 0)
+            rl.addWidget(widget, 1)
+            return row
+
+        # Dynamic Friction
+        df_sb = QDoubleSpinBox()
+        df_sb.setRange(0.0, 1.0)
+        df_sb.setSingleStep(0.01)
+        df_sb.setDecimals(3)
+        df_sb.setValue(mat.dynamic_friction)
+        def _on_df(v, _m=mat):
+            _m.dynamic_friction = v; _save()
+        df_sb.valueChanged.connect(_on_df)
+        self._add_asset_widget(_make_row("Dynamic Friction", df_sb))
+
+        # Static Friction
+        sf_sb = QDoubleSpinBox()
+        sf_sb.setRange(0.0, 1.0)
+        sf_sb.setSingleStep(0.01)
+        sf_sb.setDecimals(3)
+        sf_sb.setValue(mat.static_friction)
+        def _on_sf(v, _m=mat):
+            _m.static_friction = v; _save()
+        sf_sb.valueChanged.connect(_on_sf)
+        self._add_asset_widget(_make_row("Static Friction", sf_sb))
+
+        # Bounciness
+        b_sb = QDoubleSpinBox()
+        b_sb.setRange(0.0, 1.0)
+        b_sb.setSingleStep(0.01)
+        b_sb.setDecimals(3)
+        b_sb.setValue(mat.bounciness)
+        def _on_b(v, _m=mat):
+            _m.bounciness = v; _save()
+        b_sb.valueChanged.connect(_on_b)
+        self._add_asset_widget(_make_row("Bounciness", b_sb))
+
+        # Friction Combine
+        fc_cb = QComboBox()
+        for mode in PhysicCombineMode:
+            fc_cb.addItem(mode.label, mode.value)
+        idx = next((i for i, m in enumerate(PhysicCombineMode) if m == mat.friction_combine), 0)
+        fc_cb.setCurrentIndex(idx)
+        def _on_fc(idx, _m=mat, _cb=fc_cb):
+            _m.friction_combine = PhysicCombineMode(_cb.currentData()); _save()
+        fc_cb.currentIndexChanged.connect(_on_fc)
+        self._add_asset_widget(_make_row("Friction Combine", fc_cb))
+
+        # Bounce Combine
+        bc_cb = QComboBox()
+        for mode in PhysicCombineMode:
+            bc_cb.addItem(mode.label, mode.value)
+        idx = next((i for i, m in enumerate(PhysicCombineMode) if m == mat.bounce_combine), 0)
+        bc_cb.setCurrentIndex(idx)
+        def _on_bc(idx, _m=mat, _cb=bc_cb):
+            _m.bounce_combine = PhysicCombineMode(_cb.currentData()); _save()
+        bc_cb.currentIndexChanged.connect(_on_bc)
+        self._add_asset_widget(_make_row("Bounce Combine", bc_cb))
 
     def _build_animator_state_inspector(self, state: AnimatorState):
         self._build_section_title(f"State: {state.name}")

@@ -27,6 +27,7 @@ class CapsuleCollider(Component):
             InspectorField("radius", "Radius", FieldType.FLOAT, min_val=0.001, max_val=10000.0, step=0.01),
             InspectorField("height", "Height", FieldType.FLOAT, min_val=0.001, max_val=10000.0, step=0.01),
             InspectorField("is_trigger", "Is Trigger", FieldType.BOOL),
+            InspectorField("physic_material", "Physic Material", FieldType.ASSET, resource_type="physicmaterial"),
         ]
 
     def __init__(self):
@@ -38,6 +39,7 @@ class CapsuleCollider(Component):
         self.height: float = 2.0
         self.direction: int = 1
         self.is_trigger: bool = False
+        self.physic_material: str = ""
         self.material_friction: float = 0.6
         self.material_bounciness: float = 0.0
     @property
@@ -66,6 +68,7 @@ class CapsuleCollider(Component):
         d.update({
             "center": self.center.to_list(), "radius": self.radius,
             "height": self.height, "direction": self.direction, "is_trigger": self.is_trigger,
+            "physic_material": self.physic_material,
             "layer": self.layer, "mask": self.mask,
         })
         return d
@@ -78,6 +81,7 @@ class CapsuleCollider(Component):
         cc.height = data.get("height", 2.0)
         cc.direction = data.get("direction", 1)
         cc.is_trigger = data.get("is_trigger", False)
+        cc.physic_material = data.get("physic_material", "") or ""
         cc.layer = data.get("layer", 0)
         cc.mask = data.get("mask", 0xFFFF)
         return cc

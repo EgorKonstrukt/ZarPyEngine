@@ -25,6 +25,7 @@ class BoxCollider2D(Component):
             InspectorField("offset", "Offset", FieldType.VEC2),
             InspectorField("size", "Size", FieldType.VEC2),
             InspectorField("is_trigger", "Is Trigger", FieldType.BOOL),
+            InspectorField("physic_material", "Physic Material", FieldType.ASSET, resource_type="physicmaterial"),
         ]
 
     def __init__(self):
@@ -34,6 +35,7 @@ class BoxCollider2D(Component):
         self.offset: Vec2 = Vec2.zero()
         self.size: Vec2 = Vec2.one()
         self.is_trigger: bool = False
+        self.physic_material: str = ""
         self.material_friction: float = 0.6
         self.material_bounciness: float = 0.0
 
@@ -80,6 +82,7 @@ class BoxCollider2D(Component):
             "offset": self.offset.to_list(), "size": self.size.to_list(),
             "is_trigger": self.is_trigger, "friction": self.material_friction,
             "bounciness": self.material_bounciness,
+            "physic_material": self.physic_material,
             "layer": self.layer, "mask": self.mask,
         })
         return d
@@ -93,6 +96,7 @@ class BoxCollider2D(Component):
         bc.is_trigger = data.get("is_trigger", False)
         bc.material_friction = data.get("friction", 0.6)
         bc.material_bounciness = data.get("bounciness", 0.0)
+        bc.physic_material = data.get("physic_material", "") or ""
         bc.layer = data.get("layer", 0)
         bc.mask = data.get("mask", 0xFFFF)
         return bc

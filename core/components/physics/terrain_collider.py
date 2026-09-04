@@ -31,6 +31,7 @@ class TerrainCollider(Component):
             InspectorField("resolution", "Resolution", FieldType.INT),
             InspectorField("center", "Center", FieldType.VEC3),
             InspectorField("is_trigger", "Is Trigger", FieldType.BOOL),
+            InspectorField("physic_material", "Physic Material", FieldType.ASSET, resource_type="physicmaterial"),
         ]
 
     def __init__(self):
@@ -42,6 +43,7 @@ class TerrainCollider(Component):
         self.height_scale: float = 60.0
         self.resolution: int = 256
         self.is_trigger: bool = False
+        self.physic_material: str = ""
         self.material_friction: float = 0.9
         self.material_bounciness: float = 0.0
         self._height_data: Optional[np.ndarray] = None
@@ -109,6 +111,7 @@ class TerrainCollider(Component):
             "is_trigger": self.is_trigger,
             "friction": self.material_friction,
             "bounciness": self.material_bounciness,
+            "physic_material": self.physic_material,
             "layer": self.layer,
             "mask": self.mask,
         })
@@ -127,6 +130,7 @@ class TerrainCollider(Component):
         tc.is_trigger = data.get("is_trigger", False)
         tc.material_friction = data.get("friction", 0.9)
         tc.material_bounciness = data.get("bounciness", 0.0)
+        tc.physic_material = data.get("physic_material", "") or ""
         tc.layer = data.get("layer", 0)
         tc.mask = data.get("mask", 0xFFFF)
         hd = data.get("height_data")

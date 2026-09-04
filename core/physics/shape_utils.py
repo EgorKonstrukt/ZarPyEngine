@@ -10,6 +10,59 @@ import os
 import numpy as np
 from typing import Optional, TYPE_CHECKING
 from core.maths.math3d import Vec3
+from core.assets.physics_material import PhysicsMaterial, PhysicCombineMode
+
+
+def default_physics_material_dict() -> dict:
+    return {
+        "path": "",
+        "dynamic_friction": 0.6,
+        "static_friction": 0.6,
+        "bounciness": 0.0,
+        "friction_combine": PhysicCombineMode.AVERAGE.value,
+        "bounce_combine": PhysicCombineMode.AVERAGE.value,
+    }
+
+
+def resolve_physics_material(comp) -> dict:
+    try:
+        fallback_friction = float(getattr(comp, "material_friction", 0.6))
+    except Exception:
+        fallback_friction = 0.6
+    try:
+        fallback_bounce = float(getattr(comp, "material_bounciness", 0.0))
+    except Exception:
+        fallback_bounce = 0.0
+    if fallback_friction != fallback_friction or fallback_friction < 0.0:
+        fallback_friction = 0.6
+    if fallback_bounce != fallback_bounce or fallback_bounce < 0.0:
+        fallback_bounce = 0.0
+    try:
+        path = getattr(comp, "physic_material", "") or ""
+    except Exception:
+        path = ""
+    if isinstance(path, str) and path:
+        try:
+            mat = PhysicsMaterial.load_cached(path)
+        except Exception:
+            mat = None
+        if mat is not None:
+            return {
+                "path": path,
+                "dynamic_friction": float(mat.dynamic_friction),
+                "static_friction": float(mat.static_friction),
+                "bounciness": float(mat.bounciness),
+                "friction_combine": PhysicCombineMode.coerce(mat.friction_combine).value,
+                "bounce_combine": PhysicCombineMode.coerce(mat.bounce_combine).value,
+            }
+    return {
+        "path": "",
+        "dynamic_friction": fallback_friction,
+        "static_friction": fallback_friction,
+        "bounciness": fallback_bounce,
+        "friction_combine": PhysicCombineMode.AVERAGE.value,
+        "bounce_combine": PhysicCombineMode.AVERAGE.value,
+    }
 
 if TYPE_CHECKING:
     from core.ecs.ecs import Entity
@@ -122,49 +175,50 @@ def _shape_info_for(cname: str, comp, transform=None) -> Optional[dict]:
     friction = 0.6
     restitution = 0.0
     is_trigger = False
+    mat = resolve_physics_material(comp)
 
     if cname == "BoxCollider":
         params["size"] = [comp.scaled_size.x, comp.scaled_size.y, comp.scaled_size.z]
         params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "SphereCollider":
         params["radius"] = comp.scaled_radius
         params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "CapsuleCollider":
         params["radius"] = comp.scaled_radius
         params["height"] = comp.scaled_height
         params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
         params["direction"] = comp.direction
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "BoxCollider2D":
         sz = comp.scaled_size
         params["size"] = [sz.x, sz.y, 1.0]
         off = comp.scaled_offset
         params["center"] = [off.x, off.y, 0.0]
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "CircleCollider2D":
         params["radius"] = comp.scaled_radius
         off = comp.scaled_offset
         params["center"] = [off.x, off.y, 0.0]
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "MeshCollider":
         params["file"] = comp.mesh_path
         params["collision_mode"] = comp.collision_mode.value
         params["max_vertices"] = comp.max_vertices
         params["center"] = [comp.scaled_center.x, comp.scaled_center.y, comp.scaled_center.z]
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     elif cname == "TerrainCollider":
         params["size"] = [comp.size.x, comp.size.y, comp.size.z]
@@ -176,8 +230,8 @@ def _shape_info_for(cname: str, comp, transform=None) -> Optional[dict]:
             params["height_data"] = hd.astype(np.float32)
         elif hd is not None:
             params["height_data"] = np.asarray(hd, dtype=np.float32)
-        friction = comp.material_friction
-        restitution = comp.material_bounciness
+        friction = mat["dynamic_friction"]
+        restitution = mat["bounciness"]
         is_trigger = comp.is_trigger
     else:
         return None
@@ -195,6 +249,7 @@ def _shape_info_for(cname: str, comp, transform=None) -> Optional[dict]:
         "params": params,
         "friction": friction,
         "restitution": restitution,
+        "material": mat,
         "is_trigger": is_trigger,
         "layer": getattr(comp, 'layer', 0),
         "mask": getattr(comp, 'mask', 0xFFFF),
@@ -229,6 +284,7 @@ def find_shapes_info(entity: Entity, transform=None) -> list[dict]:
             "params": params,
             "friction": 0.6,
             "restitution": 0.0,
+            "material": default_physics_material_dict(),
             "is_trigger": False,
             "layer": 0,
             "mask": 0xFFFF,
@@ -324,6 +380,10 @@ def downgrade_mesh_to_box(shape: dict) -> Optional[dict]:
         except Exception:
             moff = np.zeros(3, dtype=np.float64)
         center = (mins + maxs) * 0.5 + moff
+        try:
+            material = dict(shape.get("material", None) or default_physics_material_dict())
+        except Exception:
+            material = default_physics_material_dict()
         return {
             "cname": "BoxCollider",
             "type": "box",
@@ -333,6 +393,7 @@ def downgrade_mesh_to_box(shape: dict) -> Optional[dict]:
             },
             "friction": shape.get("friction", 0.6),
             "restitution": shape.get("restitution", 0.0),
+            "material": material,
             "is_trigger": shape.get("is_trigger", False),
             "layer": shape.get("layer", 0),
             "mask": shape.get("mask", 0xFFFF),

@@ -27,6 +27,7 @@ class SphereCollider(Component):
             InspectorField("center", "Center", FieldType.VEC3),
             InspectorField("radius", "Radius", FieldType.FLOAT, min_val=0.001, max_val=10000.0, step=0.01),
             InspectorField("is_trigger", "Is Trigger", FieldType.BOOL),
+            InspectorField("physic_material", "Physic Material", FieldType.ASSET, resource_type="physicmaterial"),
         ]
 
     def __init__(self):
@@ -36,6 +37,7 @@ class SphereCollider(Component):
         self.center: Vec3 = Vec3.zero()
         self.radius: float = 0.5
         self.is_trigger: bool = False
+        self.physic_material: str = ""
         self.material_friction: float = 0.6
         self.material_bounciness: float = 0.0
     @property
@@ -79,6 +81,7 @@ class SphereCollider(Component):
             "center": self.center.to_list(), "radius": self.radius,
             "is_trigger": self.is_trigger, "friction": self.material_friction,
             "bounciness": self.material_bounciness,
+            "physic_material": self.physic_material,
             "layer": self.layer, "mask": self.mask,
         })
         return d
@@ -91,6 +94,7 @@ class SphereCollider(Component):
         sc.is_trigger = data.get("is_trigger", False)
         sc.material_friction = data.get("friction", 0.6)
         sc.material_bounciness = data.get("bounciness", 0.0)
+        sc.physic_material = data.get("physic_material", "") or ""
         sc.layer = data.get("layer", 0)
         sc.mask = data.get("mask", 0xFFFF)
         return sc

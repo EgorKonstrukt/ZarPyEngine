@@ -378,6 +378,7 @@ class MeshCollider(Component):
             InspectorField("is_trigger", "Is Trigger", FieldType.BOOL),
             InspectorField("layer", "Layer", FieldType.LAYER),
             InspectorField("mask", "Collision Mask", FieldType.LAYER_MASK),
+            InspectorField("physic_material", "Physic Material", FieldType.ASSET, resource_type="physicmaterial"),
         ]
 
     def __init__(self):
@@ -389,6 +390,7 @@ class MeshCollider(Component):
         self.collision_mode: CollisionMode = CollisionMode.AUTO
         self.max_vertices: int = 2000
         self.is_trigger: bool = False
+        self.physic_material: str = ""
         self.material_friction: float = 0.6
         self.material_bounciness: float = 0.0
 
@@ -535,6 +537,7 @@ class MeshCollider(Component):
             "is_trigger": self.is_trigger,
             "friction": self.material_friction,
             "bounciness": self.material_bounciness,
+            "physic_material": self.physic_material,
             "layer": self.layer, "mask": self.mask,
         })
         return d
@@ -550,6 +553,7 @@ class MeshCollider(Component):
         mc.is_trigger = data.get("is_trigger", False)
         mc.material_friction = data.get("friction", 0.6)
         mc.material_bounciness = data.get("bounciness", 0.0)
+        mc.physic_material = data.get("physic_material", "") or ""
         mc.layer = data.get("layer", 0)
         mc.mask = data.get("mask", 0xFFFF)
         return mc

@@ -26,6 +26,7 @@ RESOURCE_TYPE_FILTERS = {
     "scene": "Scenes (*.zpes)",
     "animclip": "Animation Clips (*.animclip)",
     "animcontroller": "Animator Controllers (*.animcontroller)",
+    "physicmaterial": "Physics Materials (*.zphysmat)",
 }
 
 PY_TYPE_TO_FIELD = {
