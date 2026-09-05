@@ -281,6 +281,10 @@ def get_global_config() -> Config:
                 "distance_model": "inverse_distance_clamped",
                 "doppler_factor": 1.0,
                 "speed_of_sound": 343.3,
+                "enable_spatialization": True,
+                "enable_reverb": True,
+                "enable_occlusion": True,
+                "priority_threshold": 0.1,
             },
             "file_assoc": {
                 "registered_extensions": ""
