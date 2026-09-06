@@ -8,8 +8,15 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QScrollArea,
-                             QSlider, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class LevelMeter(QWidget):
@@ -58,6 +65,7 @@ class MixerWidget(QWidget):
     muteChanged = pyqtSignal(int, bool)
     gainChanged = pyqtSignal(int, float)
     masterChanged = pyqtSignal(float)
+    soloChanged = pyqtSignal()
 
     MIN_DB = -60.0
     MAX_DB = 6.0
@@ -80,6 +88,7 @@ class MixerWidget(QWidget):
         outer.addWidget(self._scroll, 1)
         self._strips: list[dict] = []
         self._muted: set[int] = set()
+        self._soloed: set[int] = set()
         self._master_db: float = 0.0
         self._master_meter: LevelMeter | None = None
         self._master_db_lbl: QLabel | None = None
@@ -101,6 +110,7 @@ class MixerWidget(QWidget):
             w.deleteLater()
             self._master = None
         self._muted.clear()
+        self._soloed.clear()
         for ch in range(max(0, channels)):
             self._strips.append(self._make_strip(ch))
         self._master = self._make_master_strip()
@@ -133,10 +143,14 @@ class MixerWidget(QWidget):
         mute.setToolTip(f"Mute channel {ch}")
         mute.stateChanged.connect(lambda state, c=ch: self._on_toggled(c, state))
         lay.addWidget(mute, alignment=Qt.AlignmentFlag.AlignCenter)
+        solo = QCheckBox("S")
+        solo.setToolTip(f"Solo channel {ch}")
+        solo.stateChanged.connect(lambda state, c=ch: self._on_solo(c, state))
+        lay.addWidget(solo, alignment=Qt.AlignmentFlag.AlignCenter)
         wrap.setMinimumWidth(56)
         self._strips_layout.addWidget(wrap)
         return {"widget": wrap, "meter": meter, "slider": slider,
-                "db_lbl": db_lbl, "mute": mute, "db": 0.0}
+                "db_lbl": db_lbl, "mute": mute, "solo": solo, "db": 0.0}
 
     def _make_master_strip(self) -> dict:
         wrap = QWidget()
@@ -170,7 +184,15 @@ class MixerWidget(QWidget):
         return {"widget": wrap}
 
     def muted_channels(self) -> set[int]:
-        return set(self._muted)
+        result = set(self._muted)
+        if self._soloed:
+            for ch in range(len(self._strips)):
+                if ch not in self._soloed:
+                    result.add(ch)
+        return result
+
+    def soloed_channels(self) -> set[int]:
+        return set(self._soloed)
 
     def set_muted(self, ch: int, muted: bool) -> None:
         if 0 <= ch < len(self._strips):
@@ -225,6 +247,20 @@ class MixerWidget(QWidget):
             strip["meter"].reset()
         if self._master_meter is not None:
             self._master_meter.reset()
+
+    def _on_solo(self, ch: int, state: int) -> None:
+        soloed = state != 0
+        if soloed:
+            if ch not in self._soloed:
+                for other in range(len(self._strips)):
+                    if other != ch and other in self._soloed:
+                        self._strips[other]["solo"].blockSignals(True)
+                        self._strips[other]["solo"].setChecked(False)
+                        self._strips[other]["solo"].blockSignals(False)
+                self._soloed = {ch}
+        else:
+            self._soloed.discard(ch)
+        self.soloChanged.emit()
 
     def _on_toggled(self, ch: int, state: int) -> None:
         muted = state != 0

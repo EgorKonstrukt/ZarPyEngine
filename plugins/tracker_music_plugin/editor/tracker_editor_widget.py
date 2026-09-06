@@ -16,6 +16,7 @@ import time
 
 import numpy as np
 from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -38,6 +39,7 @@ from .instrument_list import InstrumentListWidget
 from .mixer_widget import MixerWidget
 from .module_info import ModuleInfoWidget
 from .pattern_editor import PatternEditorWidget
+from .sample_manager import SampleManagerWidget
 
 _METER_MAX_BLOCKS = 2048
 
@@ -198,6 +200,7 @@ class TrackerEditorWidget(QWidget):
         self._song = None
         self._song_path = ""
         self._pattern_seq_index = 0
+        self._edit_rev = 0
         self._source_id = 0
         self._playing = False
         self._play_start = 0.0
@@ -224,6 +227,10 @@ class TrackerEditorWidget(QWidget):
         self._ticker = QTimer(self)
         self._ticker.timeout.connect(self._on_tick)
         self._ticker.start(50)
+        self._pattern_editor.patternChanged.connect(self._on_pattern_edited)
+        self._module_info.metadataEdited.connect(self._on_metadata_edited)
+        self._save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self._save_shortcut.activated.connect(self._save_module)
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -234,10 +241,45 @@ class TrackerEditorWidget(QWidget):
         self._open_btn.clicked.connect(self._open_module)
         top.addWidget(self._open_btn)
 
+        self._save_btn = QPushButton("Save")
+        self._save_btn.setEnabled(False)
+        self._save_btn.clicked.connect(self._save_module)
+        top.addWidget(self._save_btn)
+
         self._seq_combo = QComboBox()
         self._seq_combo.setMinimumWidth(160)
         self._seq_combo.currentIndexChanged.connect(self._on_seq_changed)
         top.addWidget(self._seq_combo)
+
+        self._seq_ins_btn = QPushButton("Ins")
+        self._seq_ins_btn.setToolTip("Insert a copy of the current pattern before this position")
+        self._seq_ins_btn.setEnabled(False)
+        self._seq_ins_btn.clicked.connect(self._seq_insert)
+        top.addWidget(self._seq_ins_btn)
+
+        self._seq_add_btn = QPushButton("Add")
+        self._seq_add_btn.setToolTip("Append a copy of the current pattern to the sequence")
+        self._seq_add_btn.setEnabled(False)
+        self._seq_add_btn.clicked.connect(self._seq_add)
+        top.addWidget(self._seq_add_btn)
+
+        self._seq_del_btn = QPushButton("Del")
+        self._seq_del_btn.setToolTip("Remove this sequence position")
+        self._seq_del_btn.setEnabled(False)
+        self._seq_del_btn.clicked.connect(self._seq_remove)
+        top.addWidget(self._seq_del_btn)
+
+        self._seq_up_btn = QPushButton("Up")
+        self._seq_up_btn.setToolTip("Move this position earlier")
+        self._seq_up_btn.setEnabled(False)
+        self._seq_up_btn.clicked.connect(lambda: self._seq_move(-1))
+        top.addWidget(self._seq_up_btn)
+
+        self._seq_down_btn = QPushButton("Down")
+        self._seq_down_btn.setToolTip("Move this position later")
+        self._seq_down_btn.setEnabled(False)
+        self._seq_down_btn.clicked.connect(lambda: self._seq_move(1))
+        top.addWidget(self._seq_down_btn)
 
         self._play_btn = QPushButton("Play")
         self._play_btn.clicked.connect(self._toggle_play)
@@ -271,12 +313,62 @@ class TrackerEditorWidget(QWidget):
         top.addWidget(self._cancel_btn)
         root.addLayout(top)
 
+        self._pattern_editor = PatternEditorWidget()
+        self._pattern_editor.setEnabled(False)
+
+        edit_bar = QHBoxLayout()
+        self._edit_undo_btn = QPushButton("Undo")
+        self._edit_undo_btn.setEnabled(False)
+        self._edit_undo_btn.clicked.connect(self._pattern_editor.undo)
+        edit_bar.addWidget(self._edit_undo_btn)
+        self._edit_redo_btn = QPushButton("Redo")
+        self._edit_redo_btn.setEnabled(False)
+        self._edit_redo_btn.clicked.connect(self._pattern_editor.redo)
+        edit_bar.addWidget(self._edit_redo_btn)
+        edit_bar.addSpacing(8)
+        self._edit_ins_btn = QPushButton("Insert Row")
+        self._edit_ins_btn.setEnabled(False)
+        self._edit_ins_btn.clicked.connect(self._pattern_editor.insert_row)
+        edit_bar.addWidget(self._edit_ins_btn)
+        self._edit_del_btn = QPushButton("Delete Row")
+        self._edit_del_btn.setEnabled(False)
+        self._edit_del_btn.clicked.connect(self._pattern_editor.delete_row)
+        edit_bar.addWidget(self._edit_del_btn)
+        self._edit_clear_btn = QPushButton("Clear Row")
+        self._edit_clear_btn.setEnabled(False)
+        self._edit_clear_btn.clicked.connect(self._pattern_editor.clear_row)
+        edit_bar.addWidget(self._edit_clear_btn)
+        edit_bar.addSpacing(8)
+        self._edit_down_btn = QPushButton("T -")
+        self._edit_down_btn.setToolTip("Transpose selection down")
+        self._edit_down_btn.setEnabled(False)
+        self._edit_down_btn.clicked.connect(lambda: self._pattern_editor.transpose_rows(-1))
+        edit_bar.addWidget(self._edit_down_btn)
+        self._edit_up_btn = QPushButton("T +")
+        self._edit_up_btn.setToolTip("Transpose selection up")
+        self._edit_up_btn.setEnabled(False)
+        self._edit_up_btn.clicked.connect(lambda: self._pattern_editor.transpose_rows(1))
+        edit_bar.addWidget(self._edit_up_btn)
+        edit_bar.addSpacing(8)
+        self._edit_copy_btn = QPushButton("Copy")
+        self._edit_copy_btn.setEnabled(False)
+        self._edit_copy_btn.clicked.connect(self._pattern_editor.copy_row)
+        edit_bar.addWidget(self._edit_copy_btn)
+        self._edit_cut_btn = QPushButton("Cut")
+        self._edit_cut_btn.setEnabled(False)
+        self._edit_cut_btn.clicked.connect(self._pattern_editor.cut_row)
+        edit_bar.addWidget(self._edit_cut_btn)
+        self._edit_paste_btn = QPushButton("Paste")
+        self._edit_paste_btn.setEnabled(False)
+        self._edit_paste_btn.clicked.connect(self._pattern_editor.paste_row)
+        edit_bar.addWidget(self._edit_paste_btn)
+        edit_bar.addStretch()
+        root.addLayout(edit_bar)
+
         self._module_lbl = QLabel("No module loaded")
         root.addWidget(self._module_lbl)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._pattern_editor = PatternEditorWidget()
-        self._pattern_editor.setEnabled(False)
         splitter.addWidget(self._pattern_editor)
 
         side = QWidget()
@@ -290,6 +382,7 @@ class TrackerEditorWidget(QWidget):
         self._mixer.muteChanged.connect(self._on_mute_changed)
         self._mixer.gainChanged.connect(self._on_gain_changed)
         self._mixer.masterChanged.connect(self._on_master_changed)
+        self._mixer.soloChanged.connect(self._on_solo_changed)
         mixer_layout.addWidget(self._mixer)
         mixer_group.setMaximumHeight(300)
         side_layout.addWidget(mixer_group)
@@ -306,6 +399,13 @@ class TrackerEditorWidget(QWidget):
         self._instruments = InstrumentListWidget()
         inst_layout.addWidget(self._instruments)
         scroll_layout.addWidget(inst_group)
+
+        sample_group = QGroupBox("Samples")
+        sample_layout = QVBoxLayout(sample_group)
+        self._sample_manager = SampleManagerWidget()
+        self._sample_manager.samplesChanged.connect(self._on_samples_changed)
+        sample_layout.addWidget(self._sample_manager)
+        scroll_layout.addWidget(sample_group)
 
         info_group = QGroupBox("Module Info")
         info_layout = QVBoxLayout(info_group)
@@ -413,17 +513,12 @@ class TrackerEditorWidget(QWidget):
         self._playback_ends = []
         self._timeline = []
         self._timeline_ends = []
-        self._seq_combo.blockSignals(True)
-        self._seq_combo.clear()
-        for idx, pat in enumerate(song.pattern_seq or []):
-            self._seq_combo.addItem(f"Position {idx}  -  Pattern {pat}")
-        self._seq_combo.blockSignals(False)
         self._pattern_seq_index = 0
-        if self._seq_combo.count():
-            self._seq_combo.setCurrentIndex(0)
+        self._refresh_sequence_ui(0)
         self._refresh_pattern()
         self._instruments.load_song(song)
         self._module_info.load_song(song)
+        self._sample_manager.load_song(song)
         try:
             self._mixer.set_channels(int(song.n_channels))
         except Exception:
@@ -434,13 +529,6 @@ class TrackerEditorWidget(QWidget):
             saved_master = 0.0
         self._mixer.set_master_db(saved_master)
         try:
-            self._timeline = [(float(v.end_sec), int(v.sequence_idx), int(v.row))
-                              for v in song.iter_playback_rows()]
-            self._timeline_ends = [t[0] for t in self._timeline]
-        except Exception:
-            self._timeline = []
-            self._timeline_ends = []
-        try:
             info = song.get_song_info() or {}
             self._preview_duration = float(info.get("duration_seconds") or 0.0)
         except Exception:
@@ -448,7 +536,41 @@ class TrackerEditorWidget(QWidget):
         title = getattr(song, "songname", "") or ""
         self._module_lbl.setText(f"{os.path.basename(path)}   -   {title}")
         self._pattern_editor.setEnabled(True)
+        self._save_btn.setEnabled(True)
+        self._seq_ins_btn.setEnabled(True)
+        self._seq_add_btn.setEnabled(True)
+        self._seq_del_btn.setEnabled(True)
+        self._seq_up_btn.setEnabled(True)
+        self._seq_down_btn.setEnabled(True)
+        self._update_edit_state()
         self._start_render(autoplay=False)
+
+    def _refresh_sequence_ui(self, select: int | None = None) -> None:
+        idx = select if select is not None else self._pattern_seq_index
+        self._seq_combo.blockSignals(True)
+        self._seq_combo.clear()
+        for i, pat in enumerate(self._song.pattern_seq or []):
+            self._seq_combo.addItem(f"Position {i}  -  Pattern {pat}")
+        self._seq_combo.blockSignals(False)
+        if self._seq_combo.count():
+            idx = max(0, min(idx, self._seq_combo.count() - 1))
+            self._seq_combo.setCurrentIndex(idx)
+        self._pattern_seq_index = self._seq_combo.currentIndex()
+        self._rebuild_timeline()
+
+    def _rebuild_timeline(self) -> None:
+        try:
+            self._timeline = [(float(v.end_sec), int(v.sequence_idx), int(v.row))
+                              for v in self._song.iter_playback_rows()]
+            self._timeline_ends = [t[0] for t in self._timeline]
+        except Exception:
+            self._timeline = []
+            self._timeline_ends = []
+        try:
+            info = self._song.get_song_info() or {}
+            self._preview_duration = float(info.get("duration_seconds") or 0.0)
+        except Exception:
+            pass
 
     def _refresh_pattern(self):
         if self._song is None:
@@ -467,7 +589,113 @@ class TrackerEditorWidget(QWidget):
         self._pattern_seq_index = max(0, index)
         self._refresh_pattern()
 
+    def _seq_insert(self):
+        if self._song is None:
+            return
+        idx = self._pattern_seq_index
+        if 0 <= idx < len(self._song.pattern_seq):
+            self._song.insert_pattern(idx, after=False)
+            self._refresh_sequence_ui(idx + 1)
+            self._refresh_pattern()
+            self._mark_edited()
+
+    def _seq_add(self):
+        if self._song is None:
+            return
+        idx = self._pattern_seq_index
+        if 0 <= idx < len(self._song.pattern_seq):
+            self._song.duplicate_pattern(idx)
+            self._refresh_sequence_ui(len(self._song.pattern_seq) - 1)
+            self._refresh_pattern()
+            self._mark_edited()
+
+    def _seq_remove(self):
+        if self._song is None:
+            return
+        idx = self._pattern_seq_index
+        if 0 <= idx < len(self._song.pattern_seq):
+            self._song.remove_pattern(idx)
+            self._refresh_sequence_ui(min(idx, len(self._song.pattern_seq) - 1))
+            self._refresh_pattern()
+            self._mark_edited()
+
+    def _seq_move(self, delta: int):
+        if self._song is None:
+            return
+        idx = self._pattern_seq_index
+        n = len(self._song.pattern_seq)
+        if not n or not (0 <= idx < n):
+            return
+        j = idx + delta
+        if not (0 <= j < n):
+            return
+        seq = list(self._song.pattern_seq)
+        seq[idx], seq[j] = seq[j], seq[idx]
+        self._song.set_sequence(seq)
+        self._refresh_sequence_ui(j)
+        self._refresh_pattern()
+        self._mark_edited()
+
+    def _save_module(self):
+        if self._song is None or not self._song_path:
+            return
+        try:
+            self._stop()
+            self._song.save(self._song_path, verbose=False)
+            self._time_lbl.setText(f"Saved {os.path.basename(self._song_path)}")
+            self._start_render(autoplay=False)
+        except Exception as e:
+            QMessageBox.warning(self, "Tracker", f"Save failed: {e}")
+
+    def _mark_edited(self):
+        self._edit_rev += 1
+        self._schedule_rerender()
+
+    def _on_pattern_edited(self):
+        self._update_edit_state()
+        self._mark_edited()
+
+    def _on_samples_changed(self):
+        self._mark_edited()
+
+    def _on_metadata_edited(self, key: str, value: str):
+        try:
+            title = str(getattr(self._song, "songname", "") or "")
+            if not title:
+                title = os.path.basename(self._song_path or "module")
+            self._module_lbl.setText(f"{os.path.basename(self._song_path)}   -   {title}")
+        except Exception:
+            pass
+        self._schedule_rerender()
+
+    def _update_edit_state(self):
+        if self._song is None:
+            self._edit_undo_btn.setEnabled(False)
+            self._edit_redo_btn.setEnabled(False)
+            self._edit_ins_btn.setEnabled(False)
+            self._edit_del_btn.setEnabled(False)
+            self._edit_clear_btn.setEnabled(False)
+            self._edit_down_btn.setEnabled(False)
+            self._edit_up_btn.setEnabled(False)
+            self._edit_copy_btn.setEnabled(False)
+            self._edit_cut_btn.setEnabled(False)
+            self._edit_paste_btn.setEnabled(False)
+            return
+        self._edit_undo_btn.setEnabled(self._pattern_editor.can_undo())
+        self._edit_redo_btn.setEnabled(self._pattern_editor.can_redo())
+        self._edit_ins_btn.setEnabled(True)
+        self._edit_del_btn.setEnabled(True)
+        self._edit_clear_btn.setEnabled(True)
+        self._edit_down_btn.setEnabled(True)
+        self._edit_up_btn.setEnabled(True)
+        self._edit_copy_btn.setEnabled(True)
+        self._edit_cut_btn.setEnabled(True)
+        self._edit_paste_btn.setEnabled(True)
+
     def _on_mute_changed(self, ch: int, muted: bool):
+        self._schedule_rerender()
+
+    def _on_solo_changed(self):
         self._schedule_rerender()
 
     def _on_gain_changed(self, ch: int, db: float):
@@ -531,7 +759,7 @@ class TrackerEditorWidget(QWidget):
             h.update(self._song_path.encode("utf-8", "ignore"))
         gains = self._mixer.all_gains_db()
         muted = sorted(self._mixer.muted_channels())
-        h.update(f"|{_RENDER_VERSION}|{self._sample_rate()}|{self._quality()}|{muted}|{gains}|{bake_master_gain}".encode())
+        h.update(f"|{_RENDER_VERSION}|{self._sample_rate()}|{self._quality()}|{muted}|{gains}|{bake_master_gain}|rev{self._edit_rev}".encode())
         return os.path.join(self._cache_dir(), f"prev_{h.hexdigest()[:16]}.wav")
 
     def _busy(self) -> bool:
