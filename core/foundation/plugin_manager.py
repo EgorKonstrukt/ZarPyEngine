@@ -9,13 +9,59 @@ import importlib
 import importlib.util
 import ctypes
 import json
+import platform
 import sys
 import os
+import shutil
+import zipfile
+import tempfile
 from typing import Any, Callable, Optional, TYPE_CHECKING
 from core.foundation.logger import Logger
 from core.ecs.pool import plugin as _get_plugin_pool
 if TYPE_CHECKING:
     from core.engine.engine import Engine
+
+
+def _zarin_user_dir(name: str = "") -> str:
+    base = os.path.join(os.path.expanduser("~"), ".zarin")
+    if name:
+        base = os.path.join(base, name)
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def current_architecture() -> str:
+    sys_name = sys.platform
+    machine = platform.machine().lower()
+    if sys_name == "win32":
+        sys_name = "win"
+    elif sys_name == "darwin":
+        sys_name = "macos"
+    if machine in ("amd64", "x86_64", "x64"):
+        machine = "x86_64"
+    elif machine in ("aarch64", "arm64"):
+        machine = "arm64"
+    elif machine in ("i386", "i686", "x86"):
+        machine = "x86"
+    return f"{sys_name}_{machine}"
+
+
+def _platform_matches(manifest_arch: str) -> bool:
+    if not manifest_arch or manifest_arch == "any":
+        return True
+    current = current_architecture()
+    if manifest_arch == current:
+        return True
+    return False
+
+
+def _plugin_cache_root() -> str:
+    return _zarin_user_dir("plugins")
+
+
+def _resolve_zplugin(name: str, version: str) -> str:
+    safe = name.replace("/", "_").replace("\\", "_").strip()
+    return os.path.join(_plugin_cache_root(), f"{safe}-{version}")
 
 
 def _project_root():
@@ -45,6 +91,8 @@ class PluginBase:
         self._toolbar_actions: list[dict] = []
         self._menu_items: list[dict] = []
         self._components: list[type] = []
+        self._patches = None
+        self._bundled_library_dir: Optional[str] = None
 
     def initialize(self, engine: Engine):
         self._engine = engine
@@ -52,6 +100,57 @@ class PluginBase:
 
     def shutdown(self):
         self._save_config()
+        self.unpatch_all()
+
+    @property
+    def patches(self):
+        if self._patches is None:
+            from core.foundation.patcher import PatchTracker
+            self._patches = PatchTracker()
+        return self._patches
+
+    def unpatch_all(self):
+        if self._patches is not None:
+            try:
+                self._patches.restore_all()
+            except Exception as e:
+                Logger.warning(f"[{self.NAME}] Failed to restore patches: {e}")
+            self._patches = None
+
+    def patch_component(self, component_name: str, method_patches: Optional[dict[str, Callable]] = None,
+                        extra_inspector_fields: Optional[list] = None,
+                        filter_extensions: Optional[dict[str, str]] = None,
+                        wraps: Optional[dict[str, dict]] = None):
+        return self.patches.patch_component(
+            component_name,
+            method_patches=method_patches,
+            extra_inspector_fields=extra_inspector_fields,
+            filter_extensions=filter_extensions,
+            wraps=wraps,
+        )
+
+    def add_inspector_field(self, component_name: str, field):
+        return self.patches.add_inspector_field(component_name, field)
+
+    def extend_file_filter(self, component_name: str, field_name: str, extra_filter: str):
+        return self.patches.extend_file_filter(component_name, field_name, extra_filter)
+
+    def patch_function(self, module, func_name: str, wrapper: Callable):
+        self.patches.patch_function(module, func_name, wrapper)
+
+    @property
+    def bundled_library_dir(self) -> Optional[str]:
+        return self._bundled_library_dir
+
+    @property
+    def resource_dir(self) -> Optional[str]:
+        path = getattr(self, "_native_plugin_path", None)
+        if path:
+            base = os.path.splitext(path)[0]
+            res = base + "_resources"
+            if os.path.isdir(res):
+                return res
+        return None
 
     @property
     def enabled(self) -> bool:
@@ -169,18 +268,6 @@ class PluginBase:
         ComponentRegistry.register(comp_cls)
         self._components.append(comp_cls)
 
-    # ---- Native Plugin Resource Path ----
-
-    @property
-    def resource_dir(self) -> Optional[str]:
-        path = getattr(self, "_native_plugin_path", None)
-        if path:
-            base = os.path.splitext(path)[0]
-            res = base + "_resources"
-            if os.path.isdir(res):
-                return res
-        return None
-
 
 class PluginManager:
     def __init__(self):
@@ -219,16 +306,29 @@ class PluginManager:
         for item in plugin._menu_items:
             reg["menu_items"].append({**item, "plugin": plugin_name})
 
-    def _load_python_plugin(self, mod_name: str, path: str):
-        spec = importlib.util.spec_from_file_location(mod_name, path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+    def _register_instances(self, mod, path: str, bundled_libs: Optional[str] = None,
+                            manifest: Optional[dict] = None, payload_dir: Optional[str] = None) -> bool:
+        registered = False
         for attr in dir(mod):
             obj = getattr(mod, attr)
             if isinstance(obj, type) and issubclass(obj, PluginBase) and obj is not PluginBase:
                 inst = obj()
                 inst._native_plugin_path = path
+                inst._bundled_library_dir = bundled_libs
+                if manifest:
+                    inst._manifest = manifest
+                if payload_dir:
+                    inst._payload_dir = payload_dir
                 self.register(inst)
+                registered = True
+        return registered
+
+    def _load_python_plugin(self, mod_name: str, path: str, bundled_libs: Optional[str] = None,
+                            manifest: Optional[dict] = None, native_compiled: bool = False):
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self._register_instances(mod, path, bundled_libs, manifest)
         comp_dir = os.path.splitext(path)[0] + "_components"
         self._auto_load_components(comp_dir, None)
 
@@ -270,7 +370,9 @@ class PluginManager:
 
     def load_from_file(self, path: str):
         try:
-            if path.endswith(".py"):
+            if path.endswith(".zplugin"):
+                self.load_zplugin(path)
+            elif path.endswith(".py"):
                 self._load_python_plugin("_zplugin", path)
             elif path.endswith(".pyd"):
                 self._load_python_plugin(os.path.splitext(os.path.basename(path))[0], path)
@@ -292,12 +394,221 @@ class PluginManager:
             return
         for fname in sorted(os.listdir(dirpath)):
             fpath = os.path.join(dirpath, fname)
-            if fname.endswith(".py") and not fname.startswith("_"):
+            if fname.endswith(".zplugin") and not fname.startswith("_"):
+                self.load_zplugin(fpath)
+            elif fname.endswith(".py") and not fname.startswith("_"):
                 self.load_from_file(fpath)
             elif os.path.isdir(fpath):
                 init_path = os.path.join(fpath, "__init__.py")
                 if os.path.isfile(init_path):
                     self.load_package(fpath)
+
+    def _activate_bundled_libs(self, libs_dir: str, deps: list):
+        if not os.path.isdir(libs_dir):
+            return
+        lib_paths = [libs_dir]
+        for entry in sorted(os.listdir(libs_dir)):
+            child = os.path.join(libs_dir, entry)
+            if os.path.isdir(child) and os.path.isfile(os.path.join(child, "__init__.py")):
+                lib_paths.append(os.path.dirname(child))
+            elif (os.path.isfile(child) and (entry.endswith(".pyd") or entry.endswith(".so") or entry.endswith(".dll"))):
+                lib_paths.append(os.path.dirname(child))
+        for lp in lib_paths:
+            if os.path.isdir(lp) and lp not in sys.path:
+                sys.path.insert(0, lp)
+                Logger.info(f"[zplugin] Bundled library path activated: {lp}")
+        if deps:
+            missing = []
+            for dep in deps:
+                name = dep.split(">=")[0].split("==")[0].split("<")[0].strip()
+                try:
+                    importlib.import_module(name)
+                except Exception:
+                    missing.append(dep)
+            if missing:
+                Logger.warning(f"[zplugin] Bundled library missing dependencies: {missing}")
+
+    def _compile_if_needed(self, payload_dir: str, manifest: dict):
+        cython_srcs = manifest.get("cython_modules", [])
+        if not cython_srcs:
+            return True
+        outdir = os.path.join(payload_dir, "_native")
+        os.makedirs(outdir, exist_ok=True)
+        built = []
+        for rel in cython_srcs:
+            src = os.path.join(payload_dir, rel)
+            if not os.path.isfile(src):
+                continue
+            base = os.path.splitext(os.path.basename(rel))[0]
+            target = os.path.join(outdir, base + ".pyd")
+            if os.path.isfile(target) and _platform_matches(manifest.get("architecture", "")):
+                built.append(target)
+                continue
+            if self._compile_cython_module(src, outdir):
+                built.append(target)
+        if built:
+            if outdir not in sys.path:
+                sys.path.insert(0, outdir)
+        return len(built) == len(cython_srcs)
+
+    def _compile_cython_module(self, src: str, outdir: str) -> bool:
+        try:
+            import Cython
+            from setuptools import Extension, setup
+        except ImportError as e:
+            Logger.error(f"[zplugin] Cython required for cython_modules but not installed: {e}")
+            return False
+        try:
+            from setuptools.command.build_ext import build_ext
+            from Cython.Build import cythonize
+        except ImportError as e:
+            Logger.error(f"[zplugin] Cython build dependencies missing: {e}")
+            return False
+        import subprocess
+        src_dir = os.path.dirname(src)
+        pyx = os.path.basename(src)
+        setup_py = os.path.join(outdir, "_cython_build_setup.py")
+        script = (
+            "from setuptools import setup, Extension\n"
+            "from Cython.Build import cythonize\n"
+            f"setup(ext_modules=cythonize([Extension('zpl_native', [r'{pyx}'], "
+            f"extra_compile_args=['/O2'] if __import__('sys').platform == 'win32' else ['-O3'])], "
+            f"build_dir=r'{outdir}'), options={{'build_ext': {{'build_lib': r'{outdir}'}}}})\n"
+        )
+        with open(setup_py, "w", encoding="utf-8") as f:
+            f.write(script)
+        try:
+            result = subprocess.run(
+                [sys.executable, setup_py, "build_ext", "--inplace"],
+                capture_output=True, text=True, cwd=src_dir,
+            )
+            if result.returncode == 0:
+                for f in os.listdir(outdir):
+                    if f.endswith(".pyd"):
+                        Logger.info(f"[zplugin] Cython module built: {os.path.join(outdir, f)}")
+                        return True
+            Logger.error(f"[zplugin] Cython compile failed: {result.stderr[-800:]}")
+        except Exception as e:
+            Logger.error(f"[zplugin] Cython compile error: {e}")
+        return False
+
+    def _extract_zplugin(self, path: str) -> dict:
+        manifest = None
+        try:
+            with zipfile.ZipFile(path) as zf:
+                if "manifest.json" not in zf.namelist():
+                    raise ValueError("zplugin archive missing manifest.json")
+                manifest_name = next((n for n in zf.namelist() if n.endswith("manifest.json")), None)
+                with zf.open(manifest_name) as f:
+                    manifest = json.loads(f.read().decode("utf-8"))
+        except Exception as e:
+            Logger.error(f"[zplugin] Invalid package '{path}': {e}", e)
+            return {}
+        if not isinstance(manifest, dict):
+            Logger.error(f"[zplugin] Invalid manifest in '{path}'")
+            return {}
+        name = str(manifest.get("name", "unnamed"))
+        version = str(manifest.get("version", "0.0.1"))
+        dest = _resolve_zplugin(name, version)
+        if os.path.exists(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+        os.makedirs(dest, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix="zpl_", dir=_zarin_user_dir("tmp"))
+        safe_names = set()
+        if not _platform_matches(manifest.get("architecture", "any")):
+            has_native = False
+            with zipfile.ZipFile(path) as zf:
+                for n in zf.namelist():
+                    if n.endswith(".pyd") or n.endswith(".so") or n.endswith(".dll"):
+                        has_native = True
+                        break
+            if has_native and not manifest.get("cython_modules"):
+                Logger.error(
+                    f"[zplugin] '{name}' targets {manifest.get('architecture')}, "
+                    f"current is {current_architecture()} and no source fallback is available."
+                )
+                shutil.rmtree(tmp, ignore_errors=True)
+                return {}
+        with zipfile.ZipFile(path) as zf:
+            for n in zf.namelist():
+                target = os.path.join(tmp, n)
+                if os.path.isabs(n) or ".." in os.path.normpath(n):
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    raise ValueError(f"[zplugin] Unsafe path in archive: {n}")
+                if n.endswith("/"):
+                    os.makedirs(target, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with zf.open(n) as srcf, open(target, "wb") as dstf:
+                        shutil.copyfileobj(srcf, dstf)
+                    safe_names.add(n)
+        libs_dir = os.path.join(tmp, "libs")
+        self._activate_bundled_libs(libs_dir, manifest.get("dependencies", []))
+        self._compile_if_needed(tmp, manifest)
+        entry = manifest.get("entry", "plugin.py")
+        full_entry = None
+        for n in safe_names:
+            if n.endswith("/" + entry) or n == entry:
+                full_entry = os.path.join(tmp, n)
+                break
+        if full_entry is None:
+            if os.path.isfile(os.path.join(tmp, entry)):
+                full_entry = os.path.join(tmp, entry)
+        if full_entry is None:
+            Logger.error(f"[zplugin] Entry point '{entry}' not found in '{path}'")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return {}
+        merged = {k: v for k, v in manifest.items()}
+        merged["payload_dir"] = tmp
+        merged["entry_file"] = full_entry
+        try:
+            manifest_cache = {"__zpl_meta": True, "manifest": merged, "payload": tmp}
+            with open(os.path.join(tmp, ".zpl_meta.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest_cache, f, indent=2)
+        except Exception:
+            pass
+        return merged
+
+    def load_zplugin(self, path: str):
+        try:
+            manifest = self._extract_zplugin(path)
+            if not manifest or "entry_file" not in manifest:
+                return
+            entry_file = manifest["entry_file"]
+            payload_dir = manifest.get("payload_dir", os.path.dirname(entry_file))
+            libs_dir = os.path.join(payload_dir, "libs")
+            self._activate_bundled_libs(libs_dir, manifest.get("dependencies", []))
+            arch = manifest.get("architecture", "any")
+            arch_ok = _platform_matches(arch)
+            loaded = False
+            pkg = manifest.get("module")
+            if pkg and entry_file.endswith(".py"):
+                if payload_dir not in sys.path:
+                    sys.path.insert(0, payload_dir)
+                try:
+                    mod = importlib.import_module(pkg)
+                    loaded = self._register_instances(
+                        mod, os.path.join(payload_dir, pkg), libs_dir, manifest, payload_dir)
+                except Exception as e:
+                    Logger.error(f"[zplugin] Package import failed for '{pkg}': {e}", e)
+            if not loaded and entry_file.endswith(".pyd") and not arch_ok:
+                base = os.path.splitext(entry_file)[0]
+                if os.path.isfile(base + ".py"):
+                    entry_file = base + ".py"
+            if not loaded:
+                if entry_file.endswith(".pyd") or entry_file.endswith(".so") or entry_file.endswith(".dll"):
+                    self._load_python_plugin(os.path.splitext(os.path.basename(entry_file))[0],
+                                             entry_file, libs_dir, manifest)
+                    loaded = True
+                elif entry_file.endswith(".py"):
+                    self._load_python_plugin("_zplugin", entry_file, libs_dir, manifest)
+                    loaded = True
+            if not loaded:
+                Logger.error(f"[zplugin] '{manifest.get('name')}' not loadable on {current_architecture()}")
+            name = manifest.get("name", "unknown")
+            Logger.info(f"[zplugin] Loaded package '{name}' v{manifest.get('version', '')} from {os.path.basename(path)}")
+        except Exception as e:
+            Logger.error(f"Failed to load zplugin '{path}': {e}", e)
 
     def load_package(self, dirpath: str):
         try:
