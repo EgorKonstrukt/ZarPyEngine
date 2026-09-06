@@ -74,6 +74,10 @@ class NavAgent(Component):
         self._nav_world: NavWorld = None
         self._last_nav_grid_version: int = -1
         self._pending_req_id: Optional[str] = None
+        self._blocked_frames: int = 0
+        self._fail_streak: int = 0
+        self._last_path_goal = None
+        self._path_grid_gid = None
 
     def on_start(self):
         self._repath_timer = 0.0
@@ -89,7 +93,8 @@ class NavAgent(Component):
         self._poll_path_result()
 
         self._repath_timer += dt
-        if self._repath_timer >= self.repath_interval:
+        eff_interval = self.repath_interval * min(4, 2 ** min(self._fail_streak, 2))
+        if self._repath_timer >= eff_interval:
             self._repath_timer = 0.0
             self._request_path()
 
@@ -102,6 +107,31 @@ class NavAgent(Component):
 
         target = self._path[self._path_index]
         current_pos = tr.local_position
+        try:
+            seg_free = self._nav_world.has_los(current_pos, target, self.flying)
+        except Exception:
+            seg_free = True
+        if not seg_free:
+            self._blocked_frames += 1
+            adv = self._path_index
+            try:
+                for k in range(self._path_index + 1, len(self._path)):
+                    if self._nav_world.has_los(current_pos, self._path[k], self.flying):
+                        adv = k
+            except Exception:
+                pass
+            if adv > self._path_index:
+                self._path_index = adv
+                self._blocked_frames = 0
+                target = self._path[self._path_index]
+            else:
+                if self._blocked_frames >= 3:
+                    self._blocked_frames = 0
+                    self._pending_req_id = None
+                    self._repath_timer = self.repath_interval
+                return
+        else:
+            self._blocked_frames = 0
         to_target = target - current_pos
         dist = to_target.length()
 
@@ -136,22 +166,64 @@ class NavAgent(Component):
         if result is None:
             return
         self._pending_req_id = None
+        self._blocked_frames = 0
+        if len(result) == 0:
+            self._fail_streak = min(self._fail_streak + 1, 6)
+            self._path = result
+            self._path_index = 0
+            return
+        self._fail_streak = 0
+        try:
+            keep_old = False
+            if len(self._path) >= 2 and self._path_index < len(self._path):
+                goal_now = self._get_target_position()
+                if goal_now is not None and self._last_path_goal is not None:
+                    dx = goal_now.x - self._last_path_goal[0]
+                    dy = goal_now.y - self._last_path_goal[1]
+                    dz = goal_now.z - self._last_path_goal[2]
+                    same_goal = dx * dx + dy * dy + dz * dz < 0.04
+                else:
+                    same_goal = goal_now is None and self._last_path_goal is None
+                gid_now = id(self._nav_world._grid._grid)
+                if same_goal and self._path_grid_gid == gid_now:
+                    tr0 = self.transform
+                    if tr0 is not None:
+                        pos0 = tr0.local_position
+                        keep_old = True
+                        prev = pos0
+                        for wp in self._path[self._path_index:]:
+                            if not self._nav_world.has_los(prev, wp, self.flying):
+                                keep_old = False
+                                break
+                            prev = wp
+            if keep_old:
+                return
+        except Exception:
+            pass
         self._path = result
+        try:
+            goal_now = self._get_target_position()
+            if goal_now is not None:
+                self._last_path_goal = (goal_now.x, goal_now.y, goal_now.z)
+            else:
+                self._last_path_goal = None
+            self._path_grid_gid = id(self._nav_world._grid._grid)
+        except Exception:
+            pass
         if len(result) >= 2:
             tr = self.transform
             if tr:
-                pos = tr.local_position
-                end = result[-1]
-                to_end_x = end.x - pos.x
-                to_end_z = end.z - pos.z
-                idx = 1
-                while idx < len(result) - 1:
-                    to_wp_x = result[idx].x - pos.x
-                    to_wp_z = result[idx].z - pos.z
-                    if to_wp_x * to_end_x + to_wp_z * to_end_z >= 0:
-                        break
-                    idx += 1
-                self._path_index = idx
+                try:
+                    pos = tr.local_position
+                    far = 1
+                    for k in range(1, len(result)):
+                        if self._nav_world.has_los(pos, result[k], self.flying):
+                            far = k
+                        else:
+                            break
+                    self._path_index = far
+                except Exception:
+                    self._path_index = 1
             else:
                 self._path_index = 1
         else:
@@ -169,6 +241,8 @@ class NavAgent(Component):
         return Vec3(self.target_x, self.target_y, self.target_z)
 
     def _request_path(self):
+        if self._pending_req_id is not None:
+            return
         if not self._ensure_nav_world():
             return
         tr = self.transform
@@ -208,6 +282,9 @@ class NavAgent(Component):
         self.target_y = pos.y
         self.target_z = pos.z
         self.auto_move = True
+        self._pending_req_id = None
+        self._blocked_frames = 0
+        self._fail_streak = 0
         self._repath_timer = self.repath_interval
         if self._ensure_nav_world():
             start = self.transform.local_position if self.transform else pos
@@ -239,6 +316,9 @@ class NavAgent(Component):
         self.auto_move = False
         self._path = []
         self._path_index = 0
+        self._pending_req_id = None
+        self._blocked_frames = 0
+        self._fail_streak = 0
 
     def _btn_set_target(self):
         tr = self.transform

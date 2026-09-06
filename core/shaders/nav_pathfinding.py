@@ -5,15 +5,179 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+import collections
 import math
+import threading
+import time
 import heapq
 import uuid
+import weakref
 import numpy as np
 from typing import Optional
 from core.maths.math3d import Vec3
 from core.spatial.octree import AABB
 
+try:
+    from core import _nav_batch as _nb
+    _HAS_NAV_CYTHON = True
+except ImportError:
+    _nb = None
+    _HAS_NAV_CYTHON = False
+
+_SHARED_GRIDS: dict = {}
+_SHARED_ORDER: list = []
+
+_WIN_CAP = 336
+_COARSE_TGT = 224
+_FINE_WIN = 112
+_MAX_EXP_2D = 800000
+_MAX_EXP_3D = 900000
+_FLY_COARSE = 80
+_FINE_3D_WIN = 56
+_TIME_BUDGET = 1.5
+
 _COLLIDER_TYPES = ("BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider")
+
+
+def _shared_grid_for(scene, resolution: int, world_size: float):
+    key = (id(scene), int(resolution), round(float(world_size), 3))
+    e = _SHARED_GRIDS.get(key)
+    if e is not None and e[0]() is scene:
+        return e[2]
+    g = NavGrid(int(resolution), float(world_size))
+    _SHARED_GRIDS[key] = [weakref.ref(scene), -1, g]
+    _SHARED_ORDER.append(key)
+    while len(_SHARED_ORDER) > 6:
+        _SHARED_GRIDS.pop(_SHARED_ORDER.pop(0), None)
+    return g
+
+
+_NAV_WORKER = None
+_NAV_WORKER_LOCK = threading.Lock()
+_COARSE_SHARED: dict = {}
+_COARSE_LOCK = threading.Lock()
+
+
+def _coarse_cached(base, f: int, dil: int):
+    key = (id(base), int(f), int(dil))
+    try:
+        with _COARSE_LOCK:
+            hit = _COARSE_SHARED.get(key)
+        if hit is not None:
+            return hit
+    except Exception:
+        pass
+    coarse = _nb.downsample_any3d(base, int(f))
+    if dil > 0:
+        coarse = _nb.dilate3d(coarse, int(dil))
+    try:
+        with _COARSE_LOCK:
+            _COARSE_SHARED[key] = coarse
+            while len(_COARSE_SHARED) > 4:
+                _COARSE_SHARED.pop(next(iter(_COARSE_SHARED)))
+    except Exception:
+        pass
+    return coarse
+
+
+def _get_nav_worker():
+    global _NAV_WORKER
+    w = _NAV_WORKER
+    if w is None:
+        with _NAV_WORKER_LOCK:
+            if _NAV_WORKER is None:
+                _NAV_WORKER = _NavSolveWorker()
+                _NAV_WORKER.start()
+            w = _NAV_WORKER
+    return w
+
+
+class _NavSolveWorker(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True, name="zarin-navmesh")
+        self._jobs = collections.deque()
+        self._results: dict = {}
+        self._cond = threading.Condition()
+        self._solvers: dict = {}
+
+    def submit(self, spec: dict):
+        with self._cond:
+            if len(self._jobs) >= 8:
+                old = self._jobs.popleft()
+                try:
+                    self._results[old["req"]] = (old["gid"], None)
+                except Exception:
+                    pass
+            self._jobs.append(spec)
+            self._cond.notify()
+
+    def take(self, req: str):
+        with self._cond:
+            return self._results.pop(req, None)
+
+    def _solver_for(self, res: int, size: float):
+        key = (int(res), round(float(size), 3))
+        s = self._solvers.get(key)
+        if s is None:
+            s = NavWorld.__new__(NavWorld)
+            s._grid = NavGrid(int(res), float(size))
+            s._scene = None
+            s._last_grid_version = 0
+            s._last_scene_version = -1
+            s._pending_results = {}
+            s._pending_jobs = {}
+            s._path_cells = []
+            s._raw_path_cells = []
+            s._path_rects = []
+            s._path_aabbs = []
+            s._is_flying = False
+            s._fields_cache = {}
+            s._cand_cache = {}
+            s._coarse_cache = {}
+            s._fly_dilate = None
+            s._guard_params = None
+            s._los_walk = None
+            s._los_walk_gid = None
+            s._los_ground = None
+            s._los_climb = 0.0
+            s._los_base = None
+            s._los_base_gid = None
+            s._los_fly_rad = 0
+            s._t0 = 0.0
+            self._solvers[key] = s
+        return s
+
+    def run(self):
+        while True:
+            with self._cond:
+                while not self._jobs:
+                    self._cond.wait(0.5)
+                spec = self._jobs.popleft()
+            try:
+                out = self._solve(spec)
+            except Exception:
+                out = None
+            with self._cond:
+                self._results[spec["req"]] = (spec["gid"], out)
+                while len(self._results) > 64:
+                    try:
+                        self._results.pop(next(iter(self._results)))
+                    except Exception:
+                        break
+
+    def _solve(self, spec: dict):
+        s = self._solver_for(spec["res"], spec["size"])
+        g = s._grid
+        g._grid = spec["grid"]
+        s._last_grid_version = spec["gv"]
+        s._fly_dilate = spec.get("fly_dil")
+        s._t0 = time.perf_counter()
+        a = Vec3(float(spec["a"][0]), float(spec["a"][1]), float(spec["a"][2]))
+        b = Vec3(float(spec["b"][0]), float(spec["b"][1]), float(spec["b"][2]))
+        if spec["fly"]:
+            return s._find_path_fast_fly(a, b, float(spec["rad"]))
+        return s._find_path_fast_ground(a, b, float(spec["rad"]), float(spec["h"]),
+                                        float(spec["climb"]), float(spec["slope"]), spec["pad"])
 
 _NEIGHBOR_OFFSETS_3D = [
     (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1),
@@ -62,7 +226,7 @@ class NavGrid:
         self.world_size = world_size
         self.cell_size = world_size / resolution
         self.half_world = world_size * 0.5
-        self._grid: np.ndarray = np.zeros((resolution, resolution, resolution), dtype=np.uint32)
+        self._grid: np.ndarray = np.zeros((resolution, resolution, resolution), dtype=np.uint8)
         self._raw_grid: Optional[np.ndarray] = None
         self._dirty = True
 
@@ -110,6 +274,11 @@ class NavGrid:
     def find_nearest_unblocked(self, gx: int, gy: int, gz: int, max_radius: int = 10) -> tuple[int, int, int]:
         if not self.is_blocked(gx, gy, gz):
             return (gx, gy, gz)
+        if _HAS_NAV_CYTHON:
+            try:
+                return tuple(int(v) for v in _nb.nearest3d(np.ascontiguousarray(self._grid, dtype=np.uint8), int(gx), int(gy), int(gz), int(max_radius)))
+            except Exception:
+                pass
         r = self.resolution
         for radius in range(1, max_radius + 1):
             for dx in range(-radius, radius + 1):
@@ -153,6 +322,13 @@ class NavGrid:
     def _dilate_2d(walkable: np.ndarray, radius: int) -> np.ndarray:
         if radius <= 0:
             return walkable
+        if _HAS_NAV_CYTHON:
+            try:
+                out = np.empty_like(np.ascontiguousarray(walkable, dtype=np.uint8))
+                _nb.dilate2d(np.ascontiguousarray(walkable, dtype=np.uint8), int(radius), out)
+                return out
+            except Exception:
+                pass
         r = walkable.shape[0]
         dilated = walkable.copy()
         indices = np.where(dilated == 0)
@@ -172,6 +348,27 @@ class NavGrid:
         raw = self._raw_grid if self._raw_grid is not None else self._grid
         raw_bool = raw.astype(np.bool_)
 
+        if _HAS_NAV_CYTHON:
+            try:
+                raw_c = np.ascontiguousarray(raw, dtype=np.uint8)
+                walkable = np.zeros((r, r), dtype=np.uint8)
+                ground_out = np.full((r, r), -1, dtype=np.int32)
+                cost_out = np.ones((r, r), dtype=np.float32)
+                if 0 < max_slope_deg < 90:
+                    max_hdiff = math.tan(math.radians(max_slope_deg))
+                else:
+                    max_hdiff = 1e9
+                _nb.build_ground_fields(raw_c, int(agent_height_cells + max_climb_cells), float(max_hdiff),
+                                        float(self.cell_size), 0.15, 0.6, walkable, ground_out, cost_out)
+                walk_gy = start_gy
+                if 0 <= start_gx < r and 0 <= start_gz < r:
+                    sg = ground_out[start_gx, start_gz]
+                    if sg >= 0:
+                        walk_gy = int(sg) + 1
+                walk_gy = max(0, min(r - 1, walk_gy))
+                return walkable, ground_out, walk_gy
+            except Exception:
+                pass
         walk_gy = start_gy
         for y in range(max(0, start_gy - 1), -1, -1):
             if raw[start_gx, y, start_gz]:
@@ -269,20 +466,150 @@ class NavWorld:
         self._path_rects: list[NavRect] = []
         self._path_aabbs: list[tuple[AABB, int]] = []
         self._is_flying: bool = False
+        self._fields_cache: dict = {}
+        self._cand_cache: dict = {}
+        self._coarse_cache: dict = {}
+        self._fly_dilate: Optional[float] = None
+        self._pending_jobs: dict = {}
+        self._guard_params = None
+        self._los_walk = None
+        self._los_walk_gid = None
+        self._los_ground = None
+        self._los_climb = 0.0
+        self._los_base = None
+        self._los_base_gid = None
+        self._los_fly_rad = 0
+        self._t0: float = 0.0
 
     def find_path_gpu_deferred(self, start_world: Vec3, end_world: Vec3,
-                                agent_radius: float = 0.5, agent_height: float = 2.0,
-                                flying: bool = False,
-                                max_climb: float = 0.5, max_slope: float = 45.0,
-                                agent_padding: Optional[float] = None) -> str:
+                                 agent_radius: float = 0.5, agent_height: float = 2.0,
+                                 flying: bool = False,
+                                 max_climb: float = 0.5, max_slope: float = 45.0,
+                                 agent_padding: Optional[float] = None) -> str:
         req_id = uuid.uuid4().hex[:12]
-        path = self.find_path(start_world, end_world, agent_radius, agent_height, flying,
-                              max_climb, max_slope, agent_padding)
-        self._pending_results[req_id] = path if path else []
+        try:
+            self._rebuild_grid()
+        except Exception:
+            pass
+        try:
+            _pad = agent_padding if agent_padding is not None else agent_radius
+            _gx, _gy, _gz = self._grid.world_to_grid(start_world)
+            self._guard_params = (int(math.ceil(max(0.01, agent_height) / self._grid.cell_size)),
+                                  int(math.ceil(max(0.0, max_climb) / self._grid.cell_size)),
+                                  float(max_slope),
+                                  int(max(0.0, _pad) / self._grid.cell_size + 0.5),
+                                  float(max_climb),
+                                  int(_gx), int(_gz),
+                                  max(0, min(self._grid.resolution - 1, int(_gy))))
+        except Exception:
+            pass
+        try:
+            arr = self._grid._grid
+            spec = {
+                "req": req_id,
+                "grid": arr,
+                "gid": id(arr),
+                "gv": self._last_grid_version,
+                "res": self._grid.resolution,
+                "size": self._grid.world_size,
+                "fly": bool(flying),
+                "a": (float(start_world.x), float(start_world.y), float(start_world.z)),
+                "b": (float(end_world.x), float(end_world.y), float(end_world.z)),
+                "rad": float(agent_radius),
+                "h": float(agent_height),
+                "climb": float(max_climb),
+                "slope": float(max_slope),
+                "pad": None if agent_padding is None else float(agent_padding),
+                "fly_dil": self._fly_dilate,
+            }
+            self._pending_jobs[req_id] = (spec, 0)
+            while len(self._pending_jobs) > 16:
+                try:
+                    self._pending_jobs.pop(next(iter(self._pending_jobs)))
+                except Exception:
+                    break
+            _get_nav_worker().submit(spec)
+            return req_id
+        except Exception:
+            pass
+        try:
+            path = self.find_path(start_world, end_world, agent_radius, agent_height, flying,
+                                  max_climb, max_slope, agent_padding)
+            self._pending_results[req_id] = path if path else []
+        except Exception:
+            self._pending_results[req_id] = []
         return req_id
 
     def poll_result(self, req_id: str) -> Optional[list[Vec3]]:
+        try:
+            r = _get_nav_worker().take(req_id)
+            if r is not None:
+                gid, payload = r
+                slot = self._pending_jobs.pop(req_id, None)
+                if payload is not None and (slot is None or gid == id(self._grid._grid)):
+                    return payload if payload else []
+                if slot is not None:
+                    spec, tries = slot
+                    if tries < 3:
+                        spec2 = dict(spec)
+                        try:
+                            spec2["grid"] = self._grid._grid
+                            spec2["gid"] = id(self._grid._grid)
+                            spec2["gv"] = self._last_grid_version
+                        except Exception:
+                            pass
+                        self._pending_jobs[req_id] = (spec2, tries + 1)
+                        try:
+                            _get_nav_worker().submit(spec2)
+                        except Exception:
+                            pass
+                        return None
+                return []
+        except Exception:
+            pass
         return self._pending_results.pop(req_id, None)
+
+    def has_los(self, a: Vec3, b: Vec3, flying: bool) -> bool:
+        try:
+            grid = self._grid
+            if flying:
+                base = self._los_base
+                if base is None or self._los_base_gid != id(grid._grid):
+                    return True
+                sa = grid.world_to_grid(a)
+                sb = grid.world_to_grid(b)
+                return bool(_nb.los3d_clear(np.ascontiguousarray(base), sa[0], sa[1], sa[2], sb[0], sb[1], sb[2],
+                                            int(self._los_fly_rad)))
+            walk = self._los_walk
+            if walk is None or self._los_walk_gid != id(grid._grid):
+                gp = getattr(self, "_guard_params", None)
+                if gp is None or len(gp) < 8 or not _HAS_NAV_CYTHON:
+                    return True
+                try:
+                    F = self._derived_fields(gp[0], gp[1], gp[2], gp[3], gp[4], gp[5], gp[6], gp[7])
+                except Exception:
+                    return True
+                if F is None:
+                    return True
+                walk = F["walk"]
+                self._los_walk = walk
+                self._los_ground = F["ground"]
+                try:
+                    self._los_climb = max(0.0, float(gp[4])) / max(1e-6, float(grid.cell_size))
+                except Exception:
+                    self._los_climb = 0.0
+                try:
+                    self._los_walk_gid = id(grid._grid)
+                except Exception:
+                    self._los_walk_gid = None
+            los_ground = self._los_ground
+            if los_ground is None:
+                sa = grid.world_to_grid(a)
+                sb = grid.world_to_grid(b)
+                return bool(_nb.los2d(np.ascontiguousarray(walk), sa[0], sa[2], sb[0], sb[2]))
+            return self._segwalk_world(walk, los_ground, grid, float(self._los_climb), a, b)
+        except Exception:
+            return True
 
     def get_path_cells(self) -> list[tuple[int, int, int]]:
         return list(self._path_cells)
@@ -307,26 +634,82 @@ class NavWorld:
 
     def set_scene(self, scene):
         self._scene = scene
+        if scene is not None:
+            try:
+                self._grid = _shared_grid_for(scene, self._grid.resolution, self._grid.world_size)
+            except Exception:
+                pass
+            self._last_scene_version = -1
         self._rebuild_grid()
 
     def _rebuild_grid(self):
         if not self._scene:
             return
         sv = getattr(self._scene, '_render_version', -1)
-        if sv == self._last_scene_version:
+        key = (id(self._scene), int(self._grid.resolution), round(float(self._grid.world_size), 3))
+        e = _SHARED_GRIDS.get(key)
+        if e is not None and e[0]() is self._scene and e[1] == sv and not self._grid._dirty:
+            self._last_scene_version = sv
             return
+        if e is not None and e[0]() is self._scene:
+            if e[2] is not self._grid:
+                self._grid = e[2]
         self._last_scene_version = sv
-        self._grid.clear()
+        grid = self._grid
+        r = grid.resolution
+        fresh = np.zeros((r, r, r), dtype=np.uint8)
         entities = self._scene.get_all_entities()
         for entity in entities:
             for comp in entity.get_all_components():
                 cname = type(comp).__name__
                 if cname not in _COLLIDER_TYPES:
                     continue
+                if cname == "BoxCollider" and _HAS_NAV_CYTHON:
+                    try:
+                        if self._raster_box_obb(comp, grid, fresh):
+                            continue
+                    except Exception:
+                        pass
                 aabb = self._get_collider_world_aabb(comp)
                 if aabb:
-                    self._grid.mark_blocked(aabb.min, aabb.max)
+                    try:
+                        x1, y1, z1, x2, y2, z2 = grid._aabb_to_cell_range(aabb.min, aabb.max)
+                        fresh[x1:x2 + 1, y1:y2 + 1, z1:z2 + 1] = 1
+                    except Exception:
+                        pass
+        grid._grid = fresh
+        grid._raw_grid = None
+        grid._dirty = False
         self._last_grid_version += 1
+        if e is not None and e[0]() is self._scene:
+            e[1] = sv
+        self._fields_cache.clear()
+        self._cand_cache.clear()
+        self._coarse_cache.clear()
+        self._los_walk = None
+        self._los_base = None
+
+    def _raster_box_obb(self, comp, grid: "NavGrid", fresh: np.ndarray) -> bool:
+        entity = comp._entity
+        if not entity:
+            return False
+        tr = entity.transform
+        if not tr:
+            return False
+        pos = tr.local_position
+        rot = tr.local_rotation
+        scale = tr.local_scale
+        hx = float(comp.size.x * scale.x * 0.5)
+        hy = float(comp.size.y * scale.y * 0.5)
+        hz = float(comp.size.z * scale.z * 0.5)
+        if hx <= 0.0 or hy <= 0.0 or hz <= 0.0:
+            return False
+        cl = Vec3(float(comp.center.x * scale.x), float(comp.center.y * scale.y), float(comp.center.z * scale.z))
+        c = pos + rot.rotate_vec3(cl)
+        _nb.raster_box_obb(np.ascontiguousarray(fresh), float(grid.cell_size), float(grid.half_world),
+                           float(c.x), float(c.y), float(c.z),
+                           hx, hy, hz, float(rot._x), float(rot._y), float(rot._z), float(rot._w))
+        return True
 
     def _get_collider_world_aabb(self, comp) -> Optional[AABB]:
         entity = comp._entity
@@ -413,8 +796,10 @@ class NavWorld:
         self._rebuild_grid()
 
     def dilate_for_agent(self, radius: float):
-        radius_cells = int(math.ceil(radius / self._grid.cell_size))
-        self._grid.dilate_obstacles(radius_cells)
+        try:
+            self._fly_dilate = max(0.0, float(radius))
+        except Exception:
+            self._fly_dilate = None
 
     def get_path_cell_aabbs(self) -> list[AABB]:
         result = []
@@ -724,7 +1109,600 @@ class NavWorld:
             waypoints.append(self._grid.grid_to_world(gx, gy, gz))
         return waypoints
 
+    def _over_budget(self) -> bool:
+        return (time.perf_counter() - self._t0) > _TIME_BUDGET
+
+    def _level_candidates(self, hc: int, cc: int):
+        key = (self._last_grid_version, int(hc), int(cc))
+        hit = self._cand_cache.get(key)
+        if hit is not None:
+            return hit
+        grid = self._grid
+        r = grid.resolution
+        raw = np.ascontiguousarray(grid._grid, dtype=np.uint8)
+        cands = np.zeros((r, r, 4), dtype=np.int32)
+        ncnt = np.zeros((r, r), dtype=np.uint8)
+        _nb.collect_candidates(raw, int(hc + cc), cands, ncnt)
+        hit = (cands, ncnt)
+        self._cand_cache[key] = hit
+        while len(self._cand_cache) > 4:
+            self._cand_cache.pop(next(iter(self._cand_cache)))
+        return hit
+
+    def _derived_fields(self, hc: int, cc: int, slope: float, rad: int, climb: float,
+                      sx: int = 0, sz: int = 0, ref_y: int = 0) -> Optional[dict]:
+        key = (self._last_grid_version, int(hc), int(cc), round(float(slope), 3), int(rad),
+               round(float(climb), 3), int(sx), int(sz), int(ref_y))
+        f = self._fields_cache.get(key)
+        if f is not None:
+            return f
+        grid = self._grid
+        r = grid.resolution
+        climb_cells = max(0.0, float(climb)) / max(1e-6, float(grid.cell_size))
+        if 0 < slope < 90:
+            max_hdiff = max(math.tan(math.radians(slope)), climb_cells)
+        else:
+            max_hdiff = 1e9
+        try:
+            cands, ncnt = self._level_candidates(hc, cc)
+            walkable = np.zeros((r, r), dtype=np.uint8)
+            ground = np.full((r, r), -1, dtype=np.int32)
+            cost = np.ones((r, r), dtype=np.float32)
+            ok = bool(_nb.flood_levels(cands, ncnt, int(sx), int(sz), int(ref_y),
+                                       float(grid.cell_size), float(climb), ground, walkable))
+            if not ok:
+                return None
+            _nb.finalize_ground(ground, walkable, float(max_hdiff), float(grid.cell_size), 0.15, 0.6, cost)
+        except Exception:
+            return None
+        if rad > 0:
+            dw = np.empty_like(walkable)
+            _nb.dilate2d(walkable, int(rad), dw)
+            walkable = dw
+        labels = np.full((r, r), -1, dtype=np.int32)
+        sizes = np.zeros(r * r, dtype=np.int32)
+        ncomp = int(_nb.label_components(walkable, ground, float(grid.cell_size),
+                                         float(climb) if climb >= 0 else -1.0, labels, sizes))
+        f = {"walk": walkable, "ground": ground, "cost": cost, "labels": labels, "ncomp": ncomp}
+        self._fields_cache[key] = f
+        while len(self._fields_cache) > 8:
+            self._fields_cache.pop(next(iter(self._fields_cache)))
+        return f
+
+    def _snap_g(self, walk: np.ndarray, gx: int, gz: int) -> tuple[int, int]:
+        try:
+            r = walk.shape[0]
+            sx = max(0, min(r - 1, int(gx)))
+            sz = max(0, min(r - 1, int(gz)))
+            q = _nb.snap2d(np.ascontiguousarray(walk), sx, sz, 24)
+            return (int(q[0]), int(q[1]))
+        except Exception:
+            return (int(gx), int(gz))
+
+    def _astar_win(self, walk: np.ndarray, cost: np.ndarray, ground: np.ndarray, climb_cells: float,
+                   s: tuple[int, int], e: tuple[int, int], margin: int, exp_cap: int):
+        r = walk.shape[0]
+        x0 = max(0, min(s[0], e[0]) - margin)
+        x1 = min(r - 1, max(s[0], e[0]) + margin)
+        z0 = max(0, min(s[1], e[1]) - margin)
+        z1 = min(r - 1, max(s[1], e[1]) + margin)
+        try:
+            st, path, exp = _nb.astar2d(np.ascontiguousarray(walk), np.ascontiguousarray(cost, dtype=np.float32),
+                                        np.ascontiguousarray(ground), int(s[0]), int(s[1]), int(e[0]), int(e[1]),
+                                        int(exp_cap), float(climb_cells), int(x0), int(x1), int(z0), int(z1))
+        except Exception:
+            return None, False
+        if len(path) <= 1:
+            return None, False
+        return [(int(p) // r, int(p) % r) for p in path], (st == 0)
+
+    def _seg_ok(self, walk: np.ndarray, ground: np.ndarray, climb: float,
+                a: tuple[int, int], b: tuple[int, int]) -> bool:
+        try:
+            ga = int(ground[a[0], a[1]])
+            gb = int(ground[b[0], b[1]])
+            if ga < 0 or gb < 0:
+                return False
+            return bool(_nb.segwalk2d(np.ascontiguousarray(walk), np.ascontiguousarray(ground),
+                                      a[0] + 0.5, float(ga + 1), a[1] + 0.5,
+                                      b[0] + 0.5, float(gb + 1), b[1] + 0.5, float(climb)))
+        except Exception:
+            return False
+
+    def _smooth_cells(self, cells: list[tuple[int, int]], walk: np.ndarray, ground: np.ndarray,
+                      climb: float):
+        if len(cells) <= 1:
+            return None
+        try:
+            n = len(cells)
+            out = [0]
+            i = 0
+            while i < n - 1:
+                j = n - 1
+                while j > i and not self._seg_ok(walk, ground, climb, cells[i], cells[j]):
+                    j -= 1
+                if j == i:
+                    break
+                out.append(j)
+                i = j
+            if len(out) < 2:
+                return None
+            return [cells[k] for k in out]
+        except Exception:
+            return None
+
+    def _coarsen_2d(self, walk: np.ndarray, cost: np.ndarray, ground: np.ndarray, f: int):
+        r = walk.shape[0]
+        cr = (r + f - 1) // f
+        pr = cr * f
+        if pr != r:
+            walk_p = np.zeros((pr, pr), dtype=np.uint8)
+            cost_p = np.ones((pr, pr), dtype=np.float32)
+            ground_p = np.full((pr, pr), -1, dtype=np.int32)
+            walk_p[:r, :r] = walk
+            cost_p[:r, :r] = cost
+            ground_p[:r, :r] = ground
+        else:
+            walk_p, cost_p, ground_p = walk, cost, ground
+        cw = (walk_p.reshape(cr, f, cr, f).max(axis=(1, 3)) > 0).astype(np.uint8)
+        cc = cost_p.reshape(cr, f, cr, f).min(axis=(1, 3)).astype(np.float32)
+        gg = ground_p.reshape(cr, f, cr, f).max(axis=(1, 3)).astype(np.int32)
+        return np.ascontiguousarray(cw), np.ascontiguousarray(cc), np.ascontiguousarray(gg), cr
+
+    def _coarse_ground_cells(self, walk: np.ndarray, cost: np.ndarray, ground: np.ndarray, climb_cells: float,
+                             s: tuple[int, int], e: tuple[int, int]):
+        r = walk.shape[0]
+        dx = abs(e[0] - s[0])
+        dz = abs(e[1] - s[1])
+        f = max(1, int(math.ceil(max(dx, dz) / _COARSE_TGT)))
+        cw, cc, gg, cr = self._coarsen_2d(walk, cost, ground, f)
+        cs = (max(0, min(cr - 1, s[0] // f)), max(0, min(cr - 1, s[1] // f)))
+        ce = (max(0, min(cr - 1, e[0] // f)), max(0, min(cr - 1, e[1] // f)))
+        try:
+            qs = _nb.snap2d(cw, cs[0], cs[1], 8)
+            qe = _nb.snap2d(cw, ce[0], ce[1], 8)
+            cs = (int(qs[0]), int(qs[1]))
+            ce = (int(qe[0]), int(qe[1]))
+        except Exception:
+            pass
+        if not cw[cs[0], cs[1]] or not cw[ce[0], ce[1]]:
+            return None, False
+        try:
+            st, path, exp = _nb.astar2d(cw, cc, gg, cs[0], cs[1], ce[0], ce[1],
+                                        min(_MAX_EXP_2D, 6 * cr * cr + 4096), float(climb_cells),
+                                        0, cr - 1, 0, cr - 1)
+        except Exception:
+            return None, False
+        if len(path) <= 1:
+            return None, False
+        cok = (st == 0)
+        pts = []
+        for p in path:
+            p = int(p)
+            pts.append((max(0, min(r - 1, (p // cr) * f + f // 2)), max(0, min(r - 1, (p % cr) * f + f // 2))))
+        anchors = [s]
+        fine_pts = [self._snap_g(walk, p[0], p[1]) for p in pts]
+        i = 0
+        rok = True
+        while i < len(fine_pts) - 1 and not self._over_budget():
+            j = len(fine_pts) - 1
+            moved = False
+            while j > i:
+                try:
+                    if self._seg_ok(walk, ground, climb_cells, anchors[-1], fine_pts[j]):
+                        anchors.append(fine_pts[j])
+                        i = j
+                        moved = True
+                        break
+                except Exception:
+                    pass
+                j -= 1
+            if moved:
+                continue
+            seg, sok = self._astar_win(walk, cost, ground, climb_cells, anchors[-1], fine_pts[i + 1],
+                                       _FINE_WIN // 2, 200000)
+            if seg is not None and len(seg) > 1:
+                anchors.extend(seg[1:])
+                if not sok:
+                    rok = False
+                    break
+            else:
+                rok = False
+                break
+            i += 1
+        sm = self._smooth_cells(anchors, walk, ground, climb_cells)
+        if sm is None:
+            return anchors, False
+        return sm, (cok and rok)
+
+    def _ground_cells(self, walk: np.ndarray, cost: np.ndarray, ground: np.ndarray, labels: np.ndarray,
+                      climb_cells: float, s: tuple[int, int], e: tuple[int, int]) -> Optional[list[tuple[int, int]]]:
+        r = walk.shape[0]
+        if int(labels[s[0], s[1]]) < 0 or int(labels[s[0], s[1]]) != int(labels[e[0], e[1]]):
+            return None
+        try:
+            if self._seg_ok(walk, ground, climb_cells, s, e):
+                return [s, e]
+        except Exception:
+            pass
+        dx = abs(e[0] - s[0])
+        dz = abs(e[1] - s[1])
+        margin = max(16, max(dx, dz) // 3 + 8)
+        wcells = None
+        if (dx + 2 * margin + 1) * (dz + 2 * margin + 1) <= _WIN_CAP * _WIN_CAP:
+            wcells, wok = self._astar_win(walk, cost, ground, climb_cells, s, e, margin,
+                                          min(_MAX_EXP_2D, 4 * (dx + 2 * margin + 1) * (dz + 2 * margin + 1) + 4096))
+            if wcells is not None and wok:
+                sm = self._smooth_cells(wcells, walk, ground, climb_cells)
+                return sm if sm is not None else wcells
+        ccells, cok = self._coarse_ground_cells(walk, cost, ground, climb_cells, s, e)
+        if ccells is not None and cok:
+            return ccells
+        best = None
+        best_d = 1e30
+        if wcells is not None and len(wcells) > 1:
+            best = wcells
+            best_d = abs(wcells[-1][0] - e[0]) + abs(wcells[-1][1] - e[1])
+        if ccells is not None and len(ccells) > 1:
+            dd = abs(ccells[-1][0] - e[0]) + abs(ccells[-1][1] - e[1])
+            if best is None or dd < best_d:
+                best = ccells
+        if best is not None:
+            sm = self._smooth_cells(best, walk, ground, climb_cells)
+            return sm if sm is not None else best
+        return None
+
+    def _proj_y(self, walk: np.ndarray, ground: np.ndarray, r: int,
+                  x: float, y: float, z: float, climb_cells: float):
+        try:
+            gx = int(x + 1e-4)
+            gz = int(z + 1e-4)
+            if gx < 0 or gx >= r or gz < 0 or gz >= r:
+                return None
+            if not walk[gx, gz]:
+                return None
+            gy = int(ground[gx, gz])
+            if gy < 0:
+                return None
+            if abs(y - float(gy + 1)) <= float(climb_cells) + 1.0:
+                return float(gy + 1)
+            return y
+        except Exception:
+            return None
+
+    def _segwalk_world(self, walk: np.ndarray, ground: np.ndarray, grid: "NavGrid",
+                         climb_cells: float, a: Vec3, b: Vec3) -> bool:
+        try:
+            hw = grid.half_world
+            cs = grid.cell_size
+            r = walk.shape[0]
+            ax, ay, az = (float(a.x) + hw) / cs, (float(a.y) + hw) / cs, (float(a.z) + hw) / cs
+            bx, by, bz = (float(b.x) + hw) / cs, (float(b.y) + hw) / cs, (float(b.z) + hw) / cs
+            wc = np.ascontiguousarray(walk)
+            gc = np.ascontiguousarray(ground)
+            pa = self._proj_y(wc, gc, r, ax, ay, az, float(climb_cells))
+            pb = self._proj_y(wc, gc, r, bx, by, bz, float(climb_cells))
+            if pa is None or pb is None:
+                return False
+            return bool(_nb.segwalk2d(wc, gc, ax, pa, az, bx, pb, bz, float(climb_cells)))
+        except Exception:
+            return False
+
+    def _cells_to_world_ground(self, cells: list[tuple[int, int]], walk: np.ndarray, ground: np.ndarray,
+                               climb_cells: float, grid: "NavGrid", snap_tol: float,
+                               start_world: Vec3, end_world: Vec3) -> list[Vec3]:
+        pts = [start_world]
+        hw = grid.half_world
+        cs = grid.cell_size
+        for gx, gz in cells[1:-1]:
+            gy = int(ground[gx, gz])
+            if gy < 0:
+                continue
+            pts.append(Vec3(-hw + (gx + 0.5) * cs, -hw + (gy + 1) * cs, -hw + (gz + 0.5) * cs))
+        if len(cells) >= 2:
+            b = cells[-1]
+            gy = int(ground[b[0], b[1]])
+            if gy < 0:
+                return pts
+            surf_y = -hw + (gy + 1) * cs
+            ok = self._segwalk_world(walk, ground, grid, climb_cells, pts[-1], end_world)
+            if ok and abs(float(end_world.y) - surf_y) <= max(0.5, float(snap_tol)):
+                pts.append(end_world)
+            else:
+                pts.append(Vec3(-hw + (b[0] + 0.5) * cs, surf_y, -hw + (b[1] + 0.5) * cs))
+        else:
+            pts.append(end_world)
+        return pts
+
+    def _store_cells(self, cells: list[tuple[int, int]], ground: np.ndarray):
+        n = len(cells)
+        step = max(1, n // 3000) if n > 3000 else 1
+        self._raw_path_cells = [(c[0], int(ground[c[0], c[1]]), c[1]) for c in cells[::step]]
+        self._path_cells = list(self._raw_path_cells)
+        self._path_rects = []
+
+    def _fly_cells(self, base: np.ndarray, r: int, s: tuple[int, int, int], e: tuple[int, int, int],
+                   rad_world: float, cell: float) -> Optional[list[tuple[int, int, int]]]:
+        frad = int(round(rad_world / cell)) if cell > 0 else 0
+        if frad < 0:
+            frad = 0
+        try:
+            if bool(_nb.los3d_clear(base, s[0], s[1], s[2], e[0], e[1], e[2], frad)):
+                return [s, e]
+        except Exception:
+            pass
+        if r <= _FLY_COARSE:
+            try:
+                work = base if frad <= 0 else _nb.dilate3d(base, frad)
+                st, path, exp = _nb.astar3d(work, s[0], s[1], s[2], e[0], e[1], e[2],
+                                            min(_MAX_EXP_3D, 4 * r * r * r + 4096),
+                                            0, r - 1, 0, r - 1, 0, r - 1)
+            except Exception:
+                return None
+            if len(path) <= 1:
+                return None
+            cells = [((int(p) // (r * r)), (int(p) - (int(p) // (r * r)) * r * r) // r, int(p) % r) for p in path]
+            try:
+                enc = np.array([(c[0] * r + c[1]) * r + c[2] for c in cells], dtype=np.int32)
+                sm = _nb.smooth3d_clear(enc, len(enc), work, 0)
+                cells = [((int(p) // (r * r)), (int(p) - (int(p) // (r * r)) * r * r) // r, int(p) % r) for p in sm]
+            except Exception:
+                pass
+            return cells
+        f = max(1, int(math.ceil(r / _FLY_COARSE)))
+        dil = int(rad_world / (cell * f)) if cell * f > 0 else 0
+        try:
+            coarse = _coarse_cached(base, f, dil)
+        except Exception:
+            return None
+        if coarse is None:
+            return None
+        cr = coarse.shape[0]
+        cs = (max(0, min(cr - 1, s[0] // f)), max(0, min(cr - 1, s[1] // f)), max(0, min(cr - 1, s[2] // f)))
+        ce = (max(0, min(cr - 1, e[0] // f)), max(0, min(cr - 1, e[1] // f)), max(0, min(cr - 1, e[2] // f)))
+        try:
+            qs = _nb.nearest3d(coarse, cs[0], cs[1], cs[2], 8)
+            qe = _nb.nearest3d(coarse, ce[0], ce[1], ce[2], 8)
+            cs = (int(qs[0]), int(qs[1]), int(qs[2]))
+            ce = (int(qe[0]), int(qe[1]), int(qe[2]))
+        except Exception:
+            pass
+        if coarse[cs[0], cs[1], cs[2]] or coarse[ce[0], ce[1], ce[2]]:
+            return None
+        try:
+            st, path, exp = _nb.astar3d(coarse, cs[0], cs[1], cs[2], ce[0], ce[1], ce[2],
+                                        min(_MAX_EXP_3D, 6 * cr * cr * cr + 4096),
+                                        0, cr - 1, 0, cr - 1, 0, cr - 1)
+        except Exception:
+            return None
+        if len(path) <= 1:
+            return None
+        anchors = [s]
+        for p in path:
+            p = int(p)
+            cx, cy, cz = p // (cr * cr), (p - (p // (cr * cr)) * cr * cr) // cr, p % cr
+            fx, fy, fz = max(0, min(r - 1, cx * f + f // 2)), max(0, min(r - 1, cy * f + f // 2)), max(0, min(r - 1, cz * f + f // 2))
+            try:
+                q = _nb.nearest3d(base, fx, fy, fz, f + 2)
+                anchors.append((int(q[0]), int(q[1]), int(q[2])))
+            except Exception:
+                anchors.append((fx, fy, fz))
+        out = [s]
+        i = 0
+        while i < len(anchors) - 1 and not self._over_budget():
+            j = len(anchors) - 1
+            moved = False
+            while j > i:
+                try:
+                    if bool(_nb.los3d_clear(base, out[-1][0], out[-1][1], out[-1][2], anchors[j][0], anchors[j][1], anchors[j][2], frad)):
+                        out.append(anchors[j])
+                        i = j
+                        moved = True
+                        break
+                except Exception:
+                    pass
+                j -= 1
+            if moved:
+                continue
+            seg, sok = self._fly_win(base, r, out[-1], anchors[i + 1], frad)
+            if seg is not None and len(seg) > 1:
+                out.extend(seg[1:])
+                if not sok:
+                    break
+            else:
+                break
+            i += 1
+        try:
+            enc = np.array([(c[0] * r + c[1]) * r + c[2] for c in out], dtype=np.int32)
+            sm = _nb.smooth3d_clear(enc, len(enc), base, frad)
+            out = [((int(p) // (r * r)), (int(p) - (int(p) // (r * r)) * r * r) // r, int(p) % r) for p in sm]
+        except Exception:
+            pass
+        return out
+
+    def _fly_win(self, base: np.ndarray, r: int, s: tuple[int, int, int], e: tuple[int, int, int],
+                 frad: int = 0):
+        m = _FINE_3D_WIN // 2
+        pts = [s, e]
+        depth = 0
+        while depth < 6:
+            a, b = pts[0], pts[-1]
+            spans = [abs(b[0] - a[0]), abs(b[1] - a[1]), abs(b[2] - a[2])]
+            if max(spans) <= _FINE_3D_WIN:
+                break
+            mid = ((a[0] + b[0]) // 2, (a[1] + b[1]) // 2, (a[2] + b[2]) // 2)
+            try:
+                q = _nb.nearest3d(base, mid[0], mid[1], mid[2], 6)
+                mid = (int(q[0]), int(q[1]), int(q[2]))
+            except Exception:
+                pass
+            pts = [a, mid, b] if len(pts) == 2 else pts[:1] + [mid] + pts[1:]
+            if len(pts) > 8:
+                break
+            depth += 1
+        result = [pts[0]]
+        for k in range(1, len(pts)):
+            a, b = result[-1], pts[k]
+            lo = [max(0, min(a[0], b[0]) - m), max(0, min(a[1], b[1]) - m), max(0, min(a[2], b[2]) - m)]
+            hi = [min(r - 1, max(a[0], b[0]) + m), min(r - 1, max(a[1], b[1]) + m), min(r - 1, max(a[2], b[2]) + m)]
+            side = max(hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1)
+            side = max(2, min(side, r))
+            org = []
+            for ax in range(3):
+                span = hi[ax] - lo[ax] + 1
+                s0 = lo[ax] - (side - span) // 2
+                s0 = max(0, min(s0, r - side))
+                org.append(s0)
+            try:
+                win = np.ascontiguousarray(base[org[0]:org[0] + side, org[1]:org[1] + side, org[2]:org[2] + side])
+                if frad > 0:
+                    win = _nb.dilate3d(win, min(frad, 2))
+                la = (a[0] - org[0], a[1] - org[1], a[2] - org[2])
+                lb = (b[0] - org[0], b[1] - org[1], b[2] - org[2])
+                st, path, exp = _nb.astar3d(win, la[0], la[1], la[2], lb[0], lb[1], lb[2], 400000,
+                                            0, side - 1, 0, side - 1, 0, side - 1)
+            except Exception:
+                return (result if len(result) > 1 else None), False
+            if len(path) <= 1:
+                return (result if len(result) > 1 else None), False
+            for p in path[1:]:
+                p = int(p)
+                qx = p // (side * side)
+                qy = (p - qx * side * side) // side
+                qz = p - qx * side * side - qy * side
+                result.append((qx + org[0], qy + org[1], qz + org[2]))
+            if st != 0:
+                return result, False
+        return result, True
+
+    def _find_path_fast_ground(self, start_world: Vec3, end_world: Vec3,
+                               agent_radius: float, agent_height: float,
+                               max_climb: float, max_slope: float,
+                               agent_padding: Optional[float]) -> Optional[list[Vec3]]:
+        grid = self._grid
+        r = grid.resolution
+        sx, sy, sz = grid.world_to_grid(start_world)
+        ex, ey, ez = grid.world_to_grid(end_world)
+        self._path_cells = []
+        self._raw_path_cells = []
+        self._path_aabbs.clear()
+        self._path_rects = []
+        self._is_flying = False
+        padding = agent_padding if agent_padding is not None else agent_radius
+        hc = int(math.ceil(max(0.01, agent_height) / grid.cell_size))
+        cc = int(math.ceil(max(0.0, max_climb) / grid.cell_size))
+        rad = int(max(0.0, padding) / grid.cell_size + 0.5)
+        ref_y = max(0, min(r - 1, sy))
+        try:
+            F = self._derived_fields(hc, cc, max_slope, rad, max_climb, sx, sz, ref_y)
+        except Exception:
+            return None
+        if F is None:
+            return None
+        walk, ground, cost, labels = F["walk"], F["ground"], F["cost"], F["labels"]
+        self._los_walk = walk
+        self._los_ground = ground
+        try:
+            self._los_climb = max(0.0, float(max_climb)) / max(1e-6, float(grid.cell_size))
+        except Exception:
+            self._los_climb = 0.0
+        try:
+            self._los_walk_gid = id(grid._grid)
+        except Exception:
+            self._los_walk_gid = None
+        s = self._snap_g(walk, sx, sz)
+        e = self._snap_g(walk, ex, ez)
+        if not walk[s[0], s[1]] or not walk[e[0], e[1]]:
+            return None
+        if int(labels[s[0], s[1]]) != int(labels[e[0], e[1]]):
+            return None
+        if s == e:
+            self._path_cells = [(s[0], sy, s[1])]
+            self._raw_path_cells = [(s[0], sy, s[1])]
+            return [start_world, end_world]
+        climb_cells = max_climb / grid.cell_size
+        try:
+            cells = self._ground_cells(walk, cost, ground, labels, climb_cells, s, e)
+        except Exception:
+            return None
+        if not cells or self._over_budget():
+            return None
+        pts = self._cells_to_world_ground(cells, walk, ground, climb_cells, grid,
+                                          agent_height + max_climb + grid.cell_size, start_world, end_world)
+        self._store_cells(cells, ground)
+        self._build_path_aabbs()
+        return pts
+
+    def _find_path_fast_fly(self, start_world: Vec3, end_world: Vec3, agent_radius: float) -> Optional[list[Vec3]]:
+        grid = self._grid
+        r = grid.resolution
+        sx, sy, sz = grid.world_to_grid(start_world)
+        ex, ey, ez = grid.world_to_grid(end_world)
+        self._path_cells = []
+        self._raw_path_cells = []
+        self._path_aabbs.clear()
+        self._path_rects = []
+        self._is_flying = True
+        base = np.ascontiguousarray(grid._grid)
+        self._los_base = base
+        try:
+            self._los_fly_rad = max(0, int(round(max(0.0, float(agent_radius)) / float(grid.cell_size))))
+        except Exception:
+            self._los_fly_rad = 0
+        try:
+            self._los_base_gid = id(grid._grid)
+        except Exception:
+            self._los_base_gid = None
+        try:
+            qs = _nb.nearest3d(base, sx, sy, sz, 16)
+            qe = _nb.nearest3d(base, ex, ey, ez, 16)
+            s = (int(qs[0]), int(qs[1]), int(qs[2]))
+            e = (int(qe[0]), int(qe[1]), int(qe[2]))
+        except Exception:
+            return None
+        if base[s[0], s[1], s[2]] or base[e[0], e[1], e[2]]:
+            return None
+        if s == e:
+            self._path_cells = [s]
+            self._raw_path_cells = [s]
+            return [start_world, end_world]
+        rad_w = self._fly_dilate if self._fly_dilate is not None else agent_radius
+        try:
+            cells = self._fly_cells(base, r, s, e, max(0.0, float(rad_w)), float(grid.cell_size))
+        except Exception:
+            return None
+        if not cells or self._over_budget():
+            return None
+        pts = [start_world]
+        for cx, cy, cz in cells[1:-1]:
+            pts.append(grid.grid_to_world(cx, cy, cz))
+        pts.append(end_world)
+        n = len(cells)
+        step = max(1, n // 3000) if n > 3000 else 1
+        self._raw_path_cells = [cells[i] for i in range(0, n, step)]
+        self._path_cells = list(self._raw_path_cells)
+        self._build_path_aabbs()
+        return pts
+
     def find_path(self, start_world: Vec3, end_world: Vec3,
+                  agent_radius: float = 0.5, agent_height: float = 2.0,
+                  flying: bool = False,
+                  max_climb: float = 0.5, max_slope: float = 45.0,
+                  agent_padding: Optional[float] = None) -> Optional[list[Vec3]]:
+        grid = self._grid
+        self._t0 = time.perf_counter()
+        if _HAS_NAV_CYTHON:
+            try:
+                if flying:
+                    return self._find_path_fast_fly(start_world, end_world, agent_radius)
+                return self._find_path_fast_ground(start_world, end_world, agent_radius, agent_height,
+                                                   max_climb, max_slope, agent_padding)
+            except Exception:
+                pass
+        return self._find_path_legacy(start_world, end_world, agent_radius, agent_height,
+                                      flying, max_climb, max_slope, agent_padding)
+
+    def _find_path_legacy(self, start_world: Vec3, end_world: Vec3,
                   agent_radius: float = 0.5, agent_height: float = 2.0,
                   flying: bool = False,
                   max_climb: float = 0.5, max_slope: float = 45.0,
@@ -760,9 +1738,18 @@ class NavWorld:
         walkable_2d = self._flood_fill_ground(walkable_2d, ground_gy, sx, sz, max_climb, grid.cell_size, grid.half_world)
 
         if self._has_line_of_sight_2d(walkable_2d, sx, sz, ex, ez):
-            self._path_cells = [(sx, sy, sz), (ex, ey, ez)]
-            self._raw_path_cells = [(sx, sy, sz), (ex, ey, ez)]
-            return [start_world, end_world]
+            try:
+                if _HAS_NAV_CYTHON:
+                    ccells = max(0.0, float(max_climb)) / max(1e-6, float(grid.cell_size))
+                    if not bool(_nb.los2d_climb(np.ascontiguousarray(walkable_2d, dtype=np.uint8),
+                                                np.ascontiguousarray(ground_gy), sx, sz, ex, ez, float(ccells))):
+                        raise ValueError
+            except ValueError:
+                pass
+            else:
+                self._path_cells = [(sx, sy, sz), (ex, ey, ez)]
+                self._raw_path_cells = [(sx, sy, sz), (ex, ey, ez)]
+                return [start_world, end_world]
 
         rects = self._decompose_walkable(walkable_2d, ground_gy)
         if not rects:
@@ -842,11 +1829,7 @@ class NavWorld:
                 t_max_z += t_delta_z
             else:
                 gx += step_x
-                gz += step_z
                 t_max_x += t_delta_x
-                t_max_z += t_delta_z
-                if not (0 <= gx < res and 0 <= gz < res) or not walkable[gx, gz]:
-                    return False
 
     @staticmethod
     def _flood_fill_ground(walkable: np.ndarray, ground_gy: np.ndarray,
