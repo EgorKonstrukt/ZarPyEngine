@@ -1604,6 +1604,13 @@ class ProjectPanel(QDockWidget):
                     continue
                 pane._detail_tree.setIconSize(QSize(icon_sz, icon_sz))
 
+    def _try_plugin_opener(self, path: str) -> bool:
+        try:
+            from core.foundation.plugin_manager import open_file_with_plugin
+            return bool(open_file_with_plugin(self._engine, path))
+        except Exception:
+            return False
+
     def _open_path(self, path: str):
         pane = self._active_pane()
         if os.path.isdir(path):
@@ -1614,6 +1621,8 @@ class ProjectPanel(QDockWidget):
             if self._status_bar:
                 self._status_bar.update_path(path)
         else:
+            if self._try_plugin_opener(path):
+                return
             ext = os.path.splitext(path)[1].lower()
             if ext == ".zpes":
                 self._engine.load_scene_async(path)
@@ -1768,6 +1777,8 @@ class ProjectPanel(QDockWidget):
             if self._status_bar:
                 self._status_bar.update_path(path)
         else:
+            if self._try_plugin_opener(path):
+                return
             ext = os.path.splitext(path)[1].lower()
             if ext == ".zpes":
                 self._engine.load_scene_async(path)
@@ -2359,6 +2370,8 @@ class NewScript(Component):
     def open_resource(self, path: str):
         path = self._resolve_resource_path(path)
         if os.path.isdir(path):
+            return
+        if self._try_plugin_opener(path):
             return
         ext = os.path.splitext(path)[1].lower()
         if ext == ".zpes":

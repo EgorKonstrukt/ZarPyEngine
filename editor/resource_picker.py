@@ -803,15 +803,18 @@ class ResourcePickerDialog(QDialog):
         self._start_populate("")
 
     def _parse_extensions(self, filter_str: str) -> tuple:
-        m = re.search(r'\(([^)]+)\)', filter_str)
-        if not m:
-            return ()
-        raw = m.group(1).strip()
-        if raw == "*" or not raw:
-            return ()
-        parts = raw.split()
-        exts = tuple(p if p.startswith(".") else p[1:] for p in parts if p != "*")
-        return exts
+        exts: list[str] = []
+        for m in re.finditer(r'\(([^)]+)\)', filter_str or ""):
+            raw = m.group(1).strip()
+            if raw == "*" or not raw:
+                continue
+            for p in raw.split():
+                if p == "*":
+                    continue
+                ext = p if p.startswith(".") else p[1:]
+                if ext and ext not in exts:
+                    exts.append(ext)
+        return tuple(exts)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)

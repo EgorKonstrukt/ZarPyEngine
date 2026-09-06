@@ -90,6 +90,7 @@ class PluginBase:
         self._docks: list[dict] = []
         self._toolbar_actions: list[dict] = []
         self._menu_items: list[dict] = []
+        self._file_openers: list[dict] = []
         self._components: list[type] = []
         self._patches = None
         self._bundled_library_dir: Optional[str] = None
@@ -255,6 +256,30 @@ class PluginBase:
             "shortcut": shortcut,
         })
 
+    # ---- File Opener Registration ----
+
+    def register_file_opener(self, extensions, handler: Callable[[str], Any],
+                             label: str = ""):
+        if isinstance(extensions, str):
+            extensions = [extensions]
+        normed = []
+        for ext in extensions:
+            e = str(ext).strip().lower()
+            if not e:
+                continue
+            if not e.startswith("."):
+                e = "." + e
+            if e not in normed:
+                normed.append(e)
+        if not normed or not callable(handler):
+            Logger.warning(f"[{self.NAME}] register_file_opener needs extensions and a handler")
+            return
+        self._file_openers.append({
+            "extensions": normed,
+            "handler": handler,
+            "label": label or self.NAME,
+        })
+
     # ---- Component Registration ----
 
     def register_component(self, comp_cls: type):
@@ -267,6 +292,33 @@ class PluginBase:
             return
         ComponentRegistry.register(comp_cls)
         self._components.append(comp_cls)
+
+
+def open_file_with_plugin(engine: Any, path: str) -> bool:
+    try:
+        reg = getattr(engine, "plugin_ui_registry", None) or {}
+    except Exception:
+        return False
+    ext = os.path.splitext(path or "")[1].lower()
+    if not ext:
+        return False
+    for opener in reg.get("file_openers", []):
+        try:
+            registered = [str(e).lower() for e in opener.get("extensions", [])]
+        except Exception:
+            continue
+        if ext not in registered:
+            continue
+        handler = opener.get("handler")
+        if not callable(handler):
+            continue
+        try:
+            handler(path)
+            return True
+        except Exception as e:
+            Logger.error(f"[Plugin] File opener '{opener.get('label', '?')}' failed for '{path}': {e}", e)
+            return False
+    return False
 
 
 class PluginManager:
@@ -305,6 +357,8 @@ class PluginManager:
             reg["toolbar_actions"].append({**action, "plugin": plugin_name})
         for item in plugin._menu_items:
             reg["menu_items"].append({**item, "plugin": plugin_name})
+        for opener in plugin._file_openers:
+            reg.setdefault("file_openers", []).append({**opener, "plugin": plugin_name})
 
     def _register_instances(self, mod, path: str, bundled_libs: Optional[str] = None,
                             manifest: Optional[dict] = None, payload_dir: Optional[str] = None) -> bool:

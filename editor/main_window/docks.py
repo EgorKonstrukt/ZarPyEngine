@@ -38,6 +38,7 @@ DOCK_ICONS = {
     "VersionControlDock": "fa5s.code-branch",
     "GuiEditorDock": "fa5s.object-group",
     "PlotterDock": "fa5s.chart-line",
+    "PluginDock_TrackerMusicPlugin_Tracker_Editor": "fa5s.music",
 }
 
 from editor.scene_viewport import SceneViewport

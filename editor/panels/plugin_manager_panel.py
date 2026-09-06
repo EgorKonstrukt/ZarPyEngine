@@ -72,6 +72,10 @@ class PluginManagerPanel(QDockWidget):
         self._build_btn.clicked.connect(self._build_plugin)
         self._build_btn.setStyleSheet("padding: 4px 12px;")
         btn_row.addWidget(self._build_btn)
+        self._package_btn = QPushButton("Package .zplugin...")
+        self._package_btn.clicked.connect(self._package_zplugin)
+        self._package_btn.setStyleSheet("padding: 4px 12px;")
+        btn_row.addWidget(self._package_btn)
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.clicked.connect(self._refresh)
         self._refresh_btn.setStyleSheet("padding: 4px 12px;")
@@ -124,7 +128,7 @@ class PluginManagerPanel(QDockWidget):
 
     def _load_plugin(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Plugin", "", "Python Plugin (*.py);;Native Plugin (*.dll *.so)"
+            self, "Load Plugin", "", "Python Plugin (*.py);;Native Plugin (*.dll *.so);;Plugin Package (*.zplugin)"
         )
         if path:
             try:
@@ -181,3 +185,7 @@ class PluginManagerPanel(QDockWidget):
         else:
             QMessageBox.critical(self, "Build Failed",
                                  "Plugin build failed. Check the console for details.")
+
+    def _package_zplugin(self):
+        from editor.panels.plugin_package_panel import show_package_dialog
+        show_package_dialog(self)

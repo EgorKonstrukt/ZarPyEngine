@@ -55,6 +55,7 @@ class Engine:
             "docks": [],
             "toolbar_actions": [],
             "menu_items": [],
+            "file_openers": [],
         }
         self._project_path: Optional[str] = None
         self._project_settings_path: Optional[str] = None
