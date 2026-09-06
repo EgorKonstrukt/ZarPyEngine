@@ -559,3 +559,269 @@ def pack_cascade_vps_for_gpu(list matrices, np.ndarray[FLOAT32_t, ndim=3] out_co
         for r in range(4):
             for c in range(4):
                 out_col_major[ci, c, r] = <FLOAT32_t>d[r, c]
+
+
+def prepare_shadow_flat(list renderable_shadow, dict radius_cache,
+                        np.ndarray[DTYPE_t, ndim=2] centers,
+                        np.ndarray[DTYPE_t, ndim=1] radii,
+                        np.ndarray[FLOAT32_t, ndim=2] mats,
+                        np.ndarray[np.uint64_t, ndim=1] mesh_ids):
+    cdef int n = len(renderable_shadow)
+    if n == 0:
+        return 0
+    cdef DTYPE_t[:, :] c_v = centers
+    cdef DTYPE_t[:] r_v = radii
+    cdef FLOAT32_t[:, :] m_v = mats
+    cdef unsigned long long[:] id_v = mesh_ids
+    cdef int i
+    cdef object entry, mesh, tr, wm, r_obj
+    cdef DTYPE_t[:, :] dv
+    cdef double sx, sy, sz, ms, r_val
+    for i in range(n):
+        entry = renderable_shadow[i]
+        mesh = entry[0]
+        tr = entry[1]
+        id_v[i] = <unsigned long long><void*>mesh
+        if tr is None:
+            c_v[i, 0] = 1e30
+            c_v[i, 1] = 1e30
+            c_v[i, 2] = 1e30
+            r_v[i] = 0.0
+            m_v[i, 0] = 0.0
+            m_v[i, 1] = 0.0
+            m_v[i, 2] = 0.0
+            m_v[i, 3] = 0.0
+            m_v[i, 4] = 0.0
+            m_v[i, 5] = 0.0
+            m_v[i, 6] = 0.0
+            m_v[i, 7] = 0.0
+            m_v[i, 8] = 0.0
+            m_v[i, 9] = 0.0
+            m_v[i, 10] = 0.0
+            m_v[i, 11] = 0.0
+            m_v[i, 12] = 0.0
+            m_v[i, 13] = 0.0
+            m_v[i, 14] = 0.0
+            m_v[i, 15] = 0.0
+            continue
+        if tr._dirty:
+            tr._update_world_matrix()
+        wm = tr._world_matrix
+        dv = wm._d
+        c_v[i, 0] = dv[3, 0]
+        c_v[i, 1] = dv[3, 1]
+        c_v[i, 2] = dv[3, 2]
+        sx = sqrt(dv[0, 0] * dv[0, 0] + dv[1, 0] * dv[1, 0] + dv[2, 0] * dv[2, 0])
+        sy = sqrt(dv[0, 1] * dv[0, 1] + dv[1, 1] * dv[1, 1] + dv[2, 1] * dv[2, 1])
+        sz = sqrt(dv[0, 2] * dv[0, 2] + dv[1, 2] * dv[1, 2] + dv[2, 2] * dv[2, 2])
+        ms = sx
+        if sy > ms:
+            ms = sy
+        if sz > ms:
+            ms = sz
+        r_obj = radius_cache.get(mesh)
+        if r_obj is None:
+            r_val = <double>float(mesh.bounding_radius)
+            radius_cache[mesh] = r_val
+        else:
+            r_val = <double>float(r_obj)
+        r_v[i] = ms * r_val
+        m_v[i, 0] = <FLOAT32_t>dv[0, 0]
+        m_v[i, 1] = <FLOAT32_t>dv[0, 1]
+        m_v[i, 2] = <FLOAT32_t>dv[0, 2]
+        m_v[i, 3] = <FLOAT32_t>dv[0, 3]
+        m_v[i, 4] = <FLOAT32_t>dv[1, 0]
+        m_v[i, 5] = <FLOAT32_t>dv[1, 1]
+        m_v[i, 6] = <FLOAT32_t>dv[1, 2]
+        m_v[i, 7] = <FLOAT32_t>dv[1, 3]
+        m_v[i, 8] = <FLOAT32_t>dv[2, 0]
+        m_v[i, 9] = <FLOAT32_t>dv[2, 1]
+        m_v[i, 10] = <FLOAT32_t>dv[2, 2]
+        m_v[i, 11] = <FLOAT32_t>dv[2, 3]
+        m_v[i, 12] = <FLOAT32_t>dv[3, 0]
+        m_v[i, 13] = <FLOAT32_t>dv[3, 1]
+        m_v[i, 14] = <FLOAT32_t>dv[3, 2]
+        m_v[i, 15] = <FLOAT32_t>dv[3, 3]
+    return n
+
+
+cdef inline void _planes_from_vp_f32(FLOAT32_t[:, :] vp, double pl[6][4]) nogil:
+    cdef double p0, p1, p2, p3, norm
+    cdef double c00 = vp[0, 0], c01 = vp[1, 0], c02 = vp[2, 0], c03 = vp[3, 0]
+    cdef double c10 = vp[0, 1], c11 = vp[1, 1], c12 = vp[2, 1], c13 = vp[3, 1]
+    cdef double c20 = vp[0, 2], c21 = vp[1, 2], c22 = vp[2, 2], c23 = vp[3, 2]
+    cdef double c30 = vp[0, 3], c31 = vp[1, 3], c32 = vp[2, 3], c33 = vp[3, 3]
+    p0 = c30 + c00; p1 = c31 + c01; p2 = c32 + c02; p3 = c33 + c03
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[0][0] = p0 / norm; pl[0][1] = p1 / norm; pl[0][2] = p2 / norm; pl[0][3] = p3 / norm
+    p0 = c30 - c00; p1 = c31 - c01; p2 = c32 - c02; p3 = c33 - c03
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[1][0] = p0 / norm; pl[1][1] = p1 / norm; pl[1][2] = p2 / norm; pl[1][3] = p3 / norm
+    p0 = c30 + c10; p1 = c31 + c11; p2 = c32 + c12; p3 = c33 + c13
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[2][0] = p0 / norm; pl[2][1] = p1 / norm; pl[2][2] = p2 / norm; pl[2][3] = p3 / norm
+    p0 = c30 - c10; p1 = c31 - c11; p2 = c32 - c12; p3 = c33 - c13
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[3][0] = p0 / norm; pl[3][1] = p1 / norm; pl[3][2] = p2 / norm; pl[3][3] = p3 / norm
+    p0 = c30 + c20; p1 = c31 + c21; p2 = c32 + c22; p3 = c33 + c23
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[4][0] = p0 / norm; pl[4][1] = p1 / norm; pl[4][2] = p2 / norm; pl[4][3] = p3 / norm
+    p0 = c30 - c20; p1 = c31 - c21; p2 = c32 - c22; p3 = c33 - c23
+    norm = sqrt(p0 * p0 + p1 * p1 + p2 * p2)
+    if norm < 1e-10:
+        norm = 1.0
+    pl[5][0] = p0 / norm; pl[5][1] = p1 / norm; pl[5][2] = p2 / norm; pl[5][3] = p3 / norm
+
+
+def cull_flat(np.ndarray[DTYPE_t, ndim=2] centers,
+              np.ndarray[DTYPE_t, ndim=1] radii,
+              np.ndarray[FLOAT32_t, ndim=2] vp,
+              np.ndarray[np.intp_t, ndim=1] out):
+    cdef int n = centers.shape[0]
+    if n == 0:
+        return 0
+    cdef DTYPE_t[:, :] c_v = centers
+    cdef DTYPE_t[:] r_v = radii
+    cdef FLOAT32_t[:, :] vp_v = vp
+    cdef np.intp_t[::1] o_v = out
+    cdef double pl[6][4]
+    _planes_from_vp_f32(vp_v, pl)
+    cdef int i, count = 0
+    cdef double cx, cy, cz, rad, dist
+    with nogil:
+        for i in range(n):
+            cx = c_v[i, 0]
+            cy = c_v[i, 1]
+            cz = c_v[i, 2]
+            rad = r_v[i]
+            dist = pl[0][0] * cx + pl[0][1] * cy + pl[0][2] * cz + pl[0][3]
+            if dist < -rad:
+                continue
+            dist = pl[1][0] * cx + pl[1][1] * cy + pl[1][2] * cz + pl[1][3]
+            if dist < -rad:
+                continue
+            dist = pl[2][0] * cx + pl[2][1] * cy + pl[2][2] * cz + pl[2][3]
+            if dist < -rad:
+                continue
+            dist = pl[3][0] * cx + pl[3][1] * cy + pl[3][2] * cz + pl[3][3]
+            if dist < -rad:
+                continue
+            dist = pl[4][0] * cx + pl[4][1] * cy + pl[4][2] * cz + pl[4][3]
+            if dist < -rad:
+                continue
+            dist = pl[5][0] * cx + pl[5][1] * cy + pl[5][2] * cz + pl[5][3]
+            if dist < -rad:
+                continue
+            o_v[count] = i
+            count += 1
+    return count
+
+
+def cull_flat_min(np.ndarray[DTYPE_t, ndim=2] centers,
+                  np.ndarray[DTYPE_t, ndim=1] radii,
+                  np.ndarray[FLOAT32_t, ndim=2] vp,
+                  double min_radius,
+                  np.ndarray[np.intp_t, ndim=1] out):
+    cdef int n = centers.shape[0]
+    if n == 0:
+        return 0
+    cdef DTYPE_t[:, :] c_v = centers
+    cdef DTYPE_t[:] r_v = radii
+    cdef FLOAT32_t[:, :] vp_v = vp
+    cdef np.intp_t[::1] o_v = out
+    cdef double pl[6][4]
+    _planes_from_vp_f32(vp_v, pl)
+    cdef int i, count = 0
+    cdef double cx, cy, cz, rad, dist
+    with nogil:
+        for i in range(n):
+            rad = r_v[i]
+            if rad < min_radius:
+                continue
+            cx = c_v[i, 0]
+            cy = c_v[i, 1]
+            cz = c_v[i, 2]
+            dist = pl[0][0] * cx + pl[0][1] * cy + pl[0][2] * cz + pl[0][3]
+            if dist < -rad:
+                continue
+            dist = pl[1][0] * cx + pl[1][1] * cy + pl[1][2] * cz + pl[1][3]
+            if dist < -rad:
+                continue
+            dist = pl[2][0] * cx + pl[2][1] * cy + pl[2][2] * cz + pl[2][3]
+            if dist < -rad:
+                continue
+            dist = pl[3][0] * cx + pl[3][1] * cy + pl[3][2] * cz + pl[3][3]
+            if dist < -rad:
+                continue
+            dist = pl[4][0] * cx + pl[4][1] * cy + pl[4][2] * cz + pl[4][3]
+            if dist < -rad:
+                continue
+            dist = pl[5][0] * cx + pl[5][1] * cy + pl[5][2] * cz + pl[5][3]
+            if dist < -rad:
+                continue
+            o_v[count] = i
+            count += 1
+    return count
+
+
+def cull_flat_range_min(np.ndarray[DTYPE_t, ndim=2] centers,
+                        np.ndarray[DTYPE_t, ndim=1] radii,
+                        np.ndarray[FLOAT32_t, ndim=2] vp,
+                        double lx, double ly, double lz,
+                        double range_sq, double min_radius,
+                        np.ndarray[np.intp_t, ndim=1] out):
+    cdef int n = centers.shape[0]
+    if n == 0:
+        return 0
+    cdef DTYPE_t[:, :] c_v = centers
+    cdef DTYPE_t[:] r_v = radii
+    cdef FLOAT32_t[:, :] vp_v = vp
+    cdef np.intp_t[::1] o_v = out
+    cdef double pl[6][4]
+    _planes_from_vp_f32(vp_v, pl)
+    cdef int i, count = 0
+    cdef double cx, cy, cz, rad, dist, dx, dy, dz
+    with nogil:
+        for i in range(n):
+            cx = c_v[i, 0]
+            cy = c_v[i, 1]
+            cz = c_v[i, 2]
+            dx = cx - lx
+            dy = cy - ly
+            dz = cz - lz
+            if dx * dx + dy * dy + dz * dz > range_sq:
+                continue
+            rad = r_v[i]
+            if rad < min_radius:
+                continue
+            dist = pl[0][0] * cx + pl[0][1] * cy + pl[0][2] * cz + pl[0][3]
+            if dist < -rad:
+                continue
+            dist = pl[1][0] * cx + pl[1][1] * cy + pl[1][2] * cz + pl[1][3]
+            if dist < -rad:
+                continue
+            dist = pl[2][0] * cx + pl[2][1] * cy + pl[2][2] * cz + pl[2][3]
+            if dist < -rad:
+                continue
+            dist = pl[3][0] * cx + pl[3][1] * cy + pl[3][2] * cz + pl[3][3]
+            if dist < -rad:
+                continue
+            dist = pl[4][0] * cx + pl[4][1] * cy + pl[4][2] * cz + pl[4][3]
+            if dist < -rad:
+                continue
+            dist = pl[5][0] * cx + pl[5][1] * cy + pl[5][2] * cz + pl[5][3]
+            if dist < -rad:
+                continue
+            o_v[count] = i
+            count += 1
+    return count

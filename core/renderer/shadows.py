@@ -18,6 +18,39 @@ from core.renderer.mesh_data import MeshData
 _INSTANCE_ATTRS = ("in_model0", "in_model1", "in_model2", "in_model3")
 MAX_POINT_SHADOWS = 4
 MAX_SPOT_SHADOWS = 4
+_POINT_FACE_DIRS = (
+    (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0), (0.0, -1.0, 0.0),
+    (0.0, 0.0, 1.0), (0.0, 0.0, -1.0),
+)
+_POINT_FACE_UPS = (
+    (0.0, -1.0, 0.0), (0.0, -1.0, 0.0),
+    (0.0, 0.0, 1.0), (0.0, 0.0, -1.0),
+    (0.0, -1.0, 0.0), (0.0, -1.0, 0.0),
+)
+
+
+def _tr_pos_xyz(tr):
+    d = tr.world_matrix._d
+    return float(d[3, 0]), float(d[3, 1]), float(d[3, 2])
+
+
+def _tr_fwd_xyz(tr):
+    d = tr.world_matrix._d
+    fx = -float(d[2, 0])
+    fy = -float(d[2, 1])
+    fz = -float(d[2, 2])
+    inv = 1.0 / max(1e-12, math.sqrt(fx * fx + fy * fy + fz * fz))
+    return fx * inv, fy * inv, fz * inv
+
+
+def _tr_up_xyz(tr):
+    d = tr.world_matrix._d
+    ux = float(d[1, 0])
+    uy = float(d[1, 1])
+    uz = float(d[1, 2])
+    inv = 1.0 / max(1e-12, math.sqrt(ux * ux + uy * uy + uz * uz))
+    return ux * inv, uy * inv, uz * inv
 
 try:
     from core._shadow_batch import (
@@ -34,10 +67,20 @@ try:
         pack_point_vps_f32,
         build_shadow_groups as cy_build_shadow_groups,
         face_cull_point_shadow,
+        prepare_shadow_flat,
+        cull_flat,
+        cull_flat_min,
+        cull_flat_range_min,
     )
     _HAS_CYTHON = True
 except ImportError:
     _HAS_CYTHON = False
+
+
+try:
+    from core.math_helpers import mat4_inv_fast as _mat4_inv_fast
+except ImportError:
+    _mat4_inv_fast = None
 
 
 def _shadow_supports_instancing(prog: moderngl.Program) -> bool:
@@ -161,6 +204,31 @@ class ShadowRenderer:
         self._import_cache_mtime: dict[str, float] = {}
         self._shadow_cache_valid: bool = False
         self._type_flags: dict = {'directional': True, 'point': True, 'spot': True, 'area': True}
+        self._flat_cap: int = 0
+        self._flat_n: int = 0
+        self._flat_centers = np.zeros((0, 3), dtype=np.float64)
+        self._flat_radii = np.zeros(0, dtype=np.float64)
+        self._flat_mats = np.zeros((0, 16), dtype=np.float32)
+        self._flat_mesh_ids = np.zeros(0, dtype=np.uint64)
+        self._flat_out = np.zeros(0, dtype=np.intp)
+        self._flat_mesh_map: dict = {}
+        self._mesh_radius_cache: dict = {}
+        self._instancing_cache: dict[int, bool] = {}
+        self._point_proj_cache: dict = {}
+        self._spot_proj_cache: dict = {}
+        self._last_view = np.zeros((4, 4), dtype=np.float64)
+        self._last_view_valid: bool = False
+        self._last_light_dir_xyz: tuple = (0.0, 0.0, 0.0)
+        self._cascade_matrices_bytes: bytes = b""
+        self._cascade_splits_bytes: bytes = b""
+        self._point_vps_bytes: bytes = b""
+        self._point_pos_bytes: bytes = b""
+        self._point_range_bytes: bytes = b""
+        self._point_idx_bytes: bytes = b""
+        self._spot_vps_bytes: bytes = b""
+        self._spot_idx_bytes: bytes = b""
+        self._area_vp_bytes: bytes = b""
+        self._area_nearfar_bytes: bytes = b""
         self._create_csm_resources()
 
     def update_settings(self, shadow_resolution: int = None, shadow_distance: float = None,
@@ -454,35 +522,116 @@ class ShadowRenderer:
         if self._model_pack_buf is not None and self._model_pack_buf_cap >= needed_count * 16:
             return
         cap = max(64, needed_count) * 16
-        self._model_pack_buf = np.zeros(cap, dtype=np.float32)
+        self._model_pack_buf = np.empty(cap, dtype=np.float32)
         self._model_pack_buf_cap = cap
 
-    def _build_shadow_instance_vbo(self, key: tuple[int, int],
-                                   model_matrices: list) -> moderngl.Buffer:
-        fp = (len(model_matrices), tuple(id(m) for m in model_matrices))
-        cached = self._shadow_inst_vbo.get(key)
-        if cached is not None and self._shadow_inst_vbo_fp.get(key) == fp:
-            return cached
-        n = len(model_matrices)
-        self._ensure_model_pack_buf(n)
+    def _ensure_flat_cap(self, n: int):
+        if n <= self._flat_cap:
+            return
+        cap = max(64, int(n * 1.5) + 8)
+        self._flat_centers = np.empty((cap, 3), dtype=np.float64)
+        self._flat_radii = np.empty(cap, dtype=np.float64)
+        self._flat_mats = np.empty((cap, 16), dtype=np.float32)
+        self._flat_mesh_ids = np.empty(cap, dtype=np.uint64)
+        self._flat_out = np.empty(cap, dtype=np.intp)
+        self._flat_cap = cap
+
+    def _prepare_flat(self, renderable_shadow: list) -> int:
+        n = len(renderable_shadow)
+        if n == 0:
+            self._flat_n = 0
+            self._flat_mesh_map = {}
+            return 0
+        self._ensure_flat_cap(n)
         if _HAS_CYTHON:
-            pack_model_matrices_f32(model_matrices, self._model_pack_buf)
-            data = self._model_pack_buf[:n * 16].tobytes()
-        else:
             try:
-                from core._render_utils import batch_mat4_to_f32_flat
-                data = batch_mat4_to_f32_flat(model_matrices).tobytes()
-            except ImportError:
-                data = Mat4.batch_to_f32(model_matrices).tobytes()
-        if cached is not None:
-            if cached.size >= len(data):
+                prepare_shadow_flat(renderable_shadow, self._mesh_radius_cache,
+                                    self._flat_centers, self._flat_radii,
+                                    self._flat_mats, self._flat_mesh_ids)
+            except Exception:
+                self._prepare_flat_numpy(renderable_shadow, n)
+        else:
+            self._prepare_flat_numpy(renderable_shadow, n)
+        centers = self._flat_centers
+        radii = self._flat_radii
+        mats = self._flat_mats
+        ids = self._flat_mesh_ids
+        mesh_map: dict = {}
+        for i in range(n):
+            mid = int(ids[i])
+            if mid not in mesh_map:
                 try:
-                    cached.write(data)
-                    self._shadow_inst_vbo_fp[key] = fp
-                    return cached
+                    mesh_map[mid] = renderable_shadow[i][0]
                 except Exception:
                     pass
-            cached.release()
+        self._flat_mesh_map = mesh_map
+        self._flat_n = n
+        return n
+
+    def _prepare_flat_numpy(self, renderable_shadow: list, n: int):
+        centers = self._flat_centers
+        radii = self._flat_radii
+        mats = self._flat_mats
+        ids = self._flat_mesh_ids
+        rc = self._mesh_radius_cache
+        for i in range(n):
+            entry = renderable_shadow[i]
+            mesh = entry[0]
+            tr = entry[1]
+            ids[i] = id(mesh)
+            if tr is None:
+                centers[i, 0] = 1e30
+                centers[i, 1] = 1e30
+                centers[i, 2] = 1e30
+                radii[i] = 0.0
+                mats[i, :] = 0.0
+                continue
+            wm = tr.world_matrix._d
+            centers[i, 0] = wm[3, 0]
+            centers[i, 1] = wm[3, 1]
+            centers[i, 2] = wm[3, 2]
+            sx = math.sqrt(wm[0, 0] * wm[0, 0] + wm[1, 0] * wm[1, 0] + wm[2, 0] * wm[2, 0])
+            sy = math.sqrt(wm[0, 1] * wm[0, 1] + wm[1, 1] * wm[1, 1] + wm[2, 1] * wm[2, 1])
+            sz = math.sqrt(wm[0, 2] * wm[0, 2] + wm[1, 2] * wm[1, 2] + wm[2, 2] * wm[2, 2])
+            ms = sx
+            if sy > ms:
+                ms = sy
+            if sz > ms:
+                ms = sz
+            br = rc.get(mesh)
+            if br is None:
+                try:
+                    br = float(mesh.bounding_radius)
+                except Exception:
+                    br = 1.0
+                rc[mesh] = br
+            radii[i] = ms * br
+            m = wm.astype(np.float32, copy=False).reshape(-1)
+            mats[i, :] = m
+
+    def _supports_instancing_cached(self, prog) -> bool:
+        key = id(prog)
+        v = self._instancing_cache.get(key)
+        if v is not None:
+            return v
+        v = _shadow_supports_instancing(prog)
+        self._instancing_cache[key] = v
+        return v
+
+    def _upload_instanced_mats(self, key: tuple[int, int], mats_slice: np.ndarray) -> moderngl.Buffer:
+        data = mats_slice.tobytes()
+        cached = self._shadow_inst_vbo.get(key)
+        if cached is not None:
+            try:
+                if cached.size >= len(data):
+                    cached.write(data)
+                    return cached
+            except Exception:
+                pass
+            try:
+                cached.release()
+            except Exception:
+                pass
             self._shadow_inst_vbo.pop(key, None)
             vao_del = self._shadow_vao_cache.pop(key, None)
             if vao_del is not None:
@@ -492,7 +641,51 @@ class ShadowRenderer:
                     pass
         vbo = self._ctx.buffer(data)
         self._shadow_inst_vbo[key] = vbo
-        self._shadow_inst_vbo_fp[key] = fp
+        return vbo
+
+    def _build_shadow_instance_vbo(self, key: tuple[int, int],
+                                   model_matrices) -> moderngl.Buffer:
+        if isinstance(model_matrices, np.ndarray):
+            return self._upload_instanced_mats(key, np.ascontiguousarray(model_matrices, dtype=np.float32))
+        n = len(model_matrices)
+        self._ensure_model_pack_buf(n)
+        if _HAS_CYTHON:
+            try:
+                pack_model_matrices_f32(model_matrices, self._model_pack_buf)
+                data = self._model_pack_buf[:n * 16].tobytes()
+            except Exception:
+                try:
+                    from core._render_utils import batch_mat4_to_f32_flat
+                    data = batch_mat4_to_f32_flat(model_matrices).tobytes()
+                except ImportError:
+                    data = Mat4.batch_to_f32(model_matrices).tobytes()
+        else:
+            try:
+                from core._render_utils import batch_mat4_to_f32_flat
+                data = batch_mat4_to_f32_flat(model_matrices).tobytes()
+            except ImportError:
+                data = Mat4.batch_to_f32(model_matrices).tobytes()
+        cached = self._shadow_inst_vbo.get(key)
+        if cached is not None:
+            try:
+                if cached.size >= len(data):
+                    cached.write(data)
+                    return cached
+            except Exception:
+                pass
+            try:
+                cached.release()
+            except Exception:
+                pass
+            self._shadow_inst_vbo.pop(key, None)
+            vao_del = self._shadow_vao_cache.pop(key, None)
+            if vao_del is not None:
+                try:
+                    vao_del.release()
+                except Exception:
+                    pass
+        vbo = self._ctx.buffer(data)
+        self._shadow_inst_vbo[key] = vbo
         return vbo
 
     def _get_shadow_vao(self, prog: moderngl.Program, mesh,
@@ -514,7 +707,138 @@ class ShadowRenderer:
         self._prog_member_cache[key] = names
         return names
 
+    def _cull_flat_count(self, vp: np.ndarray) -> int:
+        n = self._flat_n
+        if n == 0:
+            return 0
+        if _HAS_CYTHON:
+            try:
+                return int(cull_flat(self._flat_centers[:n], self._flat_radii[:n], vp, self._flat_out[:n]))
+            except Exception:
+                pass
+        from core.renderer.culling import cpu_frustum_cull
+        try:
+            vis = cpu_frustum_cull(self._flat_centers[:n], self._flat_radii[:n], np.asarray(vp, dtype=np.float64))
+            m = len(vis)
+            self._flat_out[:m] = vis
+            return m
+        except Exception:
+            return n
+
+    def _cull_flat_min_count(self, vp: np.ndarray, min_radius: float) -> int:
+        n = self._flat_n
+        if n == 0:
+            return 0
+        if min_radius <= 0.0:
+            return self._cull_flat_count(vp)
+        if _HAS_CYTHON:
+            try:
+                return int(cull_flat_min(self._flat_centers[:n], self._flat_radii[:n], vp, float(min_radius), self._flat_out[:n]))
+            except Exception:
+                pass
+        return self._cull_flat_count(vp)
+
+    def _cull_flat_range_count(self, vp: np.ndarray, lx: float, ly: float, lz: float, range_sq: float, min_radius: float = 0.0) -> int:
+        n = self._flat_n
+        if n == 0:
+            return 0
+        if _HAS_CYTHON:
+            try:
+                return int(cull_flat_range_min(self._flat_centers[:n], self._flat_radii[:n], vp, float(lx), float(ly), float(lz), float(range_sq), float(min_radius), self._flat_out[:n]))
+            except Exception:
+                pass
+        c = self._flat_centers[:n]
+        dx = c[:, 0] - lx
+        dy = c[:, 1] - ly
+        dz = c[:, 2] - lz
+        mask = (dx * dx + dy * dy + dz * dz) <= range_sq
+        if min_radius > 0.0:
+            mask = mask & (self._flat_radii[:n] >= min_radius)
+        idx = np.nonzero(mask)[0].astype(np.intp, copy=False)
+        if idx.size == 0:
+            return 0
+        from core.renderer.culling import cpu_frustum_cull
+        try:
+            vis = cpu_frustum_cull(c[idx, :], self._flat_radii[:n][idx], np.asarray(vp, dtype=np.float64))
+            mapped = idx[vis]
+            m = len(mapped)
+            self._flat_out[:m] = mapped
+            return m
+        except Exception:
+            m = len(idx)
+            self._flat_out[:m] = idx
+            return m
+
+    def _draw_flat_visible(self, vp: np.ndarray, fbo, resolution: int, visible_count: int):
+        if visible_count <= 0:
+            return
+        n = self._flat_n
+        vis = self._flat_out[:visible_count]
+        mesh_ids = self._flat_mesh_ids[:n]
+        vis_mesh = mesh_ids[vis]
+        uniq = np.unique(vis_mesh)
+        prog = self._prog
+        supports_instancing = self._supports_instancing_cached(prog)
+        names = self._uniform_names(prog)
+        use_inst = "u_use_instancing" in names
+        fbo.clear(depth=1.0)
+        fbo.use()
+        self._ctx.viewport = (0, 0, resolution, resolution)
+        self._ctx.enable(moderngl.DEPTH_TEST)
+        self._ctx.depth_mask = True
+        self._ctx.disable(moderngl.CULL_FACE)
+        prog["u_light_vp"].write(vp.tobytes())
+        mats = self._flat_mats
+        mmap = self._flat_mesh_map
+        prog_id = id(prog)
+        if supports_instancing:
+            if use_inst:
+                prog["u_use_instancing"].value = 1
+            for mid in uniq:
+                mid_i = int(mid)
+                mesh = mmap.get(mid_i)
+                if mesh is None:
+                    continue
+                sel = vis[vis_mesh == mid_i]
+                if sel.size == 0:
+                    continue
+                chunk = mats[sel]
+                key = (mid_i, prog_id)
+                vbo = self._upload_instanced_mats(key, chunk)
+                vao = self._get_shadow_vao(prog, mesh, vbo)
+                vao.render(instances=int(sel.size))
+        else:
+            if use_inst:
+                prog["u_use_instancing"].value = 0
+            umodel = "u_model" in names
+            for mid in uniq:
+                mid_i = int(mid)
+                mesh = mmap.get(mid_i)
+                if mesh is None:
+                    continue
+                sel = vis[vis_mesh == mid_i]
+                if sel.size == 0:
+                    continue
+                if umodel:
+                    for fi in sel:
+                        prog["u_model"].write(mats[int(fi)].tobytes())
+                        mesh.render(prog)
+                else:
+                    for _fi in sel:
+                        mesh.render(prog)
+        self._ctx.enable(moderngl.CULL_FACE)
+
     def render_geometry(self, vp: np.ndarray, fbo, renderable_shadow: list, resolution: int = 1024):
+        if _HAS_CYTHON and isinstance(renderable_shadow, list) and len(renderable_shadow) > 32:
+            try:
+                self._prepare_flat(renderable_shadow)
+                vp32 = np.asarray(vp, dtype=np.float32)
+                cnt = self._cull_flat_count(vp32)
+                if cnt:
+                    self._draw_flat_visible(vp32, fbo, resolution, cnt)
+                return
+            except Exception:
+                pass
         groups = self._build_shadow_groups(renderable_shadow)
         self._render_geometry_with_groups(vp, fbo, groups, resolution)
 
@@ -546,24 +870,51 @@ class ShadowRenderer:
         self._ctx.disable(moderngl.CULL_FACE)
         prog = self._prog
         prog["u_light_vp"].write(vp.tobytes())
-        supports_instancing = _shadow_supports_instancing(prog)
-        for mesh_id, group in groups.items():
-            mesh, _ = group[0]
-            n = len(group)
-            if supports_instancing:
-                key = (mesh_id, id(prog))
-                model_mats = [tr.world_matrix for _, tr in group]
+        supports_instancing = self._supports_instancing_cached(prog)
+        names = self._uniform_names(prog)
+        use_inst = "u_use_instancing" in names
+        umodel = "u_model" in names
+        prog_id = id(prog)
+        if supports_instancing:
+            if use_inst:
+                prog["u_use_instancing"].value = 1
+            for mesh_id, group in groups.items():
+                mesh, _ = group[0]
+                n = len(group)
+                if n == 1:
+                    tr = group[0][1]
+                    try:
+                        wm = tr.world_matrix
+                    except Exception:
+                        continue
+                    key = (mesh_id, prog_id)
+                    vbo = self._build_shadow_instance_vbo(key, [wm])
+                    vao = self._get_shadow_vao(prog, mesh, vbo)
+                    vao.render(instances=1)
+                    continue
+                key = (mesh_id, prog_id)
+                try:
+                    model_mats = [tr.world_matrix for _, tr in group]
+                except Exception:
+                    continue
                 vbo = self._build_shadow_instance_vbo(key, model_mats)
                 vao = self._get_shadow_vao(prog, mesh, vbo)
-                if "u_use_instancing" in prog:
-                    prog["u_use_instancing"].value = 1
                 vao.render(instances=n)
-            else:
-                if "u_use_instancing" in prog:
-                    prog["u_use_instancing"].value = 0
-                for _, tr in group:
-                    prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
-                    mesh.render(prog)
+        else:
+            if use_inst:
+                prog["u_use_instancing"].value = 0
+            for _mesh_id, group in groups.items():
+                mesh, _ = group[0]
+                if umodel:
+                    for _, tr in group:
+                        try:
+                            prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
+                        except Exception:
+                            continue
+                        mesh.render(prog)
+                else:
+                    for _, tr in group:
+                        mesh.render(prog)
         self._ctx.enable(moderngl.CULL_FACE)
 
     def collect_shadow_data(self, scene, meshes: dict) -> list[tuple]:
@@ -648,8 +999,16 @@ class ShadowRenderer:
         self._pending_scene = scene
         self._skinning_cache = skinning_cache
         if not renderable_shadow:
+            self._flat_n = 0
+            self._flat_mesh_map = {}
             self.reset_shadow_state()
+            self._cache_uniform_bytes()
             return {}
+        try:
+            self._prepare_flat(renderable_shadow)
+        except Exception:
+            self._flat_n = 0
+            self._flat_mesh_map = {}
         shadow_groups = self._build_shadow_groups(renderable_shadow)
         flags = self._type_flags
         if flags.get('directional', True):
@@ -662,22 +1021,37 @@ class ShadowRenderer:
                 self._cascade_splits = [0.0] * 4
         else:
             self._cascade_splits = [0.0] * 4
-
-        inv = view_mat.inverted()
-        cam_pos = Vec3(float(inv._d[3, 0]), float(inv._d[3, 1]), float(inv._d[3, 2]))
-
+        try:
+            vd = view_mat._d
+            if _mat4_inv_fast is not None:
+                inv_d = _mat4_inv_fast(np.ascontiguousarray(vd, dtype=np.float64))
+            else:
+                inv_d = np.linalg.inv(vd)
+            cam_x = float(inv_d[3, 0])
+            cam_y = float(inv_d[3, 1])
+            cam_z = float(inv_d[3, 2])
+        except Exception:
+            cam_x = 0.0
+            cam_y = 0.0
+            cam_z = 0.0
         if not self._point_shadow_maps:
             self._create_point_shadow_resources()
         if flags.get('point', True):
-            point_candidates = [
-                (l, lt, lt.position.distance_to(cam_pos))
-                for l, lt in lights
-                if l.light_type == LightType.POINT and l.cast_shadows
-            ]
-            point_candidates.sort(key=lambda x: x[2])
-            self._point_shadow_count = min(len(point_candidates), MAX_POINT_SHADOWS)
+            pc = []
+            for l, lt in lights:
+                if l.light_type == LightType.POINT and l.cast_shadows:
+                    try:
+                        px, py, pz = _tr_pos_xyz(lt)
+                    except Exception:
+                        continue
+                    dx = px - cam_x
+                    dy = py - cam_y
+                    dz = pz - cam_z
+                    pc.append((l, lt, dx * dx + dy * dy + dz * dz))
+            pc.sort(key=lambda x: x[2])
+            self._point_shadow_count = min(len(pc), MAX_POINT_SHADOWS)
             for slot in range(self._point_shadow_count):
-                l, lt, _ = point_candidates[slot]
+                l, lt, _ = pc[slot]
                 self._render_point_shadow_for_slot(slot, l, lt, shadow_groups, lights)
             for slot in range(self._point_shadow_count, MAX_POINT_SHADOWS):
                 self._point_shadow_light_indices[slot] = -1
@@ -687,19 +1061,24 @@ class ShadowRenderer:
             self._has_point_shadow = False
             for slot in range(MAX_POINT_SHADOWS):
                 self._point_shadow_light_indices[slot] = -1
-
         if not self._spot_shadow_maps:
             self._create_spot_shadow_resources()
         if flags.get('spot', True):
-            spot_candidates = [
-                (l, lt, lt.position.distance_to(cam_pos))
-                for l, lt in lights
-                if l.light_type == LightType.SPOT and l.cast_shadows
-            ]
-            spot_candidates.sort(key=lambda x: x[2])
-            self._spot_shadow_count = min(len(spot_candidates), MAX_SPOT_SHADOWS)
+            sc = []
+            for l, lt in lights:
+                if l.light_type == LightType.SPOT and l.cast_shadows:
+                    try:
+                        px, py, pz = _tr_pos_xyz(lt)
+                    except Exception:
+                        continue
+                    dx = px - cam_x
+                    dy = py - cam_y
+                    dz = pz - cam_z
+                    sc.append((l, lt, dx * dx + dy * dy + dz * dz))
+            sc.sort(key=lambda x: x[2])
+            self._spot_shadow_count = min(len(sc), MAX_SPOT_SHADOWS)
             for slot in range(self._spot_shadow_count):
-                l, lt, _ = spot_candidates[slot]
+                l, lt, _ = sc[slot]
                 self._render_spot_shadow_for_slot(slot, l, lt, shadow_groups, lights)
             for slot in range(self._spot_shadow_count, MAX_SPOT_SHADOWS):
                 self._spot_shadow_light_indices[slot] = -1
@@ -709,13 +1088,19 @@ class ShadowRenderer:
             self._has_spot_shadow = False
             for slot in range(MAX_SPOT_SHADOWS):
                 self._spot_shadow_light_indices[slot] = -1
-
         if flags.get('area', True):
             best_area = None
             best_area_dist = float('inf')
             for l, lt in lights:
                 if l.light_type == LightType.AREA and l.cast_shadows:
-                    d = lt.position.distance_to(cam_pos)
+                    try:
+                        px, py, pz = _tr_pos_xyz(lt)
+                    except Exception:
+                        continue
+                    dx = px - cam_x
+                    dy = py - cam_y
+                    dz = pz - cam_z
+                    d = dx * dx + dy * dy + dz * dz
                     if d < best_area_dist:
                         best_area_dist = d
                         best_area = (l, lt)
@@ -725,6 +1110,10 @@ class ShadowRenderer:
                 self._has_area_shadow = False
         else:
             self._has_area_shadow = False
+        try:
+            self._cache_uniform_bytes()
+        except Exception:
+            pass
         return shadow_groups
 
     def reset_shadow_state(self):
@@ -775,26 +1164,66 @@ class ShadowRenderer:
 
     def _render_directional_shadow(self, sun_transform, shadow_groups,
                                    cam_near, cam_far, cam_fov, aspect, view_mat):
-        light_dir = sun_transform.forward.normalized()
-        ld_x, ld_y, ld_z = light_dir.x, light_dir.y, light_dir.z
-        inv_view = np.linalg.inv(view_mat._d)
+        try:
+            ld_x, ld_y, ld_z = _tr_fwd_xyz(sun_transform)
+        except Exception:
+            try:
+                light_dir = sun_transform.forward.normalized()
+                ld_x, ld_y, ld_z = light_dir.x, light_dir.y, light_dir.z
+            except Exception:
+                return
+        try:
+            vd = view_mat._d
+            if _mat4_inv_fast is not None:
+                inv_view = _mat4_inv_fast(np.ascontiguousarray(vd, dtype=np.float64))
+            else:
+                inv_view = np.linalg.inv(vd)
+        except Exception:
+            inv_view = np.linalg.inv(view_mat._d)
         splits = self._compute_cascade_splits(cam_near, cam_far)
         self._cascade_splits = splits
         near_z = max(cam_near, 0.01)
         prog = self._prog
-        prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
-        first_cascade = True
+        try:
+            prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
+        except Exception:
+            pass
         self._temporal_frame += 1
-        view_hash = hash(view_mat._d.tobytes())
-        light_hash = hash((round(ld_x,3), round(ld_y,3), round(ld_z,3)))
-        cam_moved = view_hash != self._last_cam_view_hash or light_hash != getattr(self, '_last_light_hash', None)
+        try:
+            lv = self._last_view
+            cam_moved = True
+            if self._last_view_valid and lv.shape == vd.shape:
+                if bool(np.array_equal(lv, vd)):
+                    px, py, pz = self._last_light_dir_xyz
+                    if abs(px - ld_x) < 0.002 and abs(py - ld_y) < 0.002 and abs(pz - ld_z) < 0.002:
+                        cam_moved = False
+            try:
+                np.copyto(self._last_view, vd)
+            except Exception:
+                try:
+                    self._last_view = np.array(vd, dtype=np.float64, copy=True)
+                except Exception:
+                    pass
+            self._last_view_valid = True
+            self._last_light_dir_xyz = (ld_x, ld_y, ld_z)
+        except Exception:
+            cam_moved = True
         if cam_moved:
             self._shadow_cache_valid = False
-        self._last_cam_view_hash = view_hash
-        self._last_light_hash = light_hash
-
+        use_flat = self._flat_n > 0
+        try:
+            light_dir_v = Vec3(ld_x, ld_y, ld_z)
+        except Exception:
+            light_dir_v = None
+        first_cascade = True
+        supports_instancing = self._supports_instancing_cached(prog)
+        names = self._uniform_names(prog)
+        use_inst = "u_use_instancing" in names
+        umodel = "u_model" in names
+        prog_id = id(prog)
+        mmap = self._flat_mesh_map
         for ci in range(self._cascade_count):
-            res = self._cascade_resolutions[ci] if ci < len(self._cascade_resolutions) else shadow_res
+            res = self._cascade_resolutions[ci] if ci < len(self._cascade_resolutions) else self._shadow_resolution
             if not cam_moved:
                 if ci == 3 and (self._temporal_frame % 3) != 0:
                     near_z = splits[ci]
@@ -803,83 +1232,127 @@ class ShadowRenderer:
                     near_z = splits[ci]
                     continue
             if _HAS_CYTHON:
-                compute_frustum_corners_out(
-                    near_z, splits[ci], cam_fov, aspect,
-                    inv_view, self._frustum_corners_buf
-                )
-                build_directional_cascade_fast(
-                    ld_x, ld_y, ld_z,
-                    self._frustum_corners_buf, splits[ci] - near_z, res,
-                    self._cascade_vps_raw[ci]
-                )
-                np.copyto(self._vp_f32_buf, self._cascade_vps_raw[ci])
+                try:
+                    compute_frustum_corners_out(
+                        near_z, splits[ci], cam_fov, aspect,
+                        inv_view, self._frustum_corners_buf
+                    )
+                    build_directional_cascade_fast(
+                        ld_x, ld_y, ld_z,
+                        self._frustum_corners_buf, splits[ci] - near_z, res,
+                        self._cascade_vps_raw[ci]
+                    )
+                    np.copyto(self._vp_f32_buf, self._cascade_vps_raw[ci])
+                except Exception:
+                    corners = self._get_frustum_corners(near_z, splits[ci], cam_fov, aspect, inv_view)
+                    vp = self._build_directional_cascade(light_dir_v, corners, splits[ci] - near_z, res)
+                    np.copyto(self._vp_f32_buf, vp)
             else:
                 corners = self._get_frustum_corners(near_z, splits[ci], cam_fov, aspect, inv_view)
-                vp = self._build_directional_cascade(light_dir, corners, splits[ci] - near_z, res)
+                vp = self._build_directional_cascade(light_dir_v, corners, splits[ci] - near_z, res)
                 np.copyto(self._vp_f32_buf, vp)
             self._light_space_matrices[ci] = self._vp_f32_buf.copy()
-
+            if use_flat:
+                thr = 0.0
+                if ci == 2:
+                    thr = 0.4
+                elif ci >= 3:
+                    thr = 0.8
+                try:
+                    if thr > 0.0:
+                        cnt = self._cull_flat_min_count(self._vp_f32_buf, thr)
+                    else:
+                        cnt = self._cull_flat_count(self._vp_f32_buf)
+                except Exception:
+                    cnt = 0
+                if cnt > 0:
+                    try:
+                        vis = self._flat_out[:cnt]
+                        vis_mesh = self._flat_mesh_ids[:self._flat_n][vis]
+                        uniq = np.unique(vis_mesh)
+                        self._shadow_fbos[ci].clear(depth=1.0)
+                        self._shadow_fbos[ci].use()
+                        self._ctx.viewport = (0, 0, res, res)
+                        if first_cascade:
+                            self._ctx.enable(moderngl.DEPTH_TEST)
+                            self._ctx.depth_mask = True
+                            self._ctx.disable(moderngl.CULL_FACE)
+                            first_cascade = False
+                        prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
+                        if supports_instancing:
+                            if use_inst:
+                                prog["u_use_instancing"].value = 1
+                            for mid in uniq:
+                                mid_i = int(mid)
+                                mesh = mmap.get(mid_i)
+                                if mesh is None:
+                                    continue
+                                sel = vis[vis_mesh == mid_i]
+                                if sel.size == 0:
+                                    continue
+                                chunk = self._flat_mats[sel]
+                                vbo = self._upload_instanced_mats((mid_i, prog_id), chunk)
+                                vao = self._get_shadow_vao(prog, mesh, vbo)
+                                vao.render(instances=int(sel.size))
+                        else:
+                            if use_inst:
+                                prog["u_use_instancing"].value = 0
+                            for mid in uniq:
+                                mid_i = int(mid)
+                                mesh = mmap.get(mid_i)
+                                if mesh is None:
+                                    continue
+                                sel = vis[vis_mesh == mid_i]
+                                if sel.size == 0:
+                                    continue
+                                if umodel:
+                                    for fi in sel:
+                                        prog["u_model"].write(self._flat_mats[int(fi)].tobytes())
+                                        mesh.render(prog)
+                                else:
+                                    for _fi in sel:
+                                        mesh.render(prog)
+                        self._maybe_render_skinned(self._vp_f32_buf, self._shadow_fbos[ci], res)
+                    except Exception:
+                        pass
+                near_z = splits[ci]
+                continue
             if _HAS_CYTHON and shadow_groups:
-                culled = frustum_cull_shadow_groups(shadow_groups, self._vp_f32_buf)
+                try:
+                    culled = frustum_cull_shadow_groups(shadow_groups, self._vp_f32_buf)
+                except Exception:
+                    culled = shadow_groups
             else:
                 culled = shadow_groups
-            if ci >= 2 and culled:
-                filtered = {}
-                thr = 0.4 if ci == 2 else 0.8
-                for mid, grp in culled.items():
-                    keep = []
-                    for mesh, tr in grp:
-                        br = getattr(mesh, 'bounding_radius', 1.0)
-                        sx = (tr.world_matrix._d[0,0]**2 + tr.world_matrix._d[1,0]**2 + tr.world_matrix._d[2,0]**2) ** 0.5
-                        sy = (tr.world_matrix._d[0,1]**2 + tr.world_matrix._d[1,1]**2 + tr.world_matrix._d[2,1]**2) ** 0.5
-                        sz = (tr.world_matrix._d[0,2]**2 + tr.world_matrix._d[1,2]**2 + tr.world_matrix._d[2,2]**2) ** 0.5
-                        s = sx if sx > sy else sy
-                        if sz > s:
-                            s = sz
-                        if br * s >= thr:
-                            keep.append((mesh, tr))
-                    if keep:
-                        filtered[mid] = keep
-                culled = filtered
-
             if culled:
+                self._shadow_fbos[ci].clear(depth=1.0)
+                self._shadow_fbos[ci].use()
+                self._ctx.viewport = (0, 0, res, res)
                 if first_cascade:
-                    self._shadow_fbos[ci].clear(depth=1.0)
-                    self._shadow_fbos[ci].use()
-                    self._ctx.viewport = (0, 0, res, res)
                     self._ctx.enable(moderngl.DEPTH_TEST)
                     self._ctx.depth_mask = True
                     self._ctx.disable(moderngl.CULL_FACE)
-                    prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
                     first_cascade = False
-                else:
-                    self._shadow_fbos[ci].clear(depth=1.0)
-                    self._shadow_fbos[ci].use()
-                    self._ctx.viewport = (0, 0, res, res)
-                    prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
-
-                supports_instancing = _shadow_supports_instancing(prog)
+                prog["u_light_vp"].write(self._vp_f32_buf.tobytes())
                 for mesh_id, group in culled.items():
                     mesh, _ = group[0]
                     n = len(group)
                     if supports_instancing:
-                        key = (mesh_id, id(prog))
+                        key = (mesh_id, prog_id)
                         model_mats = [tr.world_matrix for _, tr in group]
                         vbo = self._build_shadow_instance_vbo(key, model_mats)
                         vao = self._get_shadow_vao(prog, mesh, vbo)
-                        if "u_use_instancing" in prog:
+                        if use_inst:
                             prog["u_use_instancing"].value = 1
                         vao.render(instances=n)
                     else:
-                        if "u_use_instancing" in prog:
+                        if use_inst:
                             prog["u_use_instancing"].value = 0
                         for _, tr in group:
                             prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
                             mesh.render(prog)
                 self._maybe_render_skinned(self._vp_f32_buf, self._shadow_fbos[ci], res)
-
             near_z = splits[ci]
-
         if not first_cascade:
             self._ctx.enable(moderngl.CULL_FACE)
 
@@ -960,146 +1433,290 @@ class ShadowRenderer:
         proj = Mat4.orthographic(left, right, bottom, top, n_val, f_val)
         return view._d @ proj._d
 
+    def _point_proj(self, light_range: float):
+        key = round(float(light_range), 3)
+        p = self._point_proj_cache.get(key)
+        if p is None:
+            p = Mat4.perspective(90.0, 1.0, 0.1, max(float(light_range), 0.1))._d
+            self._point_proj_cache[key] = p
+            if len(self._point_proj_cache) > 16:
+                try:
+                    self._point_proj_cache.pop(next(iter(self._point_proj_cache)))
+                except Exception:
+                    pass
+        return p
+
     def _render_point_shadow_for_slot(self, slot, point_light, point_transform, shadow_groups, lights):
-        light_pos = point_transform.position
-        light_range = max(point_light.range, 0.1)
-        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        try:
+            lp_x, lp_y, lp_z = _tr_pos_xyz(point_transform)
+            light_pos = Vec3(lp_x, lp_y, lp_z)
+        except Exception:
+            light_pos = point_transform.position
+            lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        light_range = max(float(getattr(point_light, 'range', 10.0)), 0.1)
         lr2 = light_range * light_range
         self._point_shadow_light_positions[slot] = light_pos
         self._point_shadow_light_ranges[slot] = light_range
         self._point_shadow_light_indices[slot] = next(
             (i for i, (l, lt) in enumerate(lights) if l is point_light and lt is point_transform), -1
         )
-        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
-        if not filtered:
+        if self._flat_n == 0:
             return
-        face_configs = [
-            (Vec3(1, 0, 0), Vec3(0, -1, 0)),
-            (Vec3(-1, 0, 0), Vec3(0, -1, 0)),
-            (Vec3(0, 1, 0), Vec3(0, 0, 1)),
-            (Vec3(0, -1, 0), Vec3(0, 0, -1)),
-            (Vec3(0, 0, 1), Vec3(0, -1, 0)),
-            (Vec3(0, 0, -1), Vec3(0, -1, 0)),
-        ]
-        near_plane = 0.1
-        far_plane = light_range
-        proj_np = Mat4.perspective(90.0, 1.0, near_plane, far_plane)._d
+        proj_np = self._point_proj(light_range)
         prog = self._prog
         shadow_res = self._point_shadow_resolution
-        supports_instancing = _shadow_supports_instancing(prog)
+        supports_instancing = self._supports_instancing_cached(prog)
+        names = self._uniform_names(prog)
+        use_inst = "u_use_instancing" in names
+        umodel = "u_model" in names
+        prog_id = id(prog)
+        mmap = self._flat_mesh_map
         base = slot * 6
         self._ctx.viewport = (0, 0, shadow_res, shadow_res)
         self._ctx.enable(moderngl.DEPTH_TEST)
         self._ctx.depth_mask = True
         self._ctx.disable(moderngl.CULL_FACE)
-        if supports_instancing and "u_use_instancing" in prog:
-            prog["u_use_instancing"].value = 1
-        elif "u_use_instancing" in prog:
-            prog["u_use_instancing"].value = 0
+        if use_inst:
+            prog["u_use_instancing"].value = 1 if supports_instancing else 0
         for face_idx in range(6):
-            fbo = self._point_shadow_fbos[base + face_idx]
-            fbo.use()
-            fbo.clear(depth=1.0)
-        for face_idx, (face_dir, face_up) in enumerate(face_configs):
-            vp = (Mat4.look_at(light_pos, light_pos + face_dir, face_up)._d @ proj_np).astype(np.float32)
-            self._point_light_vps[base + face_idx] = vp
-            if _HAS_CYTHON:
-                culled = frustum_cull_shadow_groups(filtered, vp)
-            else:
-                culled = filtered
-            if not culled:
+            try:
+                fbo = self._point_shadow_fbos[base + face_idx]
+                fbo.use()
+                fbo.clear(depth=1.0)
+            except Exception:
+                pass
+        for face_idx in range(6):
+            dx, dy, dz = _POINT_FACE_DIRS[face_idx]
+            ux, uy, uz = _POINT_FACE_UPS[face_idx]
+            try:
+                face_dir = Vec3(dx, dy, dz)
+                face_up = Vec3(ux, uy, uz)
+                vp = (Mat4.look_at(light_pos, light_pos + face_dir, face_up)._d @ proj_np).astype(np.float32)
+            except Exception:
                 continue
-            fbo = self._point_shadow_fbos[base + face_idx]
-            fbo.use()
+            self._point_light_vps[base + face_idx] = vp
+            try:
+                cnt = self._cull_flat_range_count(vp, lp_x, lp_y, lp_z, lr2, 0.0)
+            except Exception:
+                cnt = 0
+            if cnt <= 0:
+                continue
+            try:
+                vis = self._flat_out[:cnt]
+                vis_mesh = self._flat_mesh_ids[:self._flat_n][vis]
+                uniq = np.unique(vis_mesh)
+            except Exception:
+                continue
+            try:
+                fbo = self._point_shadow_fbos[base + face_idx]
+                fbo.use()
+            except Exception:
+                continue
             prog["u_light_vp"].write(vp.tobytes())
-            for mesh_id, group in culled.items():
-                mesh, _ = group[0]
-                n = len(group)
-                if supports_instancing:
-                    key = (mesh_id, id(prog))
-                    model_mats = [tr.world_matrix for _, tr in group]
-                    vbo = self._build_shadow_instance_vbo(key, model_mats)
+            if supports_instancing:
+                for mid in uniq:
+                    mid_i = int(mid)
+                    mesh = mmap.get(mid_i)
+                    if mesh is None:
+                        continue
+                    sel = vis[vis_mesh == mid_i]
+                    if sel.size == 0:
+                        continue
+                    chunk = self._flat_mats[sel]
+                    vbo = self._upload_instanced_mats((mid_i, prog_id), chunk)
                     vao = self._get_shadow_vao(prog, mesh, vbo)
-                    vao.render(instances=n)
-                else:
-                    for _, tr in group:
-                        prog["u_model"].write(tr.world_matrix.to_f32().tobytes())
-                        mesh.render(prog)
+                    vao.render(instances=int(sel.size))
+            else:
+                for mid in uniq:
+                    mid_i = int(mid)
+                    mesh = mmap.get(mid_i)
+                    if mesh is None:
+                        continue
+                    sel = vis[vis_mesh == mid_i]
+                    if sel.size == 0:
+                        continue
+                    if umodel:
+                        for fi in sel:
+                            prog["u_model"].write(self._flat_mats[int(fi)].tobytes())
+                            mesh.render(prog)
+                    else:
+                        for _fi in sel:
+                            mesh.render(prog)
         self._ctx.enable(moderngl.CULL_FACE)
 
+    def _spot_proj(self, fov: float, far: float):
+        key = (round(float(fov), 2), round(float(far), 2))
+        p = self._spot_proj_cache.get(key)
+        if p is None:
+            p = Mat4.perspective(max(float(fov), 1.0), 1.0, 0.1, max(float(far), 0.2))._d
+            self._spot_proj_cache[key] = p
+            if len(self._spot_proj_cache) > 16:
+                try:
+                    self._spot_proj_cache.pop(next(iter(self._spot_proj_cache)))
+                except Exception:
+                    pass
+        return p
+
     def _render_spot_shadow_for_slot(self, slot, spot_light, spot_transform, shadow_groups, lights):
-        light_pos = spot_transform.position
-        light_dir = spot_transform.forward.normalized()
-        light_range = max(spot_light.range, 0.1)
-        spot_fov = max(spot_light.spot_angle * 2.0, 1.0)
-        near_plane = 0.1
-        far_plane = light_range
-        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        try:
+            lp_x, lp_y, lp_z = _tr_pos_xyz(spot_transform)
+            light_pos = Vec3(lp_x, lp_y, lp_z)
+            fdx, fdy, fdz = _tr_fwd_xyz(spot_transform)
+            light_dir = Vec3(fdx, fdy, fdz)
+        except Exception:
+            light_pos = spot_transform.position
+            light_dir = spot_transform.forward.normalized()
+            lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        light_range = max(float(getattr(spot_light, 'range', 10.0)), 0.1)
+        spot_fov = max(float(getattr(spot_light, 'spot_angle', 30.0)) * 2.0, 1.0)
         lr2 = light_range * light_range
-        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
-        if not filtered:
-            fbo = self._spot_shadow_fbos[slot]
-            fbo.use()
-            self._ctx.viewport = (0, 0, self._spot_shadow_resolution, self._spot_shadow_resolution)
-            fbo.clear(depth=1.0)
+        if self._flat_n == 0:
+            try:
+                fbo = self._spot_shadow_fbos[slot]
+                fbo.use()
+                self._ctx.viewport = (0, 0, self._spot_shadow_resolution, self._spot_shadow_resolution)
+                fbo.clear(depth=1.0)
+            except Exception:
+                pass
             return
-        view = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())
-        proj = Mat4.perspective(spot_fov, 1.0, near_plane, far_plane)
-        vp = (view._d @ proj._d).astype(np.float32)
+        proj_d = self._spot_proj(spot_fov, light_range)
+        try:
+            view_d = Mat4.look_at(light_pos, light_pos + light_dir, Vec3.up())._d
+            vp = (view_d @ proj_d).astype(np.float32)
+        except Exception:
+            return
         self._spot_shadow_vps[slot] = vp
         self._spot_shadow_light_indices[slot] = next(
             (i for i, (l, lt) in enumerate(lights) if l is spot_light and lt is spot_transform), -1
         )
-        if _HAS_CYTHON:
-            culled = frustum_cull_shadow_groups(filtered, vp)
+        try:
+            cnt = self._cull_flat_range_count(vp, lp_x, lp_y, lp_z, lr2, 0.0)
+        except Exception:
+            cnt = 0
+        if cnt > 0:
+            try:
+                self._draw_flat_visible(vp, self._spot_shadow_fbos[slot], self._spot_shadow_resolution, cnt)
+                self._maybe_render_skinned(vp, self._spot_shadow_fbos[slot], self._spot_shadow_resolution)
+            except Exception:
+                pass
         else:
-            culled = filtered
-        if culled:
-            self._render_geometry_with_groups(vp, self._spot_shadow_fbos[slot], culled, resolution=self._spot_shadow_resolution)
-            self._maybe_render_skinned(vp, self._spot_shadow_fbos[slot], self._spot_shadow_resolution)
+            try:
+                fbo = self._spot_shadow_fbos[slot]
+                fbo.use()
+                self._ctx.viewport = (0, 0, self._spot_shadow_resolution, self._spot_shadow_resolution)
+                fbo.clear(depth=1.0)
+            except Exception:
+                pass
 
     def _render_area_shadow(self, area_light, area_transform, shadow_groups, lights):
         if not self._area_shadow_map:
             self._create_area_shadow_resources()
-        light_pos = area_transform.position
-        light_dir = area_transform.forward.normalized()
-        light_up = area_transform.up.normalized()
-        if abs(light_dir.dot(light_up)) > 0.999:
-            light_up = Vec3(0.0, 0.0, 1.0)
-        light_range = max(area_light.range, 0.1)
+            if not self._area_shadow_map:
+                self._has_area_shadow = False
+                return
+        try:
+            lp_x, lp_y, lp_z = _tr_pos_xyz(area_transform)
+            light_pos = Vec3(lp_x, lp_y, lp_z)
+            fdx, fdy, fdz = _tr_fwd_xyz(area_transform)
+            light_dir = Vec3(fdx, fdy, fdz)
+            udx, udy, udz = _tr_up_xyz(area_transform)
+            light_up = Vec3(udx, udy, udz)
+        except Exception:
+            light_pos = area_transform.position
+            light_dir = area_transform.forward.normalized()
+            light_up = area_transform.up.normalized()
+            lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
+        try:
+            if abs(light_dir.dot(light_up)) > 0.999:
+                light_up = Vec3(0.0, 0.0, 1.0)
+        except Exception:
+            pass
+        light_range = max(float(getattr(area_light, 'range', 10.0)), 0.1)
         near_plane = 0.1
         far_plane = light_range
         self._area_light_near = near_plane
         self._area_light_far = far_plane
-        fov = max(90.0, min(150.0, math.degrees(2.0 * math.atan2(max(area_light.area_width, area_light.area_height) * 0.5, near_plane))))
+        try:
+            aw = float(getattr(area_light, 'area_width', 1.0))
+            ah = float(getattr(area_light, 'area_height', 1.0))
+        except Exception:
+            aw = 1.0
+            ah = 1.0
+        fov = max(90.0, min(150.0, math.degrees(2.0 * math.atan2(max(aw, ah) * 0.5, near_plane))))
         fov_rad = math.radians(fov)
         tan_half_fov = math.tan(fov_rad * 0.5)
-        self._area_light_fov_scale = float(1.0 / (2.0 * tan_half_fov))
-        self._area_shadow_bias = float(area_light.area_shadow_bias)
-        view = Mat4.look_at(light_pos, light_pos + light_dir, light_up)
-        proj = Mat4.perspective(fov, 1.0, near_plane, far_plane)
-        vp = (view._d @ proj._d).astype(np.float32)
+        self._area_light_fov_scale = float(1.0 / max(1e-6, (2.0 * tan_half_fov)))
+        try:
+            self._area_shadow_bias = float(getattr(area_light, 'area_shadow_bias', 0.005))
+        except Exception:
+            self._area_shadow_bias = 0.005
+        try:
+            view_d = Mat4.look_at(light_pos, light_pos + light_dir, light_up)._d
+            proj_d = Mat4.perspective(fov, 1.0, near_plane, far_plane)._d
+            vp = (view_d @ proj_d).astype(np.float32)
+        except Exception:
+            self._has_area_shadow = False
+            return
         self._area_light_vp = vp
         self._has_area_shadow = True
         self._area_light_pos = light_pos
         self._area_light_range = light_range
-        self._area_light_size = max(area_light.area_width, area_light.area_height) * 0.5
+        self._area_light_size = max(aw, ah) * 0.5
         self._area_light_idx = next(
             (i for i, (l, lt) in enumerate(lights) if l is area_light and lt is area_transform), -1
         )
-        lp_x, lp_y, lp_z = light_pos.x, light_pos.y, light_pos.z
         lr2 = light_range * light_range
-        filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
-        if filtered:
-            self._render_geometry_with_groups(vp, self._area_shadow_fbo, filtered, resolution=self._area_shadow_resolution)
-            self._maybe_render_skinned(vp, self._area_shadow_fbo, self._area_shadow_resolution)
+        if self._flat_n == 0:
+            return
+        try:
+            cnt = self._cull_flat_range_count(vp, lp_x, lp_y, lp_z, lr2, 0.0)
+        except Exception:
+            cnt = 0
+        if cnt > 0:
+            try:
+                self._draw_flat_visible(vp, self._area_shadow_fbo, self._area_shadow_resolution, cnt)
+                self._maybe_render_skinned(vp, self._area_shadow_fbo, self._area_shadow_resolution)
+            except Exception:
+                pass
 
     def render_projector_shadows(self, projectors, renderable_shadow, shadow_groups: dict = None):
-        if shadow_groups is None:
-            shadow_groups = self._build_shadow_groups(renderable_shadow)
-        if not shadow_groups:
-            for i in range(2):
-                self._has_projector_shadow[i] = False
+        if self._flat_n == 0:
+            try:
+                if shadow_groups is None:
+                    shadow_groups = self._build_shadow_groups(renderable_shadow)
+            except Exception:
+                shadow_groups = {}
+            if not shadow_groups:
+                for i in range(2):
+                    self._has_projector_shadow[i] = False
+                return
+            for i, pj in enumerate(projectors[:2]):
+                if not pj.cast_shadows:
+                    self._has_projector_shadow[i] = False
+                    continue
+                if len(self._projector_shadow_maps) <= i:
+                    self._create_projector_shadow_resources()
+                try:
+                    light_pos_vec = Vec3(float(pj.position[0]), float(pj.position[1]), float(pj.position[2]))
+                    light_dir_vec = Vec3(float(pj.direction[0]), float(pj.direction[1]), float(pj.direction[2])).normalized()
+                    up_vec = Vec3(float(pj.up[0]), float(pj.up[1]), float(pj.up[2]))
+                    view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, up_vec)
+                    proj = Mat4.perspective(max(float(pj.spot_angle), 1.0), float(pj.aspect_ratio), max(float(pj.near_plane), 0.01), max(float(pj.far_plane), max(float(pj.near_plane), 0.01) + 0.1))
+                    vp = (view._d @ proj._d).astype(np.float32)
+                except Exception:
+                    continue
+                self._projector_light_vps[i] = vp
+                self._has_projector_shadow[i] = True
+                try:
+                    lr2 = float(pj.far_plane) * float(pj.far_plane)
+                    filtered = self._filter_by_range(shadow_groups, float(pj.position[0]), float(pj.position[1]), float(pj.position[2]), lr2)
+                except Exception:
+                    filtered = shadow_groups
+                if filtered:
+                    try:
+                        self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], filtered, resolution=self._shadow_resolution)
+                    except Exception:
+                        pass
             return
         for i, pj in enumerate(projectors[:2]):
             if not pj.cast_shadows:
@@ -1107,141 +1724,276 @@ class ShadowRenderer:
                 continue
             if len(self._projector_shadow_maps) <= i:
                 self._create_projector_shadow_resources()
-            light_pos_vec = Vec3(float(pj.position[0]), float(pj.position[1]), float(pj.position[2]))
-            light_dir_vec = Vec3(float(pj.direction[0]), float(pj.direction[1]), float(pj.direction[2]))
-            light_dir_vec = light_dir_vec.normalized()
-            up_vec = Vec3(float(pj.up[0]), float(pj.up[1]), float(pj.up[2]))
-            spot_fov = max(pj.spot_angle, 1.0)
-            near_plane = max(pj.near_plane, 0.01)
-            far_plane = max(pj.far_plane, near_plane + 0.1)
-            view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, up_vec)
-            proj = Mat4.perspective(spot_fov, pj.aspect_ratio, near_plane, far_plane)
-            vp = (view._d @ proj._d).astype(np.float32)
+            try:
+                lp_x = float(pj.position[0])
+                lp_y = float(pj.position[1])
+                lp_z = float(pj.position[2])
+                dx = float(pj.direction[0])
+                dy = float(pj.direction[1])
+                dz = float(pj.direction[2])
+                inv = 1.0 / max(1e-12, math.sqrt(dx * dx + dy * dy + dz * dz))
+                light_pos_vec = Vec3(lp_x, lp_y, lp_z)
+                light_dir_vec = Vec3(dx * inv, dy * inv, dz * inv)
+                up_vec = Vec3(float(pj.up[0]), float(pj.up[1]), float(pj.up[2]))
+                spot_fov = max(float(pj.spot_angle), 1.0)
+                near_plane = max(float(pj.near_plane), 0.01)
+                far_plane = max(float(pj.far_plane), near_plane + 0.1)
+                view = Mat4.look_at(light_pos_vec, light_pos_vec + light_dir_vec, up_vec)
+                proj = Mat4.perspective(spot_fov, float(pj.aspect_ratio), near_plane, far_plane)
+                vp = (view._d @ proj._d).astype(np.float32)
+            except Exception:
+                continue
             self._projector_light_vps[i] = vp
             self._has_projector_shadow[i] = True
-            lp_x, lp_y, lp_z = light_pos_vec.x, light_pos_vec.y, light_pos_vec.z
             lr2 = far_plane * far_plane
-            filtered = self._filter_by_range(shadow_groups, lp_x, lp_y, lp_z, lr2)
-            if filtered:
-                self._render_geometry_with_groups(vp, self._projector_shadow_fbos[i], filtered, resolution=self._shadow_resolution)
+            try:
+                cnt = self._cull_flat_range_count(vp, lp_x, lp_y, lp_z, lr2, 0.0)
+            except Exception:
+                cnt = 0
+            if cnt > 0:
+                try:
+                    self._draw_flat_visible(vp, self._projector_shadow_fbos[i], self._shadow_resolution, cnt)
+                except Exception:
+                    pass
+        for i in range(len(projectors[:2]), 2):
+            try:
+                self._has_projector_shadow[i] = False
+            except Exception:
+                pass
+
+    def _cache_uniform_bytes(self):
+        try:
+            cm = self._cascade_matrices_buf
+            for ci in range(self._cascade_count):
+                np.copyto(cm[ci], self._light_space_matrices[ci])
+            self._cascade_matrices_bytes = cm.tobytes()
+        except Exception:
+            pass
+        try:
+            cs = self._cascade_splits_buf
+            cs[0] = self._cascade_splits[0]
+            cs[1] = self._cascade_splits[1]
+            cs[2] = self._cascade_splits[2]
+            cs[3] = self._cascade_splits[3]
+            self._cascade_splits_bytes = cs.tobytes()
+        except Exception:
+            pass
+        try:
+            pv = self._point_vps_buf
+            for slot in range(self._point_shadow_count):
+                base = slot * 6
+                for fi in range(6):
+                    np.copyto(pv[base + fi], self._point_light_vps[base + fi])
+            self._point_vps_bytes = pv.tobytes()
+        except Exception:
+            pass
+        try:
+            for slot in range(self._point_shadow_count):
+                try:
+                    pa = self._point_shadow_light_positions[slot]
+                    self._point_pos_buf[slot][0] = float(pa.x)
+                    self._point_pos_buf[slot][1] = float(pa.y)
+                    self._point_pos_buf[slot][2] = float(pa.z)
+                except Exception:
+                    pass
+                try:
+                    self._point_range_buf[slot] = float(self._point_shadow_light_ranges[slot])
+                except Exception:
+                    pass
+                try:
+                    self._point_idx_buf[slot] = int(self._point_shadow_light_indices[slot])
+                except Exception:
+                    pass
+            self._point_pos_bytes = self._point_pos_buf.tobytes()
+            self._point_range_bytes = self._point_range_buf.tobytes()
+            self._point_idx_bytes = self._point_idx_buf.tobytes()
+        except Exception:
+            pass
+        try:
+            sv = self._spot_vps_buf
+            for slot in range(self._spot_shadow_count):
+                np.copyto(sv[slot], self._spot_shadow_vps[slot])
+            self._spot_vps_bytes = sv.tobytes()
+        except Exception:
+            pass
+        try:
+            for slot in range(self._spot_shadow_count):
+                try:
+                    self._spot_idx_buf[slot] = int(self._spot_shadow_light_indices[slot])
+                except Exception:
+                    pass
+            self._spot_idx_bytes = self._spot_idx_buf.tobytes()
+        except Exception:
+            pass
+        try:
+            self._area_vp_bytes = np.ascontiguousarray(self._area_light_vp, dtype=np.float32).tobytes()
+        except Exception:
+            pass
+        try:
+            af = self._area_nearfar_buf
+            af[0] = float(self._area_light_near)
+            af[1] = float(self._area_light_far)
+            self._area_nearfar_bytes = af.tobytes()
+        except Exception:
+            pass
 
     def set_uniforms(self, prog):
+        names = self._uniform_names(prog)
         has_csm = self._cascade_splits[self._cascade_count - 1] > 0.0
-        if has_csm and "u_cascade_count" in prog and len(self._shadow_maps) >= self._cascade_count:
+        if has_csm and "u_cascade_count" in names and len(self._shadow_maps) >= self._cascade_count:
             prog["u_cascade_count"].value = self._cascade_count
-            if "u_light_space_matrices" in prog:
-                cm = self._cascade_matrices_buf
-                for ci in range(self._cascade_count):
-                    np.copyto(cm[ci], self._light_space_matrices[ci])
-                prog["u_light_space_matrices"].write(cm.tobytes())
-            if "u_cascade_splits" in prog:
-                cs = self._cascade_splits_buf
-                cs[0] = self._cascade_splits[0]
-                cs[1] = self._cascade_splits[1]
-                cs[2] = self._cascade_splits[2]
-                cs[3] = self._cascade_splits[3]
-                prog["u_cascade_splits"].write(cs.tobytes())
+            if "u_light_space_matrices" in names:
+                try:
+                    if not self._cascade_matrices_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_light_space_matrices"].write(self._cascade_matrices_bytes)
+                except Exception:
+                    pass
+            if "u_cascade_splits" in names:
+                try:
+                    if not self._cascade_splits_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_cascade_splits"].write(self._cascade_splits_bytes)
+                except Exception:
+                    pass
             for ci in range(self._cascade_count):
                 tex_unit = 3 + ci
-                self._shadow_maps[ci].use(tex_unit)
+                try:
+                    self._shadow_maps[ci].use(tex_unit)
+                except Exception:
+                    continue
                 si = f"u_shadow_map_{ci}"
-                if si in prog:
+                if si in names:
                     prog[si].value = tex_unit
         else:
-            if "u_cascade_count" in prog:
+            if "u_cascade_count" in names:
                 prog["u_cascade_count"].value = 0
-        if "u_shadow_bias" in prog:
+        if "u_shadow_bias" in names:
             prog["u_shadow_bias"].value = 0.0008
-        if self._has_point_shadow and "u_point_shadow_count" in prog:
+        if self._has_point_shadow and "u_point_shadow_count" in names:
             prog["u_point_shadow_count"].value = self._point_shadow_count
-            if "u_point_shadow_vps" in prog:
-                pv = self._point_vps_buf
-                for slot in range(self._point_shadow_count):
-                    base = slot * 6
-                    for fi in range(6):
-                        np.copyto(pv[base + fi], self._point_light_vps[base + fi])
-                prog["u_point_shadow_vps"].write(pv.tobytes())
+            if "u_point_shadow_vps" in names:
+                try:
+                    if not self._point_vps_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_point_shadow_vps"].write(self._point_vps_bytes)
+                except Exception:
+                    pass
             point_units = [0] * (MAX_POINT_SHADOWS * 6)
             for slot in range(self._point_shadow_count):
                 base = slot * 6
                 for fi in range(6):
                     tex_unit = 7 + base + fi
-                    self._point_shadow_maps[base + fi].use(tex_unit)
+                    try:
+                        self._point_shadow_maps[base + fi].use(tex_unit)
+                    except Exception:
+                        pass
                     point_units[base + fi] = tex_unit
-                if "u_point_shadow_light_positions" in prog:
-                    pa = self._point_shadow_light_positions[slot].to_array()
-                    self._point_pos_buf[slot][0] = pa[0]
-                    self._point_pos_buf[slot][1] = pa[1]
-                    self._point_pos_buf[slot][2] = pa[2]
-                if "u_point_shadow_light_ranges" in prog:
-                    self._point_range_buf[slot] = float(self._point_shadow_light_ranges[slot])
-                if "u_point_shadow_light_indices" in prog:
-                    self._point_idx_buf[slot] = int(self._point_shadow_light_indices[slot])
-            if "u_point_shadow_maps" in prog:
+            if "u_point_shadow_maps" in names:
                 prog["u_point_shadow_maps"].value = point_units
-            if "u_point_shadow_light_positions" in prog:
-                prog["u_point_shadow_light_positions"].write(self._point_pos_buf.tobytes())
-            if "u_point_shadow_light_ranges" in prog:
-                prog["u_point_shadow_light_ranges"].write(self._point_range_buf.tobytes())
-            if "u_point_shadow_light_indices" in prog:
-                prog["u_point_shadow_light_indices"].write(self._point_idx_buf.tobytes())
+            if "u_point_shadow_light_positions" in names:
+                try:
+                    if not self._point_pos_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_point_shadow_light_positions"].write(self._point_pos_bytes)
+                except Exception:
+                    pass
+            if "u_point_shadow_light_ranges" in names:
+                try:
+                    if not self._point_range_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_point_shadow_light_ranges"].write(self._point_range_bytes)
+                except Exception:
+                    pass
+            if "u_point_shadow_light_indices" in names:
+                try:
+                    if not self._point_idx_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_point_shadow_light_indices"].write(self._point_idx_bytes)
+                except Exception:
+                    pass
         else:
-            if "u_point_shadow_count" in prog:
+            if "u_point_shadow_count" in names:
                 prog["u_point_shadow_count"].value = 0
-        if self._has_spot_shadow and "u_spot_shadow_count" in prog:
+        if self._has_spot_shadow and "u_spot_shadow_count" in names:
             prog["u_spot_shadow_count"].value = self._spot_shadow_count
-            if "u_spot_shadow_vps" in prog:
-                sv = self._spot_vps_buf
-                for slot in range(self._spot_shadow_count):
-                    np.copyto(sv[slot], self._spot_shadow_vps[slot])
-                prog["u_spot_shadow_vps"].write(sv.tobytes())
+            if "u_spot_shadow_vps" in names:
+                try:
+                    if not self._spot_vps_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_spot_shadow_vps"].write(self._spot_vps_bytes)
+                except Exception:
+                    pass
             spot_units = [0] * MAX_SPOT_SHADOWS
             for slot in range(self._spot_shadow_count):
                 tex_unit = 7 + MAX_POINT_SHADOWS * 6 + slot
-                self._spot_shadow_maps[slot].use(tex_unit)
+                try:
+                    self._spot_shadow_maps[slot].use(tex_unit)
+                except Exception:
+                    pass
                 spot_units[slot] = tex_unit
-                if "u_spot_shadow_light_indices" in prog:
-                    self._spot_idx_buf[slot] = int(self._spot_shadow_light_indices[slot])
-            if "u_spot_shadow_maps" in prog:
+            if "u_spot_shadow_maps" in names:
                 prog["u_spot_shadow_maps"].value = spot_units
-            if "u_spot_shadow_light_indices" in prog:
-                prog["u_spot_shadow_light_indices"].write(self._spot_idx_buf.tobytes())
+            if "u_spot_shadow_light_indices" in names:
+                try:
+                    if not self._spot_idx_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_spot_shadow_light_indices"].write(self._spot_idx_bytes)
+                except Exception:
+                    pass
         else:
-            if "u_spot_shadow_count" in prog:
+            if "u_spot_shadow_count" in names:
                 prog["u_spot_shadow_count"].value = 0
-        if self._has_area_shadow and "u_area_shadow_light_index" in prog:
+        if self._has_area_shadow and "u_area_shadow_light_index" in names:
             tex_unit = 35
-            self._area_shadow_map.use(tex_unit)
-            if "u_area_shadow_map" in prog:
+            try:
+                self._area_shadow_map.use(tex_unit)
+            except Exception:
+                pass
+            if "u_area_shadow_map" in names:
                 prog["u_area_shadow_map"].value = tex_unit
-            if "u_area_light_vp" in prog:
-                prog["u_area_light_vp"].write(self._area_light_vp.tobytes())
-            if "u_area_light_size" in prog:
+            if "u_area_light_vp" in names:
+                try:
+                    if not self._area_vp_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_area_light_vp"].write(self._area_vp_bytes)
+                except Exception:
+                    pass
+            if "u_area_light_size" in names:
                 prog["u_area_light_size"].value = float(self._area_light_size)
-            if "u_area_light_fov_scale" in prog:
+            if "u_area_light_fov_scale" in names:
                 prog["u_area_light_fov_scale"].value = float(self._area_light_fov_scale)
-            if "u_area_light_near_far" in prog:
-                af = self._area_nearfar_buf
-                af[0] = self._area_light_near
-                af[1] = self._area_light_far
-                prog["u_area_light_near_far"].write(af.tobytes())
-            if "u_area_shadow_light_index" in prog:
+            if "u_area_light_near_far" in names:
+                try:
+                    if not self._area_nearfar_bytes:
+                        self._cache_uniform_bytes()
+                    prog["u_area_light_near_far"].write(self._area_nearfar_bytes)
+                except Exception:
+                    pass
+            if "u_area_shadow_light_index" in names:
                 prog["u_area_shadow_light_index"].value = self._area_light_idx if self._area_light_idx >= 0 else -1
-            if "u_area_shadow_bias" in prog:
+            if "u_area_shadow_bias" in names:
                 prog["u_area_shadow_bias"].value = float(self._area_shadow_bias)
         else:
-            if "u_area_shadow_light_index" in prog:
+            if "u_area_shadow_light_index" in names:
                 prog["u_area_shadow_light_index"].value = -1
         for i in range(2):
             suf = f"u_pj_{i}_shadow_map"
-            if self._has_projector_shadow[i] and suf in prog:
+            if self._has_projector_shadow[i] and suf in names:
                 tex_unit = 36 + i
                 if i < len(self._projector_shadow_maps):
-                    self._projector_shadow_maps[i].use(tex_unit)
+                    try:
+                        self._projector_shadow_maps[i].use(tex_unit)
+                    except Exception:
+                        pass
                     prog[suf].value = tex_unit
-                if f"u_pj_{i}_shadow_vp" in prog:
-                    prog[f"u_pj_{i}_shadow_vp"].write(self._projector_light_vps[i].tobytes())
-            elif suf in prog:
+                vpn = f"u_pj_{i}_shadow_vp"
+                if vpn in names:
+                    try:
+                        prog[vpn].write(self._projector_light_vps[i].tobytes())
+                    except Exception:
+                        pass
+            elif suf in names:
                 prog[suf].value = 0
 
     def release(self):
