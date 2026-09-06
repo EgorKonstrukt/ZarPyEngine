@@ -44,8 +44,8 @@ class PluginManagerPanel(QDockWidget):
         layout.addWidget(sep)
 
         self._table = QTableWidget()
-        self._table.setColumnCount(5)
-        self._table.setHorizontalHeaderLabels(["", "Name", "Version", "Description", "System"])
+        self._table.setColumnCount(6)
+        self._table.setHorizontalHeaderLabels(["", "Name", "Version", "Description", "System", "Status"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(0, 30)
@@ -53,6 +53,7 @@ class PluginManagerPanel(QDockWidget):
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
@@ -85,9 +86,13 @@ class PluginManagerPanel(QDockWidget):
         self.setWidget(w)
 
     def _refresh(self):
-        plugins = self._engine.plugin_manager.get_all()
+        manager = self._engine.plugin_manager
+        plugins = manager.get_all()
+        shown = {p.NAME for p in plugins}
+        extra = [(n, s) for n, s in manager.all_plugin_statuses().items()
+                 if n not in shown and s.get("state", "") != "loaded"]
         self._table.blockSignals(True)
-        self._table.setRowCount(len(plugins))
+        self._table.setRowCount(len(plugins) + len(extra))
         for i, p in enumerate(plugins):
             cb = QCheckBox()
             cb.setChecked(p.enabled)
@@ -115,8 +120,32 @@ class PluginManagerPanel(QDockWidget):
             sys_item.setFlags(sys_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             sys_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._table.setItem(i, 4, sys_item)
+
+            self._table.setItem(i, 5, self._status_item(manager.plugin_status(p.NAME)))
+        for j, (n, s) in enumerate(extra):
+            i = len(plugins) + j
+            name_item = QTableWidgetItem(n)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(i, 1, name_item)
+
+            desc_item = QTableWidgetItem(s.get("reason", ""))
+            desc_item.setFlags(desc_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(i, 3, desc_item)
+
+            self._table.setItem(i, 5, self._status_item(s))
         self._table.blockSignals(False)
-        self._count_label.setText(f"{len(plugins)} plugin{'s' if len(plugins) != 1 else ''}")
+        total = len(plugins) + len(extra)
+        self._count_label.setText(f"{total} plugin{'s' if total != 1 else ''}")
+
+    @staticmethod
+    def _status_item(status: dict):
+        item = QTableWidgetItem(status.get("state", ""))
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        reason = status.get("reason", "")
+        if reason:
+            item.setToolTip(reason)
+        return item
 
     def _toggle_plugin(self, row: int, state: int):
         plugins = self._engine.plugin_manager.get_all()

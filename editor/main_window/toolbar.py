@@ -121,6 +121,7 @@ def setup_toolbar(mw):
     lay.addWidget(mw._render_toolbar)
 
     add_plugin_toolbar_actions(mw, lay)
+    subscribe_plugin_toolbar_updates(mw)
 
     main_lay.addWidget(top_widget)
 
@@ -137,21 +138,78 @@ def setup_toolbar(mw):
     mw._main_toolbar.addWidget(container)
 
 
-def add_plugin_toolbar_actions(mw, layout):
-    registry = mw._engine.plugin_ui_registry
-    for info in registry["toolbar_actions"]:
+def _plugin_toolbar_icon(icon):
+    if not icon:
+        return None
+    try:
+        return qta.icon(icon, color="#d4d4d4")
+    except Exception:
         try:
-            text = info["text"]
-            callback = info["callback"]
-            tooltip = info.get("tooltip", text)
-            icon_path = info.get("icon")
-            if icon_path:
-                act = QAction(QIcon(icon_path), text, mw)
-            else:
-                act = QAction(text, mw)
-            act.setToolTip(tooltip)
-            act.triggered.connect(callback)
-            layout.addWidget(_action_to_toolbutton(act, mw))
+            return QIcon(str(icon))
+        except Exception:
+            return None
+
+
+def _append_plugin_toolbar_action(mw, layout, info: dict):
+    try:
+        text = info["text"]
+        callback = info["callback"]
+        tooltip = info.get("tooltip", text)
+        icon = _plugin_toolbar_icon(info.get("icon"))
+        act = QAction(icon, text, mw) if icon is not None else QAction(text, mw)
+        act.setToolTip(tooltip)
+        act.setProperty("plugin", info.get("plugin", "Plugins"))
+        act.triggered.connect(callback)
+        layout.addWidget(_action_to_toolbutton(act, mw))
+    except Exception as e:
+        from core.foundation.logger import Logger
+        Logger.error(f"Failed to add plugin toolbar action '{info.get('text', '?')}': {e}")
+
+
+def _remove_plugin_toolbar_actions(mw, plugin_name: str):
+    layout = getattr(mw, "_plugin_toolbar_layout", None)
+    if layout is None:
+        return
+    for i in range(layout.count()):
+        try:
+            item = layout.itemAt(i)
+            w = item.widget() if item is not None else None
+            act = w.defaultAction() if w is not None and hasattr(w, "defaultAction") else None
+            if act is not None and act.property("plugin") == plugin_name:
+                layout.removeWidget(w)
+                w.deleteLater()
         except Exception as e:
             from core.foundation.logger import Logger
-            Logger.error(f"Failed to add plugin toolbar action '{info.get('text', '?')}': {e}")
+            Logger.warning(f"[Plugin] toolbar cleanup failed: {e}")
+
+
+def subscribe_plugin_toolbar_updates(mw):
+    reg = mw._engine.plugin_ui_registry
+    listeners = reg.setdefault("runtime_listeners", [])
+    for cb in listeners:
+        if getattr(cb, "_zpl_scope", None) == "toolbar" and getattr(cb, "_zpl_mw", None) is mw:
+            return
+    def _on_runtime(payload):
+        try:
+            name = payload.get("unregistered")
+            if name:
+                _remove_plugin_toolbar_actions(mw, name)
+                return
+            layout = getattr(mw, "_plugin_toolbar_layout", None)
+            if layout is None:
+                return
+            for info in payload.get("toolbar_actions", []) or []:
+                _append_plugin_toolbar_action(mw, layout, info)
+        except Exception as e:
+            from core.foundation.logger import Logger
+            Logger.error(f"[Plugin] toolbar update failed: {e}", e)
+    _on_runtime._zpl_scope = "toolbar"
+    _on_runtime._zpl_mw = mw
+    listeners.append(_on_runtime)
+
+
+def add_plugin_toolbar_actions(mw, layout):
+    registry = mw._engine.plugin_ui_registry
+    mw._plugin_toolbar_layout = layout
+    for info in registry.get("toolbar_actions", []):
+        _append_plugin_toolbar_action(mw, layout, info)

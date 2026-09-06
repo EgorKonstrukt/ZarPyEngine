@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import json
 import os
 import shutil
@@ -52,6 +53,29 @@ except Exception:
         machine = {"amd64": "x86_64", "x86_64": "x86_64", "x64": "x86_64",
                    "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
         return f"{sys_name}_{machine}"
+
+try:
+    from core.foundation.ed25519 import (
+        generate_hex as _ed_gen,
+    )
+    from core.foundation.ed25519 import (
+        publickey_hex as _ed_pub,
+    )
+    from core.foundation.ed25519 import (
+        sign_hex as _ed_sign,
+    )
+    from core.foundation.plugin_manager import (
+        _canonical_manifest_bytes as _pm_canonical,
+    )
+    from core.foundation.plugin_manager import (
+        _split_requirement as _pm_split_requirement,
+    )
+    from core.foundation.plugin_manager import (
+        _split_spec as _pm_split_spec,
+    )
+    _PM_OK = True
+except Exception:
+    _PM_OK = False
 
 
 DEFAULT_EXCLUDES = ["__pycache__", "*.pyc", "*.pyo", ".pytest_cache", "*.egg-info"]
@@ -170,7 +194,145 @@ def _compile_tree_nuitka(stage_root: str, module: str, pkg_dir: str) -> bool:
     return ok
 
 
-def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source") -> str | None:
+def lint_manifest(plugin_src: str) -> list:
+    try:
+        meta = load_source_manifest(plugin_src)
+    except (FileNotFoundError, ValueError) as e:
+        return [str(e)]
+    errors = []
+    name = str(meta.get("name", ""))
+    if not name:
+        errors.append("manifest needs a 'name'")
+    ptype = str(meta.get("type", "plugin"))
+    if ptype not in ("plugin", "library"):
+        errors.append(f"unknown type '{ptype}' (want 'plugin' or 'library')")
+    module = str(meta.get("module", name))
+    entry = str(meta.get("entry", f"{module}/__init__.py" if ptype == "plugin" else ""))
+    if ptype == "plugin" and entry:
+        parent = os.path.dirname(os.path.abspath(plugin_src))
+        if not os.path.isfile(os.path.join(parent, entry)) and not os.path.isfile(os.path.join(plugin_src, entry)):
+            errors.append(f"entry '{entry}' not found")
+    if ptype == "library" and not meta.get("provides") and not os.path.isdir(os.path.join(plugin_src, "libs")):
+        errors.append("library pack needs 'provides' or a libs/ directory")
+    if _PM_OK:
+        for dep in meta.get("dependencies", []) or []:
+            if not _pm_split_requirement(dep)[0]:
+                errors.append(f"bad dependency '{dep}'")
+        for spec in (meta.get("engine_api", ""), meta.get("python_requires", "")):
+            if spec and not all(op in ("==", "!=", ">=", "<=", "~=", ">", "<", "=") and want for op, want in _pm_split_spec(spec)):
+                errors.append(f"bad version spec '{spec}'")
+        for req in meta.get("requires", []) or []:
+            if isinstance(req, dict):
+                good = bool(req.get("name"))
+            else:
+                good = bool(_pm_split_requirement(str(req))[0])
+            if not good:
+                errors.append(f"bad plugin requirement '{req}'")
+        sig = meta.get("signature")
+        if sig is not None and (not isinstance(sig, dict) or not sig.get("sig")):
+            errors.append("malformed 'signature' (want {'by': ..., 'sig': ...})")
+    return errors
+
+
+def _dist_version(top: str) -> str:
+    try:
+        from importlib import metadata as _md
+        return _md.version(top)
+    except Exception:
+        return "unknown"
+
+
+def _copy_dist_info(top: str, libs: str):
+    try:
+        from importlib import metadata as _md
+        src = str(getattr(_md.distribution(top), "_path", "") or "")
+        if src and os.path.isdir(src) and src.endswith(".dist-info"):
+            dst = os.path.join(libs, os.path.basename(src))
+            if os.path.isdir(dst):
+                shutil.rmtree(dst, ignore_errors=True)
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__"))
+    except Exception as e:
+        print(f"  bundle: dist-info for '{top}' skipped: {e}")
+
+
+def _bundle_into_stage(stage: str, modules) -> dict:
+    provides = {}
+    libs = os.path.join(stage, "libs")
+    os.makedirs(libs, exist_ok=True)
+    for mod in modules or []:
+        top = str(mod).strip().split(".")[0]
+        if not top:
+            continue
+        try:
+            spec = importlib.util.find_spec(top)
+        except Exception:
+            spec = None
+        if spec is None:
+            print(f"  bundle: '{top}' not installed, skipped")
+            continue
+        version = _dist_version(top)
+        try:
+            locations = list(spec.submodule_search_locations or [])
+            if locations:
+                dst = os.path.join(libs, top)
+                if os.path.isdir(dst):
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(locations[0], dst,
+                                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".pytest_cache"))
+                _copy_dist_info(top, libs)
+            elif spec.origin and spec.origin.endswith(".py"):
+                shutil.copy2(spec.origin, os.path.join(libs, top + ".py"))
+            else:
+                print(f"  bundle: '{top}' has no copyable source, skipped")
+                continue
+            provides[top] = version
+            print(f"  bundle: {top} ({version})")
+        except Exception as e:
+            print(f"  bundle: '{top}' failed: {e}")
+    return provides
+
+
+def _scan_stage_libs(libs: str) -> dict:
+    provides = {}
+    if not os.path.isdir(libs):
+        return provides
+    for entry in sorted(os.listdir(libs)):
+        if entry.startswith((".", "_")) or entry == "__pycache__" or entry.endswith(".dist-info"):
+            continue
+        full = os.path.join(libs, entry)
+        if entry.endswith(".py") and os.path.isfile(full):
+            provides[entry[:-3]] = "unknown"
+        elif os.path.isdir(full) and os.path.isfile(os.path.join(full, "__init__.py")):
+            provides[entry] = "unknown"
+    return provides
+
+
+def _freeze_stage(stage: str) -> dict:
+    import hashlib
+    files = {}
+    for root, _dirs, fns in os.walk(stage):
+        for fn in sorted(fns):
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, stage).replace(os.sep, "/")
+            if rel == "manifest.json":
+                continue
+            h = hashlib.sha256()
+            with open(full, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            files[rel] = h.hexdigest()
+    return files
+
+
+def _sign_manifest(manifest: dict, key_hex: str) -> dict:
+    pub = _ed_pub(key_hex)
+    manifest["signature"] = {"by": pub, "sig": _ed_sign(_pm_canonical(manifest), key_hex)}
+    return manifest
+
+
+def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source",
+                  bundle=(), sign_key: str = "", ptype: str | None = None,
+                  freeze: bool = True) -> str | None:
     plugin_src = os.path.abspath(plugin_src)
     if os.path.isfile(plugin_src) and plugin_src.endswith(".py"):
         raise ValueError("build_zplugin needs a plugin package directory, not a single .py file")
@@ -181,7 +343,11 @@ def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source
     name = str(meta["name"])
     version = str(meta.get("version", "0.0.1"))
     module = str(meta.get("module", name))
-    entry = str(meta.get("entry", f"{module}/__init__.py"))
+    ptype = ptype or str(meta.get("type", "plugin"))
+    if ptype not in ("plugin", "library"):
+        print(f"Unknown type: {ptype}")
+        return None
+    entry = str(meta.get("entry", f"{module}/__init__.py" if ptype == "plugin" else ""))
     excludes = list(meta.get("exclude", [])) + DEFAULT_EXCLUDES
 
     if mode not in ("source", "cython", "nuitka"):
@@ -217,6 +383,14 @@ def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source
             else:
                 print(f"WARNING: {mode} compile failed, falling back to source mode.")
 
+        bundled = _bundle_into_stage(stage, bundle) if bundle else {}
+        provides = dict(meta.get("provides", {}) or {})
+        for key, val in bundled.items():
+            provides.setdefault(key, val)
+        if ptype == "library":
+            for key, val in _scan_stage_libs(os.path.join(stage, "libs")).items():
+                provides.setdefault(key, val)
+
         manifest = {
             "name": name,
             "version": version,
@@ -225,7 +399,23 @@ def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source
             "entry": entry,
             "module": module,
             "dependencies": meta.get("dependencies", []),
+            "requires": meta.get("requires", []),
+            "engine_api": meta.get("engine_api", ""),
+            "python_requires": meta.get("python_requires", ""),
+            "type": ptype,
+            "provides": provides,
         }
+        if freeze or sign_key:
+            manifest["files"] = _freeze_stage(stage)
+        if sign_key:
+            if not _PM_OK:
+                print("Error: signing needs core.foundation.ed25519; run from the engine root.")
+                return None
+            try:
+                _sign_manifest(manifest, sign_key)
+            except Exception as e:
+                print(f"Error: signing failed: {e}")
+                return None
         with open(os.path.join(stage, "manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
 
@@ -246,13 +436,43 @@ def build_zplugin(plugin_src: str, output_dir: str = "dist", mode: str = "source
 
 def main():
     parser = argparse.ArgumentParser(description="Build a .zplugin distributable archive")
-    parser.add_argument("plugin", help="Path to plugin package directory")
+    parser.add_argument("plugin", nargs="?", help="Path to plugin package directory")
     parser.add_argument("--output", "-o", default="dist", help="Output directory")
     parser.add_argument("--mode", choices=["source", "cython", "nuitka"], default="source",
                         help="Build mode (default: source)")
+    parser.add_argument("--lint", action="store_true", help="Validate the manifest and exit")
+    parser.add_argument("--genkey", action="store_true", help="Generate an ed25519 key pair and exit")
+    parser.add_argument("--bundle", default="",
+                        help="Comma-separated third-party modules to vendor into libs/")
+    parser.add_argument("--sign-key", default="", help="Hex private key for manifest signing")
+    parser.add_argument("--type", choices=["plugin", "library"], default=None,
+                        help="Override the manifest type")
+    parser.add_argument("--no-freeze", action="store_true", help="Skip the file hash index")
     args = parser.parse_args()
+    if args.genkey:
+        if not _PM_OK:
+            print("Error: key generation needs core.foundation.ed25519; run from the engine root.")
+            sys.exit(1)
+        priv, pub = _ed_gen()
+        print(f"private: {priv}")
+        print(f"public:  {pub}")
+        sys.exit(0)
+    if not args.plugin:
+        parser.print_usage()
+        sys.exit(2)
+    if args.lint:
+        errors = lint_manifest(args.plugin)
+        if errors:
+            for e in errors:
+                print(f"lint: {e}")
+            sys.exit(1)
+        print("manifest OK")
+        sys.exit(0)
     try:
-        result = build_zplugin(args.plugin, args.output, args.mode)
+        result = build_zplugin(args.plugin, args.output, args.mode,
+                               bundle=[m for m in args.bundle.split(",") if m.strip()],
+                               sign_key=args.sign_key, ptype=args.type,
+                               freeze=not args.no_freeze)
     except (FileNotFoundError, ValueError) as e:
         print(f"Error: {e}")
         sys.exit(1)

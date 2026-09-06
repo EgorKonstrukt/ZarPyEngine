@@ -192,6 +192,7 @@ class BuildSettingsDialog(QDialog):
         self._plugin_layout.addWidget(cb)
 
     def _add_package_plugins(self, pkg_dir: str, prefix: str, selected: set):
+        self._add_plugin_checkbox(prefix, f"plugins/{prefix}/__init__.py", selected)
         for fname in sorted(os.listdir(pkg_dir)):
             if fname.endswith(".py") and not fname.startswith("_"):
                 name = prefix + "." + fname[:-3]

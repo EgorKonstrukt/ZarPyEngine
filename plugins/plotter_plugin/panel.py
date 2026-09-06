@@ -5,54 +5,63 @@
 # Copyright (c) 2026 Zarrakun
 
 from __future__ import annotations
+
 import time
 from collections import deque
-from PyQt6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                              QPushButton, QLabel, QCheckBox, QSpinBox)
-from PyQt6.QtCore import QTimer, Qt
-from editor.plotter import ChartWidget
-from editor.inspector.entity_property_picker import EntityPropertyPicker
+
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
 from core.components.properties import make_prop_reader
+from core.foundation.logger import Logger
+from editor.inspector.entity_property_picker import EntityPropertyPicker
+
+from .plotter import ChartWidget
 
 
-class PlotterPanel(QDockWidget):
-    def __init__(self, engine, parent=None):
-        super().__init__("Plotter", parent)
+class PlotterPanel(QWidget):
+    def __init__(self, engine, parent=None, plugin=None, persist: bool = True):
+        super().__init__(parent)
         self._engine = engine
+        self._plugin = plugin
+        self._persist_shared = persist and plugin is not None
+        self._config: dict = {}
         self._tracked: dict[str, dict] = {}
         self._frame = 0
-        self._history_limit = 2000
+        interval = 100
+        limit = 2000
+        if plugin is not None:
+            interval = int(plugin.get_config("refresh_interval", interval))
+            limit = int(plugin.get_config("history_limit", limit))
+        self._config["refresh_interval"] = interval
+        self._config["history_limit"] = limit
+        self._history_limit = limit
         self._setup_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(100)
+        self._timer.setInterval(max(8, interval))
+        sps = max(1, round(1000 / max(8, interval)))
+        self._sps_box.setValue(sps)
+        self._pts_box.setValue(self._history_limit)
+        self._timer.start()
         self._sync_scene()
 
-    def load_config(self, config) -> None:
-        interval = config.get("plotter.refresh_interval", 100)
-        limit = config.get("plotter.history_limit", 2000)
-        self._timer.setInterval(max(8, int(interval)))
-        sps = max(1, round(1000 / max(8, int(interval))))
-        self._sps_box.blockSignals(True)
-        self._sps_box.setValue(sps)
-        self._sps_box.blockSignals(False)
-        self._history_limit = max(50, int(limit))
-        self._pts_box.blockSignals(True)
-        self._pts_box.setValue(self._history_limit)
-        self._pts_box.blockSignals(False)
-        for entry in self._tracked.values():
-            entry["x"].maxlen = self._history_limit
-            entry["y"].maxlen = self._history_limit
+    def set_active(self, active: bool):
+        if active:
+            self._timer.start()
+        else:
+            self._timer.stop()
 
     def _setup_ui(self):
-        self.setObjectName("PlotterDock")
-        self.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable |
-            QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-            QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        root = QWidget()
-        layout = QVBoxLayout(root)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
         xtop = QHBoxLayout()
@@ -109,7 +118,6 @@ class PlotterPanel(QDockWidget):
         self._status = QLabel("")
         self._status.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self._status)
-        self.setWidget(root)
 
     def _on_sps_changed(self, sample_rate: int):
         self._timer.setInterval(max(8, round(1000 / max(1, sample_rate))))
@@ -123,14 +131,15 @@ class PlotterPanel(QDockWidget):
         self._persist()
 
     def _persist(self):
+        self._config["refresh_interval"] = self._timer.interval()
+        self._config["history_limit"] = self._history_limit
+        if not self._persist_shared:
+            return
         try:
-            from core.config.config import get_global_config
-            cfg = get_global_config()
-            cfg.set("plotter.refresh_interval", self._timer.interval(), notify=False)
-            cfg.set("plotter.history_limit", self._history_limit, notify=False)
-            cfg.save()
-        except Exception:
-            pass
+            self._plugin.set_config("refresh_interval", self._config["refresh_interval"])
+            self._plugin.set_config("history_limit", self._config["history_limit"])
+        except Exception as e:
+            Logger.error(f"Plotter config persist failed: {e}", e)
 
     def _on_x_time_toggled(self, checked: bool):
         self._x_picker.setEnabled(not checked)

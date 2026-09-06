@@ -242,6 +242,7 @@ def main():
         except Exception:
             pass
     if os.path.isdir("plugins"):
+        engine.plugin_manager.apply_pending_updates("plugins")
         engine.plugin_manager.load_directory("plugins")
     elif build_plugins:
         for name in build_plugins:

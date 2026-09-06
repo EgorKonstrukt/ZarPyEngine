@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "Tracker-based music (MOD/XM/S3M) playback and editing",
   "architecture": "any",
+  "engine_api": ">=1",
+  "type": "plugin",
   "entry": "tracker_music_plugin/__init__.py",
   "module": "tracker_music_plugin",
   "dependencies": ["numpy"],

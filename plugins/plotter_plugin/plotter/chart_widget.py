@@ -89,7 +89,7 @@ class ChartWidget(QWidget):
         self._canvas = _make_canvas(self)
         if self._canvas is None:
             raise RuntimeError(
-                "make_canvas() returned None - check that editor/plotter/canvas.py "
+                "make_canvas() returned None - check that plugins/plotter_plugin/plotter/canvas.py "
                 "exists and that _PlotCanvas can be imported from it."
             )
         self._canvas._show_origin_axes = origin_axes

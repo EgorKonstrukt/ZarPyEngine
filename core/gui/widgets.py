@@ -1311,7 +1311,7 @@ class ChartPlotter(QWidget):
     def chart(self):
         if self._chart is not None:
             return self._chart
-        from editor.plotter import ChartWidget
+        from plugins.plotter_plugin.plotter import ChartWidget
         chart = ChartWidget(parent=self, show_toolbar=self._show_toolbar,
                             show_legend=True, show_sidebar=self._show_sidebar)
         self._lay.addWidget(chart)

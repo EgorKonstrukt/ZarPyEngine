@@ -57,6 +57,7 @@ class Engine:
             "menu_items": [],
             "file_openers": [],
         }
+        self._main_window: Optional[Any] = None
         self._project_path: Optional[str] = None
         self._project_settings_path: Optional[str] = None
     @classmethod
@@ -73,6 +74,13 @@ class Engine:
         self._debug_no_qt_overlay = value
     @property
     def plugin_manager(self) -> PluginManager: return self._plugin_manager
+    def set_main_window(self, window) -> None:
+        self._main_window = window
+        try:
+            self._plugin_manager.notify_main_window_ready(window)
+        except Exception as e:
+            Logger.error(f"Plugin on_main_window_ready error: {e}", e)
+    def get_main_window(self): return self._main_window
     @property
     def scene(self) -> Optional[Scene]: return self._scene
     @property

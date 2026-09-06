@@ -37,7 +37,7 @@ DOCK_ICONS = {
     "TimeTravelDock": "fa5s.clock",
     "VersionControlDock": "fa5s.code-branch",
     "GuiEditorDock": "fa5s.object-group",
-    "PlotterDock": "fa5s.chart-line",
+    "PluginDock_PlotterPlugin_Plotter": "fa5s.chart-line",
     "PluginDock_TrackerMusicPlugin_Tracker_Editor": "fa5s.music",
 }
 
@@ -62,7 +62,6 @@ from editor.panels.script_editor_panel import ScriptEditorPanel
 from editor.panels.tracemalloc_panel import TracemallocPanel
 from editor.panels.time_travel_panel import TimeTravelPanel
 from editor.panels.vcs_panel import VcsPanel
-from editor.panels.plotter_panel import PlotterPanel
 from editor.gui_editor.gui_viewport import GuiEditorViewport
 
 _AREA_MAP = {
@@ -294,35 +293,114 @@ def register_default_docks(mw):
         QDockWidget.DockWidgetFeature.DockWidgetFloatable |
         QDockWidget.DockWidgetFeature.DockWidgetClosable)
     register_dock(mw, mw._vcs, Qt.DockWidgetArea.LeftDockWidgetArea)
-    mw._plotter = PlotterPanel(mw._engine, mw)
-    mw._plotter.load_config(get_global_config())
-    mw._plotter.setObjectName("PlotterDock")
-    mw._plotter.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-    mw._plotter.setFeatures(
-        QDockWidget.DockWidgetFeature.DockWidgetMovable |
-        QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-        QDockWidget.DockWidgetFeature.DockWidgetClosable)
-    register_dock(mw, mw._plotter, Qt.DockWidgetArea.LeftDockWidgetArea)
     _apply_dock_icons(mw)
+
+
+def _apply_plugin_dock_icon(dock: QDockWidget, info: dict):
+    icon = info.get("icon") or DOCK_ICONS.get(dock.objectName())
+    if not icon:
+        prefix = "PluginDock_" + str(info.get("plugin", "")) + "_"
+        for key, value in DOCK_ICONS.items():
+            if key.startswith(prefix):
+                icon = value
+                break
+    if not icon or qta is None:
+        return
+    try:
+        if isinstance(icon, str) and not os.path.isfile(icon):
+            dock.setWindowIcon(qta.icon(icon, color="#d4d4d4"))
+        else:
+            from PyQt6.QtGui import QIcon
+            dock.setWindowIcon(QIcon(str(icon)))
+    except Exception as e:
+        from core.foundation.logger import Logger
+        Logger.error(f"Failed to apply icon to dock '{dock.objectName()}': {e}")
+
+
+def _unique_plugin_dock_name(mw, base: str) -> str:
+    taken = {d.objectName() for d in getattr(mw, "_docks", [])}
+    name = base
+    n = 2
+    while name in taken:
+        name = f"{base}_{n}"
+        n += 1
+    return name
+
+
+def _create_plugin_dock(mw, info: dict):
+    try:
+        widget = info["widget_factory"]()
+        if widget is None:
+            return None
+        title = info["title"]
+        area = _AREA_MAP.get(info.get("area", "left"), Qt.DockWidgetArea.LeftDockWidgetArea)
+        plugin_name = info.get("plugin", "plugin")
+        obj_name = _unique_plugin_dock_name(mw, f"PluginDock_{plugin_name}_{title.replace(' ', '_')}")
+        dock = _make_dock(mw, title, widget, obj_name)
+        _apply_plugin_dock_icon(dock, info)
+        register_dock(mw, dock, area)
+        mw.addDockWidget(area, dock)
+        group = info.get("tab_group")
+        if group:
+            groups = getattr(mw, "_plugin_tab_groups", None)
+            if groups is None:
+                groups = {}
+                mw._plugin_tab_groups = groups
+            anchor_name = groups.get(group)
+            anchor = next((d for d in mw._docks if d.objectName() == anchor_name), None)
+            if anchor is not None and anchor is not dock:
+                mw.tabifyDockWidget(anchor, dock)
+            else:
+                groups[group] = obj_name
+        setter = getattr(widget, "set_active", None)
+        if callable(setter):
+            dock.visibilityChanged.connect(setter)
+        return dock
+    except Exception as e:
+        from core.foundation.logger import Logger
+        Logger.error(f"Failed to create plugin dock '{info.get('title', '?')}': {e}")
+        return None
+
+
+def _remove_plugin_docks(mw, plugin_name: str):
+    prefix = f"PluginDock_{plugin_name}_"
+    for dock in [d for d in list(getattr(mw, "_docks", [])) if d.objectName().startswith(prefix)]:
+        try:
+            mw.removeDockWidget(dock)
+            mw._docks.remove(dock)
+            dock.deleteLater()
+        except Exception as e:
+            from core.foundation.logger import Logger
+            Logger.error(f"Failed to remove plugin dock '{dock.objectName()}': {e}")
+
+
+def subscribe_plugin_dock_updates(mw):
+    reg = mw._engine.plugin_ui_registry
+    listeners = reg.setdefault("runtime_listeners", [])
+    for cb in listeners:
+        if getattr(cb, "_zpl_scope", None) == "docks" and getattr(cb, "_zpl_mw", None) is mw:
+            return
+    def _on_runtime(payload):
+        try:
+            name = payload.get("unregistered")
+            if name:
+                _remove_plugin_docks(mw, name)
+                return
+            for info in payload.get("docks", []) or []:
+                _create_plugin_dock(mw, info)
+        except Exception as e:
+            from core.foundation.logger import Logger
+            Logger.error(f"[Plugin] dock update failed: {e}", e)
+    _on_runtime._zpl_scope = "docks"
+    _on_runtime._zpl_mw = mw
+    listeners.append(_on_runtime)
 
 
 def register_plugin_docks(mw):
     registry = mw._engine.plugin_ui_registry
-    for info in registry["docks"]:
-        try:
-            widget = info["widget_factory"]()
-            if widget is None:
-                continue
-            title = info["title"]
-            area_name = info.get("area", "left")
-            area = _AREA_MAP.get(area_name, Qt.DockWidgetArea.LeftDockWidgetArea)
-            plugin_name = info.get("plugin", "plugin")
-            obj_name = f"PluginDock_{plugin_name}_{title.replace(' ', '_')}"
-            dock = _make_dock(mw, title, widget, obj_name)
-            register_dock(mw, dock, area)
-        except Exception as e:
-            from core.foundation.logger import Logger
-            Logger.error(f"Failed to create plugin dock '{info.get('title', '?')}': {e}")
+    for info in list(registry.get("docks", [])):
+        _create_plugin_dock(mw, info)
+    subscribe_plugin_dock_updates(mw)
 
 
 def add_all_docks(mw):
@@ -348,7 +426,6 @@ def add_all_docks(mw):
     mw.addDockWidget(area, mw._tracemalloc)
     mw.addDockWidget(area, mw._time_travel)
     mw.addDockWidget(area, mw._vcs)
-    mw.addDockWidget(area, mw._plotter)
     for dock in mw._docks:
         if dock not in (                         mw._hierarchy, mw._viewport_dock, mw._inspector,
                         mw._play_dock, mw._gui_editor,
@@ -356,7 +433,7 @@ def add_all_docks(mw):
                         mw._terminal, mw._undo_history, mw._plugin_mgr,
                         mw._collab_panel, mw._mesh_editor, mw._terrain_editor, mw._animation,
                         mw._animator, mw._scripts, mw._script_editor, mw._tracemalloc,
-                        mw._time_travel, mw._vcs, mw._plotter):
+                        mw._time_travel, mw._vcs):
             mw.addDockWidget(area, dock)
 
 
@@ -380,7 +457,6 @@ def build_dock_layout(mw):
     mw.tabifyDockWidget(mw._project, mw._tracemalloc)
     mw.tabifyDockWidget(mw._project, mw._time_travel)
     mw.tabifyDockWidget(mw._project, mw._vcs)
-    mw.tabifyDockWidget(mw._project, mw._plotter)
     mw.tabifyDockWidget(mw._console, mw._terminal)
     mw._viewport_dock.raise_()
     mw._hierarchy.raise_()

@@ -126,6 +126,7 @@ class EditorMainWindow(QMainWindow):
         engine.on("scene_loaded", lambda s: on_scene_loaded(self, s))
         self._setup_engine_events()
         QTimer.singleShot(0, lambda: post_init(self))
+        engine.set_main_window(self)
 
     def _init_collab_scene_tabs(self):
         mgr = self._scene_tab_manager

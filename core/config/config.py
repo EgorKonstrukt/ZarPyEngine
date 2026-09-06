@@ -263,9 +263,11 @@ def get_global_config() -> Config:
                 "thumb_size": 64,
                 "dual_pane": True
             },
-            "plotter": {
-                "refresh_interval": 250,
-                "history_limit": 2000
+            "plugins": {
+                "allow_unsigned": "warn",
+                "registry_url": "",
+                "check_updates_on_startup": False,
+                "trusted_keys_dir": ""
             },
             "audio": {
                 "enable_audio": True,
