@@ -77,6 +77,10 @@ class PluginManagerPanel(QDockWidget):
         self._package_btn.clicked.connect(self._package_zplugin)
         self._package_btn.setStyleSheet("padding: 4px 12px;")
         btn_row.addWidget(self._package_btn)
+        self._libpack_btn = QPushButton("New Library...")
+        self._libpack_btn.clicked.connect(self._new_library_pack)
+        self._libpack_btn.setStyleSheet("padding: 4px 12px;")
+        btn_row.addWidget(self._libpack_btn)
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.clicked.connect(self._refresh)
         self._refresh_btn.setStyleSheet("padding: 4px 12px;")
@@ -218,3 +222,9 @@ class PluginManagerPanel(QDockWidget):
     def _package_zplugin(self):
         from editor.panels.plugin_package_panel import show_package_dialog
         show_package_dialog(self)
+
+    def _new_library_pack(self):
+        from editor.panels.library_pack_dialog import show_library_pack_dialog
+        result = show_library_pack_dialog(self)
+        if result:
+            self._refresh()

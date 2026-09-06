@@ -147,6 +147,12 @@ def _spec_satisfied(spec, version) -> bool:
     if not spec:
         return True
     for op, want in _split_spec(spec):
+        if op in ("==", "=") and want.endswith(".*"):
+            prefix = _parse_version(want[:-2])
+            vp = _parse_version(version)
+            if tuple(vp[:len(prefix)]) != tuple(prefix):
+                return False
+            continue
         c = _compare_versions(version, want)
         if op == "==" or op == "=":
             ok = c == 0
